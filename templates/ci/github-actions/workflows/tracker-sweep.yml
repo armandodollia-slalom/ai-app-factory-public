@@ -1,0 +1,35 @@
+name: Tracker automations
+
+# Rendered when the tickets live outside GitHub (tracker.type jira or azure-boards): GitHub Actions cannot
+# start on that tracker's events, so a schedule sweeps it instead. It gives every open epic's stories the
+# epic's assignees and checks the answers of escalations a person marked resolved (`factory automations`).
+# With GitHub issues as the tracker, the board-epic-assign and board-escalation-resolve workflows do this
+# on the issue events instead.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tracker-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+    - uses: ./.github/actions/setup-factory
+      with:
+        token: ${{ secrets.FACTORY_TOKEN }}
+    - name: Sweep the tracker
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # factory:secrets
+      run: factory automations

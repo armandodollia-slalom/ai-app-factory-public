@@ -1,0 +1,44 @@
+{
+  "id": "java",
+  "name": "Java / Kotlin (JVM)",
+  "extensions": [
+    ".java",
+    ".kt",
+    ".kts",
+    ".scala",
+    ".groovy"
+  ],
+  "unitFiles": [
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts"
+  ],
+  "rootFiles": [
+    "settings.gradle",
+    "settings.gradle.kts",
+    "mvnw",
+    "gradlew"
+  ],
+  "toolPaths": [
+    "~/.sdkman/candidates/java/current/bin",
+    "~/.sdkman/candidates/maven/current/bin",
+    "~/.sdkman/candidates/gradle/current/bin"
+  ],
+  "testHints": {
+    "dir": "(^|/)src/test(/|$)|(^|/)[\\w-]*-?(it|tests?)$",
+    "content": ""
+  },
+  "frontendHints": {
+    "content": "thymeleaf|vaadin|spring-boot-starter-freemarker",
+    "files": [
+      "*.jsp",
+      "*.ftl"
+    ]
+  },
+  "ignore": [
+    "target",
+    "build",
+    ".gradle"
+  ],
+  "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers)."
+}

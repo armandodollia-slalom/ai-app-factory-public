@@ -1,0 +1,74 @@
+# The factory's jobs for CircleCI. CircleCI reads one file, .circleci/config.yml: when the repository has its own,
+# `factory render` writes this as .circleci/factory.yml and `factory check` says which jobs and workflows to merge in.
+# Secrets come from the `factory` context (Organization settings > Contexts): FACTORY_TOKEN (a private factory),
+# the code host token, the tracker's variables named in .factory/config.json, and the agent's credential.
+# The scheduled jobs run from scheduled pipelines (Project settings > Triggers) with the parameter factory-job set to
+# retro (weekly), tracker (every 15 minutes) or graphify-prune (weekly).
+version: 2.1
+
+parameters:
+  factory-job:
+    type: string
+    default: ""
+
+executors:
+  factory:
+    docker:
+      - image: cimg/node:20.19
+    environment:
+      FACTORY_CI: circleci
+
+commands:
+  factory-job:
+    parameters:
+      job:
+        type: string
+    steps:
+      - checkout
+      - run:
+          name: factory << parameters.job >>
+          command: |
+            export FACTORY_PR="${CIRCLE_PULL_REQUEST##*/}" FACTORY_RUN_URL="$CIRCLE_BUILD_URL"
+            bash .factory/ci/factory-ci.sh << parameters.job >>
+
+jobs:
+  factory-gate:
+    executor: factory
+    steps: [{ factory-job: { job: gate } }]
+  factory-lint:
+    executor: factory
+    steps: [{ factory-job: { job: lint } }]
+  factory-feature-verification:
+    executor: factory
+    steps: [{ factory-job: { job: feature-verification } }]
+  review-quorum:
+    executor: factory
+    steps: [{ factory-job: { job: review-quorum } }]
+  # factory:demo-video
+  factory-demo-video:
+    machine:
+      image: ubuntu-2404:current
+    steps: [{ factory-job: { job: demo-video } }]
+  factory-scheduled:
+    executor: factory
+    steps: [{ factory-job: { job: << pipeline.parameters.factory-job >> } }]
+  # factory:analysis-jobs
+
+workflows:
+  factory:
+    when:
+      equal: ["", << pipeline.parameters.factory-job >>]
+    jobs:
+      - factory-gate: { context: [factory] }
+      - factory-lint: { context: [factory] }
+      - factory-feature-verification: { context: [factory], requires: [factory-gate] }
+      - review-quorum: { context: [factory] }
+      # factory:analysis-workflow
+      # factory:demo-video
+      - factory-demo-video: { context: [factory] }
+  factory-scheduled:
+    when:
+      not:
+        equal: ["", << pipeline.parameters.factory-job >>]
+    jobs:
+      - factory-scheduled: { context: [factory] }

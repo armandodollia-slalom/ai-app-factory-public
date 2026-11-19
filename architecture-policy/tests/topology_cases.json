@@ -1,0 +1,704 @@
+{
+  "$comment": "One table for both implementations of the declaration rules: architecture-policy/hooks/architecture/topology.py (the engine) and scripts/pipeline/lib/policy-topology.mjs (the factory guard). Each case is a `policy` section of .factory/app.json; `error` is a substring the refusal must contain, or absent when the declaration is accepted. `symlinks` lists the paths that are symbolic links in the case's checkout. Both implementations must return the same errors, word for word (scripts/factory/test/policy-library.test.mjs compares them).",
+  "profile": {
+    "projects": [
+      {
+        "name": "Catalog.API",
+        "path": "src/Catalog.API",
+        "type": "api",
+        "service": "catalog",
+        "layer": "presentation"
+      },
+      {
+        "name": "Catalog.Tests",
+        "path": "tests/Catalog.Tests",
+        "type": "test",
+        "layer": "test"
+      }
+    ],
+    "services": [
+      {
+        "id": "catalog",
+        "owns_datastores": [
+          "catalogdb"
+        ],
+        "traits": [
+          "owns_database",
+          "exposes_http_api"
+        ]
+      }
+    ],
+    "shared_datastore_names": [
+      "eventbus"
+    ],
+    "layer_dependencies": {
+      "presentation": [
+        "shared"
+      ],
+      "test": [
+        "*"
+      ],
+      "shared": [
+        "shared"
+      ]
+    }
+  },
+  "manifest_dirs": [
+    "src/Reviews.API",
+    "src/Reviews.Worker",
+    "src/Probe.API",
+    "src/Probe.API/Apis",
+    "tests/Reviews.Tests",
+    "src/Catalog.API",
+    "src/Alias.API",
+    "src/Link",
+    "src/Basket.Search"
+  ],
+  "cases": [
+    {
+      "name": "a new service with its project root and a new datastore",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "reviewsdb"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a new service with two roots and no datastore",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API",
+              "src/Reviews.Worker"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "projects are derived, never declared",
+      "policy": {
+        "projects": [
+          {
+            "name": "Probe.API",
+            "path": "src/Probe.API",
+            "type": "test",
+            "layer": "test"
+          }
+        ]
+      },
+      "error": "derived from the project itself"
+    },
+    {
+      "name": "another service's datastore under another casing (Opus, Sol)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "CatalogDB"
+            ]
+          }
+        ]
+      },
+      "error": "owned by another service or shared"
+    },
+    {
+      "name": "another service's datastore in capitals",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "CATALOGDB"
+            ]
+          }
+        ]
+      },
+      "error": "owned by another service or shared"
+    },
+    {
+      "name": "a shared datastore in capitals (Sol)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "EVENTBUS"
+            ]
+          }
+        ]
+      },
+      "error": "owned by another service or shared"
+    },
+    {
+      "name": "a datastore claimed by two declarations",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "reviewsdb"
+            ]
+          },
+          {
+            "id": "probe",
+            "roots": [
+              "src/Reviews.Worker"
+            ],
+            "owns_datastores": [
+              "ReviewsDB"
+            ]
+          }
+        ]
+      },
+      "error": "declared twice"
+    },
+    {
+      "name": "an existing service under another casing",
+      "policy": {
+        "services": [
+          {
+            "id": "Catalog",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "already exists in the profile"
+    },
+    {
+      "name": "the same new service twice",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          },
+          {
+            "id": "REVIEWS",
+            "roots": [
+              "src/Reviews.Worker"
+            ]
+          }
+        ]
+      },
+      "error": "declared twice"
+    },
+    {
+      "name": "a root inside a profiled project (shadowing)",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "src/Catalog.API/Apis"
+            ]
+          }
+        ]
+      },
+      "error": "overlaps the profiled project at src/Catalog.API"
+    },
+    {
+      "name": "a root that is a profiled project",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "src/Catalog.API"
+            ]
+          }
+        ]
+      },
+      "error": "overlaps the profiled project"
+    },
+    {
+      "name": "a root nested in another declaration's root (Opus, Sol)",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "src/Probe.API"
+            ]
+          },
+          {
+            "id": "shadow",
+            "roots": [
+              "src/Probe.API/Apis"
+            ]
+          }
+        ]
+      },
+      "error": "overlaps the declared root"
+    },
+    {
+      "name": "nested roots in one declaration",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "src/Probe.API",
+              "src/Probe.API/Apis"
+            ]
+          }
+        ]
+      },
+      "error": "overlaps the declared root"
+    },
+    {
+      "name": "a root with no project manifest",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "src/Nothing.Here"
+            ]
+          }
+        ]
+      },
+      "error": "holds no project manifest"
+    },
+    {
+      "name": "a root outside the repository",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "../elsewhere"
+            ]
+          }
+        ]
+      },
+      "error": "inside the repository"
+    },
+    {
+      "name": "a normalised path is the same path",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "src/Foo/../Catalog.API/./Apis"
+            ]
+          }
+        ]
+      },
+      "error": "overlaps the profiled project"
+    },
+    {
+      "name": "a class cannot be asserted on a service",
+      "policy": {
+        "services": [
+          {
+            "id": "probe",
+            "roots": [
+              "src/Probe.API"
+            ],
+            "type": "test",
+            "layer": "test",
+            "traits": [
+              "web_frontend"
+            ]
+          }
+        ]
+      },
+      "error": "unknown key"
+    },
+    {
+      "name": "exceptions are governance",
+      "policy": {
+        "exceptions": [
+          {
+            "rule_id": "API-001"
+          }
+        ]
+      },
+      "error": "not application topology"
+    },
+    {
+      "name": "an id that is not a plain name",
+      "policy": {
+        "services": [
+          {
+            "id": "../catalog",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "no roots",
+      "policy": {
+        "services": [
+          {
+            "id": "probe"
+          }
+        ]
+      },
+      "error": "roots must list"
+    },
+    {
+      "name": "a root listed twice in one service (Sol A6)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API",
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "is declared twice"
+    },
+    {
+      "name": "a root listed twice, once spelled differently",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API",
+              "./src/Reviews.API/"
+            ]
+          }
+        ]
+      },
+      "error": "is declared twice"
+    },
+    {
+      "name": "the same root in two services",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          },
+          {
+            "id": "probe",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "is declared twice"
+    },
+    {
+      "name": "a root that is a symbolic link to a profiled project (Sol A6, Opus C1)",
+      "policy": {
+        "services": [
+          {
+            "id": "alias",
+            "roots": [
+              "src/Alias.API"
+            ]
+          }
+        ]
+      },
+      "error": "symbolic link",
+      "symlinks": [
+        "src/Alias.API"
+      ]
+    },
+    {
+      "name": "a root inside a symbolically linked folder",
+      "policy": {
+        "services": [
+          {
+            "id": "alias",
+            "roots": [
+              "src/Link/Inner.API"
+            ]
+          }
+        ]
+      },
+      "error": "symbolic link",
+      "symlinks": [
+        "src/Link"
+      ]
+    },
+    {
+      "name": "datastores Straße and STRASSE in one service (Sol A6)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "Straße",
+              "STRASSE"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a datastore with a long s, rediſ (Opus C3)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "rediſ"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a datastore with a leading space (Opus C2)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              " catalogdb"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a datastore with a trailing space",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "reviewsdb "
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a datastore with a zero-width space (Opus C4)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "catalog​db"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "an empty datastore name (Sol A6)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              ""
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a fullwidth-letter datastore (Sol A6)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "ｃatalogdb"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a Kelvin-sign id, basKet (Opus C5)",
+      "policy": {
+        "services": [
+          {
+            "id": "basKet",
+            "roots": [
+              "src/Basket.Search"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a Kelvin-sign id that lower-cases to an existing one",
+      "policy": {
+        "services": [
+          {
+            "id": "Katalog",
+            "roots": [
+              "src/Basket.Search"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "a fullwidth-letter id (Sol A6)",
+      "policy": {
+        "services": [
+          {
+            "id": "ｒeviews",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "an id with a trailing space",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews ",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "plain name"
+    },
+    {
+      "name": "an id in capitals is the same id, lower-cased",
+      "policy": {
+        "services": [
+          {
+            "id": "CATALOG",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "already exists in the profile"
+    },
+    {
+      "name": "an id in capitals, new",
+      "policy": {
+        "services": [
+          {
+            "id": "Reviews",
+            "roots": [
+              "src/Reviews.API"
+            ],
+            "owns_datastores": [
+              "ReviewsDb"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a root spelled with ./ and a trailing slash is the same root (Opus C5)",
+      "policy": {
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "./src/Reviews.API/"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a top-level policy.projects next to services (Opus A6 finding 4)",
+      "policy": {
+        "projects": [
+          {
+            "path": "src/Reviews.API",
+            "type": "api"
+          }
+        ],
+        "services": [
+          {
+            "id": "reviews",
+            "roots": [
+              "src/Reviews.API"
+            ]
+          }
+        ]
+      },
+      "error": "derived from the project itself"
+    },
+    {
+      "name": "an unknown top-level policy key with an invisible character",
+      "policy": {
+        "exceptions​": []
+      },
+      "error": "not application topology"
+    }
+  ]
+}

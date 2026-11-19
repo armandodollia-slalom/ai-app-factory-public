@@ -1,0 +1,11 @@
+# Tracker automations without tracker events: GitLab CI cannot start on a ticket being assigned or a
+# comment being edited, so a schedule sweeps the tracker instead. It gives every open epic's stories the
+# epic's assignees and checks the answers of escalations a person marked resolved (`factory automations`).
+# Schedule it (Build > Pipeline schedules) every 15 minutes or so with the variable FACTORY_JOB=tracker.
+factory-tracker:
+  extends: .factory-base
+  resource_group: factory-tracker
+  rules:
+    - if: ($CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web") && $FACTORY_JOB == "tracker"
+  script:
+    - factory automations

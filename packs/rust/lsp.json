@@ -1,0 +1,50 @@
+{
+  "$comment": "Language servers of this pack. `config` is the fragment `factory init` merges into the app repo's .factory/config.json (lsp.servers entries, see docs/code-intelligence.md for every field). `optional` holds further fragments to merge by hand. `install` says how to get each server's binary, per OS (`all` = every OS); `factory lsp setup` prints these lines for a server it cannot find. `verified` says whether this file was proven by running the server through the factory or written from the server's documentation.",
+  "verified": {
+    "status": "documentation",
+    "how": "Not run: this machine has rustup but no installed toolchain. Written from the rust-analyzer manual. The engine path it uses (a leased server without reportsState, started under scripts/lsp/launch.mjs) is covered by the engine tests with a fake server."
+  },
+  "config": {
+    "lsp": {
+      "servers": [
+        {
+          "id": "rust",
+          "extensions": [
+            ".rs"
+          ],
+          "languageIds": [
+            "rust"
+          ],
+          "command": "rust-analyzer",
+          "args": [],
+          "leased": true,
+          "loadTimeoutSec": 600
+        }
+      ]
+    }
+  },
+  "leased": {
+    "rust": "yes: rust-analyzer keeps the whole cargo workspace and its dependencies in memory and runs cargo check; several of them at once exhaust a machine."
+  },
+  "install": {
+    "rust": {
+      "all": [
+        "rustup component add rust-analyzer rust-src   # follows the toolchain pinned in rust-toolchain.toml, so the server matches the compiler"
+      ],
+      "macos": [
+        "brew install rust-analyzer   # alternative without rustup"
+      ],
+      "linux": [
+        "curl -L https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-unknown-linux-gnu.gz | gunzip -c > ~/.local/bin/rust-analyzer && chmod +x ~/.local/bin/rust-analyzer   # alternative without rustup"
+      ]
+    }
+  },
+  "requires": [
+    "cargo and the pinned toolchain; add ~/.cargo/bin to project.toolPaths (hooks and background runs do not load the shell profile)"
+  ],
+  "notes": [
+    "Optional prepare so the first request does not wait for downloads: \"prepare\": {\"command\": \"cargo\", \"args\": [\"fetch\", \"--locked\"], \"label\": \"fetching crates\"}.",
+    "No scope module: rust-analyzer loads the workspace it finds from the opened file. A linked git worktree has its own target/ directory, so the first cargo check there is a full build.",
+    "Without reportsState the daemon cannot tell loading from ready: requests made while the workspace loads wait up to lsp.callTimeoutSec and then answer \"rust language server unavailable\"."
+  ]
+}

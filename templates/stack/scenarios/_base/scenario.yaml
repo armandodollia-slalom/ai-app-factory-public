@@ -1,0 +1,28 @@
+# The base scenario: loaded before every other scenario, and alone by `factory teststack reset`.
+# Keep only what every test needs (lookup tables, a default tenant). Everything else goes into a scenario
+# of its own under .factory/stack/scenarios/<name>/scenario.yaml that may `extends` others.
+#
+# Each top-level key except `description` and `extends` is the name of a store from the `teststack.stores`
+# section of .factory/app.json. Remove the stores you do not have.
+description: Lookup data every scenario needs.
+
+# A SQL store (type postgres or mysql): database name -> steps, run in order in one transaction.
+# db:
+#   appdb:
+#     - table: countries               # or schema.table; column names exactly as in the database
+#       rows:
+#         - { id: 1, code: US, name: United States }
+#         - { id: 2, code: DE, name: Germany }
+#     - sql: lookups.sql               # a raw SQL file next to this one
+
+# A Redis store: keys to set.
+# cache:
+#   - key: feature-flags
+#     json: { newCheckout: false }     # or value: "raw string"; ttl: seconds
+
+# A MongoDB store: database name -> steps.
+# documents:
+#   appdb:
+#     - collection: settings
+#       documents:
+#         - { _id: default, theme: light }

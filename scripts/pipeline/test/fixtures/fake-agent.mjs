@@ -1,0 +1,98 @@
+#!/usr/bin/env node
+// Scripted stand-in for an agent CLI, used by the end-to-end tests through PIPELINE_AGENT_CMD.
+// Behavior per agent comes from PIPELINE_FAKE_SCRIPT (JSON: { "<agent>": [response, response, ...] });
+// each call consumes the next response for that agent (the last one repeats).
+import fs from 'node:fs';
+import path from 'node:path';
+
+if (!process.env.PIPELINE_FAKE_SCRIPT) process.exit(0); // not a test file; only runs under the e2e tests
+
+const prompt = fs.readFileSync(0, 'utf8');
+const script = JSON.parse(fs.readFileSync(process.env.PIPELINE_FAKE_SCRIPT, 'utf8'));
+// A council member (PIPELINE_COUNCIL_MEMBER) answers from `<agent>@<member>` when the script has that key.
+const member = process.env.PIPELINE_COUNCIL_MEMBER;
+const agent = member && script[`${process.env.PIPELINE_AGENT_NAME}@${member}`] ? `${process.env.PIPELINE_AGENT_NAME}@${member}` : process.env.PIPELINE_AGENT_NAME;
+const counterFile = `${process.env.PIPELINE_FAKE_SCRIPT}.calls.json`;
+// Agents can run in parallel (the PR check's critics), so the shared counter update is locked.
+const lock = `${counterFile}.lock`;
+for (let i = 0; ; i++) {
+  try {
+    fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+    break;
+  } catch {
+    if (i > 2000) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  }
+}
+const calls = fs.existsSync(counterFile) ? JSON.parse(fs.readFileSync(counterFile, 'utf8')) : {};
+const n = calls[agent] ?? 0;
+calls[agent] = n + 1;
+fs.writeFileSync(counterFile, JSON.stringify(calls));
+fs.rmSync(lock, { force: true });
+fs.appendFileSync(`${process.env.PIPELINE_FAKE_SCRIPT}.prompts.log`, `\n=== ${agent} #${n + 1} (child=${process.env.PIPELINE_CHILD}) ===\n${prompt}\n`);
+
+// PIPELINE_FAKE_SLEEP_MS: each call takes that long, like a real agent's work (the slow-delivery test).
+if (Number(process.env.PIPELINE_FAKE_SLEEP_MS) > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.PIPELINE_FAKE_SLEEP_MS));
+
+const steps = script[agent] ?? [];
+const step = steps[Math.min(n, steps.length - 1)] ?? {};
+const field = (name) => new RegExp(`^${name}: (\\S+)`, 'm').exec(prompt)?.[1];
+
+if (step.writePlan) {
+  const dir = field('Plan directory');
+  const key = field('Story');
+  fs.mkdirSync(dir, { recursive: true });
+  const indexFile = path.join(dir, '_index.md');
+  const existing = fs.existsSync(indexFile) ? fs.readFileSync(indexFile, 'utf8') : '';
+  const frontMatter = /^---\n[\s\S]*?\n---\n/.exec(existing)?.[0] ?? '';
+  const ids = step.writePlan.map((_, i) => `TC-${key}-0${i + 1}`);
+  const rows = step.writePlan.map((c, i) => `| ${ids[i]} | ${c.title} | ${c.type} | functional | rule |`).join('\n');
+  fs.writeFileSync(indexFile, `${frontMatter}# Test plan: ${key}\n\n| ID | Title | Type | Layer | Covers |\n| --- | --- | --- | --- | --- |\n${rows}\n`);
+  for (const f of fs.readdirSync(dir).filter((f) => f.startsWith('TC-'))) fs.rmSync(path.join(dir, f));
+  step.writePlan.forEach((c, i) => {
+    const sad = c.type === 'sad' ? '\nsad-path: validation' : '';
+    fs.writeFileSync(
+      path.join(dir, `${ids[i]}-case.md`),
+      `---\nid: ${ids[i]}\ntype: ${c.type}${sad}\nlayer: functional\ncovers: ["Rule, part 1"]\n---\n\n# ${ids[i]}: ${c.title}\n\n## Why\n\n- ${c.why ?? 'covers the rule'}\n\n## Preconditions\n\n- data\n\n## Steps\n\n1. call\n\n## Expected result\n\n- ${c.expected ?? '200'}\n`,
+    );
+  });
+}
+
+if (step.writeTests) {
+  const key = field('Story');
+  const scenario = /\(name: (\S+)\)/.exec(prompt)[1];
+  fs.mkdirSync(`.factory/stack/scenarios/${scenario}`, { recursive: true });
+  fs.writeFileSync(`.factory/stack/scenarios/${scenario}/scenario.yaml`, 'extends: default\n');
+  fs.mkdirSync('e2e/teststack', { recursive: true });
+  const tests = step.writeTests.map((i) => `test('TC-${key}-0${i} works', async () => {});`).join('\n');
+  fs.writeFileSync(`e2e/teststack/${scenario}.spec.ts`, `${tests}\n`);
+}
+
+if (step.writeImpl) {
+  fs.mkdirSync(path.dirname(step.writeImpl), { recursive: true });
+  fs.writeFileSync(step.writeImpl, `// fixed ${n}\n`);
+}
+
+for (const [file, content] of Object.entries(step.writeFiles ?? {})) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+for (const file of step.deleteFiles ?? []) fs.rmSync(file, { force: true });
+
+if (step.screenshot) {
+  const dir = /Save every screenshot under (\S+?) \(/.exec(prompt)?.[1];
+  if (dir) fs.writeFileSync(path.join(dir, step.screenshot), 'png');
+}
+
+if (step.delayMs) await new Promise((r) => setTimeout(r, step.delayMs));
+
+// Simulates a crash of the feature verification runner that called this agent: SIGKILL, so nothing gets cleaned up.
+if (step.killRunner) {
+  const state = JSON.parse(fs.readFileSync(`.factory/state/stories/${field('Story')}.json`, 'utf8'));
+  process.kill(state[step.killRunner].pid, 'SIGKILL');
+}
+// The same for a run that records its pid in a JSON file (a manual PR check's progress.json).
+if (step.killPidIn) process.kill(JSON.parse(fs.readFileSync(step.killPidIn, 'utf8')).pid, 'SIGKILL');
+
+process.stdout.write(`Working...\n${step.result ? `AGENT_RESULT: ${JSON.stringify(step.result)}\n` : ''}`);
+process.exit(step.exit ?? 0);

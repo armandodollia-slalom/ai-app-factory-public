@@ -1,0 +1,88 @@
+{
+  "$comment": "Static analysis for TypeScript and JavaScript (docs/ai-pipeline/analysis.md). eslint-security: eslint-plugin-security (Apache-2.0) from the repository's own node_modules, with the factory's ESLint and TypeScript parser and only the plugin's rules; reported as not installed (never failed) where the repository does not have the plugin. Verified by running against eslint-plugin-security installed in a scratch folder (see the analysis docs). Needs eslint-plugin-security 4 or later (3.x calls context.getSourceCode, which ESLint 10 removed: reported as a tool error naming that call). Verified by running with eslint-plugin-security 4.2.1 in a scratch folder: eval, child_process.exec and RegExp findings in JSON; and without the plugin: reported not installed.",
+  "tools": {
+    "eslint-security": {
+      "description": "eslint-plugin-security on the changed files",
+      "licence": "Apache-2.0",
+      "when": [
+        "**/package.json"
+      ],
+      "extensions": [
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".mts",
+        ".cts"
+      ],
+      "run": [
+        "node",
+        "{packs}/typescript/analysis/eslint-security.mjs",
+        "{files}"
+      ],
+      "parse": "eslint-json",
+      "scope": "changed-lines",
+      "baseline": "lines",
+      "block": {
+        "rules": [
+          "security/detect-eval-with-expression",
+          "security/detect-child-process",
+          "security/detect-pseudoRandomBytes",
+          "security/detect-disable-mustache-escape",
+          "security/detect-buffer-noassert",
+          "security/detect-new-buffer"
+        ]
+      },
+      "lens": "security",
+      "missingPattern": "eslint-plugin-security is not installed",
+      "okExit": [
+        0,
+        1
+      ],
+      "errorPattern": "getSourceCode is not a function",
+      "exclude": [
+        "e2e/**",
+        "**/e2e/**",
+        "tests/**",
+        "test/**",
+        "**/*.spec.*",
+        "**/*.test.*",
+        "**/__tests__/**"
+      ]
+    }
+  },
+  "stages": {
+    "pair": [
+      "eslint-security"
+    ],
+    "story": [
+      "eslint-security"
+    ],
+    "prCheck": [
+      "eslint-security"
+    ],
+    "featureVerification": [
+      "eslint-security"
+    ]
+  },
+  "suppressions": [
+    {
+      "id": "eslint-disable",
+      "pattern": "eslint-disable"
+    },
+    {
+      "id": "ts-ignore",
+      "pattern": "@ts-ignore|@ts-expect-error|@ts-nocheck"
+    },
+    {
+      "id": "npm-audit-ignore",
+      "pattern": "\"overrides\"\\s*:|auditConfig|ignoreAdvisories"
+    }
+  ],
+  "protect": [
+    ".eslintignore",
+    ".npmrc"
+  ]
+}

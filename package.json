@@ -1,0 +1,39 @@
+{
+  "name": "ai-app-factory",
+  "version": "0.2.83",
+  "description": "An AI development pipeline generator: point it at a codebase in any language and it sets up implementation, review, feature verification and PR-check agents, code intelligence, a scenario-seeded test stack and a retro that improves the factory itself.",
+  "type": "module",
+  "license": "ISC",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "factory": "bin/factory.mjs"
+  },
+  "scripts": {
+    "test": "FACTORY_METRICS_SPOOL=0 FACTORY_METRICS_SHARD=0 node scripts/pipeline/test/run.mjs scripts/*/test/*.test.mjs",
+    "test:pipeline": "FACTORY_METRICS_SPOOL=0 FACTORY_METRICS_SHARD=0 node scripts/pipeline/test/run.mjs scripts/*/test/*.test.mjs",
+    "lint": "eslint . && markdownlint \"**/*.md\"",
+    "factory": "node bin/factory.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2",
+    "eslint": "^10.14.0",
+    "@eslint/js": "^10.0.1",
+    "typescript-eslint": "^8.72.2",
+    "globals": "^17.14.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.1.2",
+    "ajv": "^8.20.0",
+    "bash-language-server": "5.8.1",
+    "dotenv": "^17.4.2",
+    "lsp-mcp-server": "1.1.27",
+    "markdownlint-cli": "^0.48.0",
+    "typescript": "~6.0.0",
+    "typescript-language-server": "5.3.0",
+    "vscode-langservers-extracted": "4.10.0",
+    "yaml-language-server": "1.25.0"
+  }
+}

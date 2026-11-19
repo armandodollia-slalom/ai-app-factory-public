@@ -1,0 +1,52 @@
+{
+  "$comment": "Static analysis for .NET (docs/ai-pipeline/analysis.md). roslyn-security: the .NET SDK's own security analyzers (CA2xxx, CA3xxx, CA5xxx; Microsoft.CodeAnalysis.NetAnalyzers, MIT) from a full rebuild with AnalysisModeSecurity=All, read from the build output (msbuild format): a solution build cannot write one SARIF ErrorLog per project from the command line without changing the repository's MSBuild files, which the factory does not do. It rebuilds the solution, so it runs at story level, in the PR check and in CI, not in every pair round. nuget-audit: `dotnet list package --vulnerable --include-transitive`, a report separate from restore's NU1901-NU1904 warnings, so a NoWarn of those codes (as the reference eShop has in Directory.Build.props) does not silence it; NuGetAuditSuppress items still apply and are listed as suppressions. Both were run against documentation only here, not against a real build.",
+  "vars": {
+    "solution": { "candidates": ["*.slnx", "*.sln", "*.slnf"] }
+  },
+  "tools": {
+    "roslyn-security": {
+      "description": "the .NET SDK's security analyzers on a full rebuild",
+      "licence": "MIT",
+      "when": ["**/*.csproj"],
+      "run": ["dotnet", "build", "{solution}", "--no-incremental", "-nologo", "-v", "q", "-clp:NoSummary", "-p:AnalysisModeSecurity=All", "-p:RunAnalyzersDuringBuild=true", "-p:TreatWarningsAsErrors=false"],
+      "parse": "msbuild",
+      "ruleFilter": ["CA2*", "CA3*", "CA5*"],
+      "scope": "changed-files",
+      "baseline": "merge-base",
+      "block": { "levels": ["error"], "rules": ["CA2100", "CA3001", "CA3002", "CA3003", "CA3004", "CA3006", "CA3007", "CA3008", "CA3011", "CA3012", "CA5350", "CA5351", "CA5359", "CA5364", "CA5386", "CA5397"] },
+      "lens": "security",
+      "okExit": [0, 1],
+      "timeoutSec": 1800
+    },
+    "nuget-audit": {
+      "description": "known vulnerabilities in NuGet packages, direct and transitive",
+      "licence": "MIT",
+      "when": ["**/*.csproj"],
+      "onChange": ["**/*.csproj", "**/Directory.Packages.props", "**/Directory.Build.props", "**/packages.lock.json", "**/nuget.config", "**/NuGet.Config"],
+      "run": "dotnet restore {solution} -v q && dotnet list {solution} package --vulnerable --include-transitive --format json",
+      "parse": "module:{packs}/dotnet/analysis/nuget-audit.mjs",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "block": { "levels": ["error"] },
+      "lens": "security",
+      "timeoutSec": 900,
+      "data": [{ "id": "github-advisory-database", "licence": "CC-BY-4.0", "note": "nuget.org's vulnerability data is the GitHub Advisory Database." }]
+    }
+  },
+  "stages": {
+    "story": ["roslyn-security", "nuget-audit"],
+    "prCheck": ["roslyn-security", "nuget-audit"],
+    "pair": ["nuget-audit"]
+  },
+  "protect": [".editorconfig", ".globalconfig", "CodeAnalysis.ruleset"],
+  "suppressions": [
+    { "id": "pragma-warning-disable", "pattern": "#pragma\\s+warning\\s+disable" },
+    { "id": "suppress-message", "pattern": "SuppressMessage\\s*\\(|\\[SuppressMessage|UnconditionalSuppressMessage" },
+    { "id": "msbuild-nowarn", "pattern": "<NoWarn>|<WarningsNotAsErrors>" },
+    { "id": "nuget-audit-off", "pattern": "<NuGetAudit>\\s*false|NuGetAuditSuppress|<NuGetAuditLevel>" },
+    { "id": "analysis-mode-off", "pattern": "<AnalysisMode[A-Za-z]*>\\s*(None|Minimum)|<EnableNETAnalyzers>\\s*false|<RunAnalyzers[A-Za-z]*>\\s*false" }
+  ],
+  "ci": [
+    { "id": "dependencies", "name": "Dependency audit", "tools": ["nuget-audit"], "required": true, "toolchain": true }
+  ]
+}

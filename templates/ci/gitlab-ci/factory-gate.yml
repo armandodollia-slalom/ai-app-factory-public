@@ -1,0 +1,30 @@
+# The factory's merge request gate, without any LLM call: the generated files are in step with the engine
+# version this repository pins, the configured models are allowed, test stack scenarios parse, the
+# repository's linters pass on the changed lines, then the feature verification check.
+# "Pipelines must succeed" (Settings > Merge requests) makes these jobs required.
+factory-gate:
+  extends: .factory-mr
+  script:
+    - factory check
+    - factory models check
+    - |
+      if [ -d .factory/stack ]; then
+        # Yours: .factory/ci/toolchain.sh, for a stack published from the application (drift runs it).
+        if [ -f .factory/ci/toolchain.sh ]; then . .factory/ci/toolchain.sh; fi
+        factory teststack validate
+        if node -e "process.exit(require('./.factory/config.json').teststack?.commands?.drift ? 0 : 1)"; then factory teststack drift; fi
+      fi
+
+factory-lint:
+  extends: .factory-mr
+  script:
+    # Yours: .factory/ci/toolchain.sh installs this codebase's toolchain (written once by `factory init`).
+    - if [ -f .factory/ci/toolchain.sh ]; then . .factory/ci/toolchain.sh; fi
+    - factory lint --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+
+factory-feature-verification:
+  extends: .factory-mr
+  needs: [factory-gate]
+  script:
+    # Stories touched by the merge request have verifier-approved plans and tests (read from the tracker).
+    - factory fv check --changed-from "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"

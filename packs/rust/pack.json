@@ -1,0 +1,30 @@
+{
+  "id": "rust",
+  "name": "Rust",
+  "extensions": [
+    ".rs"
+  ],
+  "unitFiles": [
+    "Cargo.toml"
+  ],
+  "rootFiles": [
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "rust-toolchain"
+  ],
+  "toolPaths": [
+    "~/.cargo/bin"
+  ],
+  "testHints": {
+    "dir": "(^|/)(tests|benches)(/|$)",
+    "content": ""
+  },
+  "frontendHints": {
+    "content": "\\b(leptos|yew|dioxus|sycamore)\\b",
+    "files": []
+  },
+  "ignore": [
+    "target"
+  ],
+  "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers)."
+}

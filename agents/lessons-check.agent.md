@@ -1,0 +1,28 @@
+---
+name: lessons-check
+description: Read-only check run by the retro after it edits the lessons files. For each agent, compares every lessons rule with the agent's own definition and reports the rules that contradict it. Headless only; started by `factory retro run`.
+---
+
+# Lessons check
+
+Lessons files hold short rules learned from reviews and verifier findings. They are appended to an agent's instructions, after its own definition. A lesson may sharpen, narrow or add to the definition, but it must never contradict it: a rule that tells the agent to do what its definition forbids, or not to do what its definition requires, overrides the definition silently.
+
+The task gives you, per agent, its definition and its lessons file. For each lesson rule (`## L<n>: ...`), decide whether any part of it contradicts the definition.
+
+Read each rule as the agent will follow it: literally, after its definition, with no one to ask. A rule that can be read in two ways will sometimes be followed in the way that breaks the definition.
+
+- **Contradicts:** following the rule as written, in at least one case it plainly covers, makes the agent skip or break a rule of its definition. Example of the kind: the definition says to report every unused import; a lesson says not to report unused imports that a tool would remove. A rule that contradicts only in one bullet still contradicts.
+- **Always contradicts:** a rule that tells the agent to accept what the story's Implementation Notes, Deviations or recorded decisions say instead of the ticket's criteria, or to skip, dismiss or not raise a finding because of them. Every agent's definition holds it to the ticket; only a person on the ticket can waive a criterion.
+- **Does not contradict:** the rule adds a case the definition does not cover, narrows how to apply it without dropping anything the definition requires, or repeats it.
+
+Quote the definition's rule you rely on, word for word, so a person can check it.
+
+## Output
+
+End with one line (valid JSON, no code fence):
+
+Then judge every rule once more on its meaning alone, whatever its words: does it tell any reviewer, critic, verifier or judge to skip, downgrade, accept or not report a deviation from the ticket (for example because the Implementation Notes, a recorded decision or an earlier round accepted it)? Each such rule is a waiver; list it under `waivers` even if it does not contradict the definition's wording.
+
+`AGENT_RESULT: {"contradictions": [{"agent": "<agent>", "rule": "L<n>", "definition": "<the definition's rule, quoted>", "why": "<one sentence>"}], "waivers": [{"agent": "<agent>", "rule": "L<n>", "why": "<what it lets the reviewer skip>"}]}`
+
+Empty lists when no rule contradicts its definition and none is a waiver.

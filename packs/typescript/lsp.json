@@ -1,0 +1,106 @@
+{
+  "$comment": "Language servers of this pack. `config` is the fragment `factory init` merges into the app repo's .factory/config.json (lsp.servers entries, see docs/code-intelligence.md for every field). `optional` holds further fragments to merge by hand. `install` says how to get each server's binary, per OS (`all` = every OS); `factory lsp setup` prints these lines for a server it cannot find. `verified` says whether this file was proven by running the server through the factory or written from the server's documentation.",
+  "verified": {
+    "status": "executed",
+    "on": "macOS arm64, node 20, typescript-language-server 5.3.0 with typescript 6.0, 2026-11-12",
+    "how": "factory lsp check on a scratch package (hover, definition, references, diagnostics), binary found in the app repo's node_modules. The optional css and html servers ran in eShop before the extraction and were not rerun here. Windows (.cmd shims through cmd.exe) not run."
+  },
+  "config": {
+    "lsp": {
+      "servers": [
+        {
+          "id": "typescript",
+          "extensions": [
+            ".ts",
+            ".tsx",
+            ".mts",
+            ".cts",
+            ".js",
+            ".jsx",
+            ".mjs",
+            ".cjs"
+          ],
+          "languageIds": [
+            "typescript",
+            "typescriptreact",
+            "javascript",
+            "javascriptreact"
+          ],
+          "command": "typescript-language-server",
+          "args": [
+            "--stdio"
+          ]
+        }
+      ]
+    }
+  },
+  "optional": {
+    "web": {
+      "config": {
+        "lsp": {
+          "servers": [
+            {
+              "id": "css",
+              "extensions": [
+                ".css"
+              ],
+              "languageIds": [
+                "css"
+              ],
+              "command": "vscode-css-language-server",
+              "args": [
+                "--stdio"
+              ],
+              "hook": false
+            },
+            {
+              "id": "html",
+              "extensions": [
+                ".html",
+                ".htm"
+              ],
+              "languageIds": [
+                "html"
+              ],
+              "command": "vscode-html-language-server",
+              "args": [
+                "--stdio"
+              ],
+              "hook": false
+            }
+          ]
+        }
+      }
+    }
+  },
+  "leased": {
+    "typescript": "no: tsserver memory follows the tsconfig projects that are opened. Set \"leased\": true in the app repo for a very large monorepo.",
+    "css": "no",
+    "html": "no"
+  },
+  "install": {
+    "typescript": {
+      "all": [
+        "npm install --save-dev typescript-language-server@5.3.0 typescript@~6.0   # in the app repository; typescript 7 (the native compiler) ships no tsserver.js, which typescript-language-server needs"
+      ]
+    },
+    "css": {
+      "all": [
+        "npm install --save-dev vscode-langservers-extracted@4.10.0"
+      ]
+    },
+    "html": {
+      "all": [
+        "npm install --save-dev vscode-langservers-extracted@4.10.0"
+      ]
+    }
+  },
+  "requires": [
+    "node 20+",
+    "the repository's dependencies installed (npm ci / pnpm install), or imports report as unresolved"
+  ],
+  "notes": [
+    "Binaries are looked up in the app repository's node_modules/.bin (a worktree falls back to the main checkout's), then the factory's, then PATH.",
+    "typescript-language-server 6.x exists; 5.3.0 is the version that ran here."
+  ]
+}

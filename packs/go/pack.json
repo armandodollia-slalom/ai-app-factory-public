@@ -1,0 +1,34 @@
+{
+  "id": "go",
+  "name": "Go",
+  "extensions": [
+    ".go"
+  ],
+  "unitFiles": [
+    "go.mod"
+  ],
+  "rootFiles": [
+    "go.work",
+    "go.sum"
+  ],
+  "toolPaths": [
+    "~/go/bin",
+    "/usr/local/go/bin"
+  ],
+  "testHints": {
+    "dir": "(^|/)(test|tests|e2e)(/|$)",
+    "content": ""
+  },
+  "frontendHints": {
+    "content": "\\b(templ|html/template)\\b",
+    "files": [
+      "*.tmpl",
+      "*.templ",
+      "*.gohtml"
+    ]
+  },
+  "ignore": [
+    "vendor"
+  ],
+  "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers)."
+}

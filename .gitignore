@@ -1,0 +1,22 @@
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+*.swp
+.env
+# The eShop example's stack env template holds placeholders only, no secrets
+!examples/eshop/.factory/stack/.env
+
+# Runtime state when the factory runs on itself
+.factory/state/
+graphify-out/
+artifacts/
+test-results/
+playwright-report/
+.playwright-cli/
+.claude/settings.local.json
+.claude/worktrees/
+.vscode/*
+.idea
+.venv/

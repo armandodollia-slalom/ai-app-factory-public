@@ -1,0 +1,31 @@
+// The factory's scheduled jobs for Jenkins: the weekly retro, the tracker sweep (epic assignees and resolved
+// escalations on boards whose events Jenkins cannot receive) and the code graph cache prune. Create one Pipeline job
+// (not multibranch) on the default branch with the script path ci/jenkins/Jenkinsfile.factory-scheduled.
+pipeline {
+  agent any
+  triggers {
+    cron('H/15 * * * *')
+  }
+  options {
+    timeout(time: 2, unit: 'HOURS')
+    disableConcurrentBuilds()
+  }
+  environment {
+    FACTORY_CI = 'jenkins'
+    // factory:secrets
+  }
+  stages {
+    stage('tracker sweep') {
+      steps { sh 'bash .factory/ci/factory-ci.sh tracker' }
+    }
+    stage('retro') {
+      when { expression { return new Date().format('u HH', TimeZone.getTimeZone('UTC')) ==~ /1 0[0-1]/ } }
+      steps { sh 'bash .factory/ci/factory-ci.sh retro' }
+    }
+    // factory:graphify
+    stage('code graph cache prune') {
+      when { expression { return new Date().format('u HH', TimeZone.getTimeZone('UTC')) ==~ /7 0[0-1]/ } }
+      steps { sh 'bash .factory/ci/factory-ci.sh graphify-prune' }
+    }
+  }
+}

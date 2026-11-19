@@ -1,0 +1,48 @@
+{
+  "$comment": "Test runners of this pack, for `precheck.testRunners` in .factory/config.json (schema: scripts/feature-verification/lib/runners.mjs). Refer to one with \"<pack>/<name>\" or to all with \"<pack>\"; runners are tried in this order. `verified` says whether the run command was executed against a sample project when the pack was written.",
+  "runners": [
+    {
+      "name": "go-test",
+      "description": "go test, one run per module (nearest go.mod; needs Go 1.20+ for -C).",
+      "match": [
+        "**/*_test.go"
+      ],
+      "discover": {
+        "marker": [
+          "go.mod"
+        ]
+      },
+      "build": [
+        "go",
+        "vet",
+        "-C",
+        "{unit}",
+        "./..."
+      ],
+      "run": [
+        "go",
+        "test",
+        "-C",
+        "{unit}",
+        "./...",
+        "-run",
+        "^Test{storyPascal}_"
+      ],
+      "storyTag": {
+        "pattern": "func\\s+Test{storyPascal}_",
+        "template": "a test function named `Test{storyPascal}_NN_<WhatItChecks>`",
+        "caseTemplate": "a `// {case}` comment on the line above the function"
+      },
+      "lang": "go",
+      "verified": true,
+      "verifiedNote": "Executed with go on a sample module: build (go vet) and run passed; -run selected TestPromo1_ and left TestPromo12_ out.",
+      "runAll": [
+        "go",
+        "test",
+        "-C",
+        "{unit}",
+        "./..."
+      ]
+    }
+  ]
+}

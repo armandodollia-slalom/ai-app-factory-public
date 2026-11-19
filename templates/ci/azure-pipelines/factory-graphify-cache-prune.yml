@@ -1,0 +1,43 @@
+# Builds keep shared graphify cache entries for every doc version, so other branches can reuse them. This
+# pipeline deletes entries that no remote branch or open pull request needs (and that are older than the
+# grace period), then pushes a branch for review; a person opens its pull request once its checks pass. Create a pipeline from this file
+# and add a weekly scheduled trigger. Azure Repos only.
+trigger: none
+pr: none
+
+parameters:
+- name: graceDays
+  displayName: Keep unused entries committed within this many days
+  type: number
+  default: 14
+
+pool:
+  vmImage: ubuntu-latest
+
+jobs:
+- job: prune
+  displayName: graphify cache prune
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    persistCredentials: true
+  - bash: |
+      set -e
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      export PATH="$HOME/.local/bin:$PATH"
+      version="$(sed -n 's/^GRAPHIFY_VERSION="\([^"]*\)".*/\1/p' scripts/graphify-build.sh)"
+      uv tool install "graphifyy[sql]==$version"
+      scripts/graphify-build.sh --prune --grace-days "$GRACE_DAYS"
+      if [ -z "$(git status --porcelain -- graphify-out/cache)" ]; then echo "Nothing to prune."; exit 0; fi
+      branch="chore/graphify-cache-prune-$(date -u +%Y%m%d)"
+      git config user.name "$BUILD_REQUESTEDFOR"
+      git config user.email "${FACTORY_GIT_EMAIL:-factory-bot@noreply.invalid}"
+      git switch -c "$branch"
+      git add -A -- graphify-out/cache
+      GRAPHIFY_ALLOW_CACHE_PRUNE=1 git commit -m "chore(graphify): prune unused semantic cache entries"
+      git push -f origin "$branch"
+      echo "Pushed $branch. Open its pull request once its checks pass (the pipeline opens no PR before CI has run on its head)."
+    displayName: Prune and push a branch for review
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      GRACE_DAYS: ${{ parameters.graceDays }}

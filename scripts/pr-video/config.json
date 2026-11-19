@@ -1,0 +1,15 @@
+{
+  "prVideo": {
+    "specPatterns": [],
+    "videosDir": "artifacts/e2e-videos",
+    "storageBranch": "pr-videos",
+    "backendPaths": [],
+    "neutralPaths": [],
+    "api": {
+      "extractor": null,
+      "sources": [],
+      "exclude": [],
+      "openapi": []
+    }
+  }
+}

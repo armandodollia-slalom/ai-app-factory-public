@@ -1,0 +1,63 @@
+# Steps every factory job starts with: check out with full history, Node 20, and the factory engine this
+# repository is pinned to (.factory/factory.json: source and version) on PATH. The equivalent of the
+# GitHub `setup-factory` action.
+#
+# Pipeline variables (Pipelines > Edit > Variables; mark secrets as secret):
+#   FACTORY_TOKEN       a token that can read the factory repository, for a private factory (unset: public)
+#   FACTORY_TOKEN_USER  the user name sent with it (default x-access-token, which GitHub expects; any value
+#                       works for Azure Repos and GitLab tokens)
+# The factory acts on Azure DevOps as the build service ($(System.AccessToken), mapped to AZURE_DEVOPS_TOKEN):
+# give "<project> Build Service" Contribute and Contribute to pull requests on the repository.
+parameters:
+- name: fromBase
+  # Install and run the factory pinned on the pull request's target branch (the review quorum).
+  type: boolean
+  default: false
+
+steps:
+- checkout: self
+  fetchDepth: 0
+  persistCredentials: true
+- task: NodeTool@0
+  displayName: Node 20
+  inputs:
+    versionSpec: 20.x
+- bash: |
+    set -e
+    case "$FACTORY_TOKEN" in '$('*) FACTORY_TOKEN= ;; esac
+    case "$FACTORY_TOKEN_USER" in '$('*) FACTORY_TOKEN_USER= ;; esac
+    workdir="$BUILD_SOURCESDIRECTORY"
+    target="${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+    if [ -n "$target" ]; then git fetch --quiet origin "+refs/heads/$target:refs/remotes/origin/$target"; fi
+    if [ "$FROM_BASE" = True ] && [ -n "$target" ]; then
+      workdir="$AGENT_TEMPDIRECTORY/factory-base"
+      git worktree add --quiet --detach "$workdir" "origin/$target"
+    fi
+    echo "##vso[task.setvariable variable=FACTORY_WORKDIR]$workdir"
+    echo "##vso[task.setvariable variable=BASE_REF]origin/${target:-${BUILD_SOURCEBRANCH#refs/heads/}}"
+    cd "$workdir"
+    if [ ! -f .factory/factory.json ]; then echo "The factory is not on this branch yet; nothing to do."; echo "##vso[task.setvariable variable=FACTORY_ABSENT]1"; exit 0; fi
+    version=$(node -p "require('./.factory/factory.json').version")
+    source=$(node -p "require('./.factory/factory.json').source || ''")
+    if [ -z "$source" ]; then echo "##vso[task.logissue type=error].factory/factory.json has no \"source\" (the factory's git URL)"; exit 1; fi
+    dest="$AGENT_TEMPDIRECTORY/ai-app-factory"
+    auth=()
+    if [ -n "$FACTORY_TOKEN" ]; then
+      echo "##vso[task.setsecret]$FACTORY_TOKEN"
+      auth=(-c "http.extraHeader=AUTHORIZATION: basic $(printf '%s:%s' "${FACTORY_TOKEN_USER:-x-access-token}" "$FACTORY_TOKEN" | base64 | tr -d '\n')")
+    fi
+    # Fetch the release tag and check out its commit: `clone --branch <annotated tag>` warns that the tag
+    # "is not a commit".
+    git -c init.defaultBranch=factory init --quiet "$dest"
+    if ! { git -C "$dest" "${auth[@]}" fetch --quiet --depth 1 "$source" "refs/tags/v$version" && git -C "$dest" -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD; }; then
+      echo "##vso[task.logissue type=error]could not clone the factory v$version from $source. A private factory needs the FACTORY_TOKEN variable (read access to that repository); the tag v$version must exist there."
+      exit 1
+    fi
+    if [ -f "$dest/package-lock.json" ]; then (cd "$dest" && npm ci --omit=dev --no-audit --no-fund --no-update-notifier --loglevel=error); fi
+    echo "##vso[task.prependpath]$dest/bin"
+    echo "##vso[task.setvariable variable=FACTORY_HOME]$dest"
+  displayName: Install the AI app factory
+  env:
+    FACTORY_TOKEN: $(FACTORY_TOKEN)
+    FACTORY_TOKEN_USER: $(FACTORY_TOKEN_USER)
+    FROM_BASE: ${{ parameters.fromBase }}

@@ -1,0 +1,6 @@
+{
+  "name": "ai-app-factory",
+  "description": "Skills that generate and maintain the AI app factory in a codebase: onboarding, code intelligence, the test stack, the architecture policy, the board, observability and the retro.",
+  "version": "0.1.0",
+  "skills": "./skills"
+}

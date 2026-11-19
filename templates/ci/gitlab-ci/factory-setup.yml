@@ -1,0 +1,84 @@
+# The factory's job templates for GitLab CI: the equivalents of the GitHub `setup-factory` and
+# `setup-agent-cli` actions. Every factory job extends `.factory-base` (installs the pinned factory) or
+# `.factory-agent` (also installs the agent CLI). To change a job for your runners (image, tags, timeout),
+# define a job of the same name in your own .gitlab-ci.yml: GitLab merges your keys over these.
+#
+# CI/CD variables (Settings > CI/CD > Variables; mask the secrets):
+#   FACTORY_TOKEN        a token that can read the factory repository, for a private factory (empty: public)
+#   FACTORY_TOKEN_USER   the user name sent with it (default x-access-token, which GitHub expects; any
+#                        value works for GitLab and Azure Repos tokens)
+#   GITLAB_TOKEN         a project access token (Developer, scope api) the factory uses for merge requests
+#   GH_TOKEN             only with GitHub issues as the tracker: a token the gh CLI uses (Issues and Projects)
+#   PIPELINE_AGENT_CLI   claude (default), copilot or codex; PIPELINE_AGENT_CMD for any other CLI
+#   ANTHROPIC_API_KEY, COPILOT_GITHUB_TOKEN, OPENAI_API_KEY, PIPELINE_AGENT_API_KEY: the agent's credential
+#   plus the tracker's variables named in .factory/config.json (tracker.auth), such as JIRA_API_TOKEN.
+.factory-install: &factory-install |
+  # Code that must not come from the merge request (the review quorum) runs from the target branch.
+  if [ "${FACTORY_FROM_BASE:-0}" = 1 ] && [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+    git fetch --quiet origin "+refs/heads/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    git worktree add --quiet --detach /tmp/factory-base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    cd /tmp/factory-base
+  elif [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+    git fetch --quiet origin "+refs/heads/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+  fi
+  if [ ! -f .factory/factory.json ]; then echo "The factory is not on this branch yet; nothing to do."; export FACTORY_ABSENT=1; else
+    version=$(node -p "require('./.factory/factory.json').version")
+    source=$(node -p "require('./.factory/factory.json').source || ''")
+    if [ -z "$source" ]; then echo ".factory/factory.json has no \"source\" (the factory's git URL)"; exit 1; fi
+    dest="/tmp/ai-app-factory"
+    auth=()
+    if [ -n "$FACTORY_TOKEN" ]; then
+      auth=(-c "http.extraHeader=AUTHORIZATION: basic $(printf '%s:%s' "${FACTORY_TOKEN_USER:-x-access-token}" "$FACTORY_TOKEN" | base64 | tr -d '\n')")
+    fi
+    # Fetch the release tag and check out its commit: `clone --branch <annotated tag>` warns that the tag
+    # "is not a commit".
+    git -c init.defaultBranch=factory init --quiet "$dest"
+    if ! { git -C "$dest" "${auth[@]}" fetch --quiet --depth 1 "$source" "refs/tags/v$version" && git -C "$dest" -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD; }; then
+      echo "Could not clone the factory v$version from $source. A private factory needs the FACTORY_TOKEN variable (read access to that repository); the tag v$version must exist there."
+      exit 1
+    fi
+    if [ -f "$dest/package-lock.json" ]; then (cd "$dest" && npm ci --omit=dev --no-audit --no-fund --no-update-notifier --loglevel=error); fi
+    export PATH="$dest/bin:$PATH" FACTORY_HOME="$dest"
+    # GitHub as the host or the tracker is reached through the gh CLI (GH_TOKEN).
+    if [ -n "$GH_TOKEN" ] && ! command -v gh >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq gh >/dev/null; fi
+  fi
+
+.factory-agent-cli: &factory-agent-cli |
+  export FACTORY_AGENT_READY=false
+  cli="${PIPELINE_AGENT_CLI:-claude}"
+  export CODEX_API_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
+  if [ -n "$PIPELINE_AGENT_CMD" ]; then
+    if [ -n "$PIPELINE_AGENT_INSTALL" ]; then bash -c "$PIPELINE_AGENT_INSTALL"; fi
+    FACTORY_AGENT_READY=true
+  else
+    case "$cli" in
+      claude) if [ -n "$ANTHROPIC_API_KEY" ]; then npm i -g @anthropic-ai/claude-code && FACTORY_AGENT_READY=true; else echo "PIPELINE_AGENT_CLI is claude but ANTHROPIC_API_KEY is not set; skipping."; fi ;;
+      copilot) if [ -n "$COPILOT_GITHUB_TOKEN" ]; then npm i -g @github/copilot && FACTORY_AGENT_READY=true; else echo "PIPELINE_AGENT_CLI is copilot but COPILOT_GITHUB_TOKEN is not set; skipping."; fi ;;
+      codex) if [ -n "$CODEX_API_KEY" ]; then npm i -g @openai/codex && FACTORY_AGENT_READY=true; else echo "PIPELINE_AGENT_CLI is codex but OPENAI_API_KEY is not set; skipping."; fi ;;
+      *) echo "Unknown PIPELINE_AGENT_CLI '$cli'. Use claude, copilot, codex or set PIPELINE_AGENT_CMD."; exit 1 ;;
+    esac
+  fi
+  echo "Agent: ${PIPELINE_AGENT_CMD:+custom command}${PIPELINE_AGENT_CMD:-$cli} (ready: $FACTORY_AGENT_READY)"
+
+.factory-base:
+  image: node:20-bookworm
+  stage: test
+  interruptible: true
+  variables:
+    GIT_DEPTH: "0"
+    FACTORY_CI: gitlab-ci
+  before_script:
+    - *factory-install
+
+.factory-agent:
+  extends: .factory-base
+  timeout: 2h
+  before_script:
+    - *factory-install
+    - *factory-agent-cli
+
+# Jobs that run on merge request pipelines only.
+.factory-mr:
+  extends: .factory-base
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"

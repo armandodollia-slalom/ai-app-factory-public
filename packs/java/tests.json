@@ -1,0 +1,102 @@
+{
+  "$comment": "Test runners of this pack, for `precheck.testRunners` in .factory/config.json (schema: scripts/feature-verification/lib/runners.mjs). Refer to one with \"<pack>/<name>\" or to all with \"<pack>\"; runners are tried in this order. `verified` says whether the run command was executed against a sample project when the pack was written.",
+  "runners": [
+    {
+      "name": "junit-maven",
+      "description": "JUnit 5 through Maven Surefire, one run per module (nearest pom.xml); the story is a JUnit tag.",
+      "match": [
+        "**/*Test.java",
+        "**/*Tests.java",
+        "**/*IT.java",
+        "**/*Test.kt",
+        "**/*Tests.kt"
+      ],
+      "discover": {
+        "marker": [
+          "pom.xml"
+        ],
+        "required": true
+      },
+      "build": [
+        "mvn",
+        "-q",
+        "-f",
+        "{unit}/pom.xml",
+        "test-compile"
+      ],
+      "run": [
+        "mvn",
+        "-q",
+        "-f",
+        "{unit}/pom.xml",
+        "test",
+        "-Dgroups={story}",
+        "-Dsurefire.failIfNoSpecifiedTests=false"
+      ],
+      "storyTag": {
+        "pattern": "@Tag\\(\\s*\"{story}\"\\s*\\)",
+        "template": "@Tag(\"{story}\")",
+        "caseTemplate": "@DisplayName(\"{case} <what it checks>\")"
+      },
+      "lang": "java",
+      "verified": false,
+      "verifiedNote": "Maven is not installed on the machine the pack was written on. In a multi-module build whose modules depend on each other, replace -f with [\"-pl\", \"{unit}\", \"-am\"].",
+      "runAll": [
+        "mvn",
+        "-q",
+        "-f",
+        "{unit}/pom.xml",
+        "test"
+      ]
+    },
+    {
+      "name": "junit-gradle",
+      "description": "JUnit 5 through Gradle, one run per project (nearest build.gradle); Gradle has no tag flag, so the story is selected by class name.",
+      "match": [
+        "**/*Test.java",
+        "**/*Tests.java",
+        "**/*IT.java",
+        "**/*Test.kt",
+        "**/*Tests.kt"
+      ],
+      "discover": {
+        "marker": [
+          "build.gradle",
+          "build.gradle.kts"
+        ],
+        "required": true
+      },
+      "build": [
+        "./gradlew",
+        "-q",
+        "-p",
+        "{unit}",
+        "testClasses"
+      ],
+      "run": [
+        "./gradlew",
+        "-q",
+        "-p",
+        "{unit}",
+        "test",
+        "--tests",
+        "*{storyPascal}StoryTest*"
+      ],
+      "storyTag": {
+        "pattern": "class\\s+\\w*{storyPascal}StoryTest",
+        "template": "a test class named `<Feature>{storyPascal}StoryTest`",
+        "caseTemplate": "@DisplayName(\"{case} <what it checks>\")"
+      },
+      "lang": "java",
+      "verified": false,
+      "verifiedNote": "Gradle is not installed on the machine the pack was written on.",
+      "runAll": [
+        "./gradlew",
+        "-q",
+        "-p",
+        "{unit}",
+        "test"
+      ]
+    }
+  ]
+}

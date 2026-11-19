@@ -1,0 +1,59 @@
+{
+  "tickets": {
+    "dir": ".factory/state/board",
+    "repo": null,
+    "assetsBranch": "board-assets"
+  },
+  "stateDir": ".factory/state",
+  "metricsDir": ".factory/metrics",
+  "agentsDir": "agents",
+  "lessonsDir": ".factory/lessons",
+  "baseRef": "origin/main",
+  "bot": {
+    "enabled": true,
+    "namePattern": "dev-bot-{login}",
+    "credentialsDir": "~/.config/ai-app-factory"
+  },
+  "storyGuard": {
+    "folders": [
+      ".factory/state/board"
+    ]
+  },
+  "agent": {
+    "cli": "claude",
+    "supervisor": { "idleSec": 1800, "ceilingFactor": 10 },
+    "allowedModels": [
+      "opus",
+      "sonnet",
+      "sol"
+    ],
+    "modelIds": {
+      "claude": {
+        "opus": "claude-opus-5-5",
+        "sonnet": "claude-sonnet-5-5"
+      },
+      "copilot": {
+        "opus": "claude-opus-5.5",
+        "sonnet": "claude-sonnet-5.5",
+        "sol": "gpt-6.1-sol"
+      },
+      "codex": {
+        "sol": "gpt-6.1-sol"
+      }
+    },
+    "strictModels": true,
+    "models": {
+      "default": "sonnet"
+    },
+    "resultParseRetries": 1
+  },
+  "recovery": {
+    "maxAttempts": 3,
+    "backoffSec": 60,
+    "startingGraceSec": 120
+  },
+  "implExclude": [
+    ".factory",
+    "graphify-out"
+  ]
+}

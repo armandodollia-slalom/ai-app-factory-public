@@ -1,0 +1,50 @@
+// The factory's pull request jobs for Jenkins (declarative Pipeline). Create a Multibranch Pipeline job for this
+// repository with the script path ci/jenkins/Jenkinsfile.factory (the branch source plugin of your code host builds its
+// pull requests as PR-<n> / MR-<n> and reports each stage as a status the code host shows). The review gate reads the
+// builds of the pull request's head through the Jenkins API (ci.url, ci.job in .factory/config.json).
+// Credentials (Manage Jenkins > Credentials, "secret text", IDs below): the factory's own and the variables the
+// configured host, tracker and agent need. Jenkins starts no pipeline on a review: review-quorum runs on every build
+// and the review gate posts its status on the head at each board sync (the CI capability reviewEvents is off).
+pipeline {
+  agent any
+  options {
+    timeout(time: 2, unit: 'HOURS')
+    disableConcurrentBuilds(abortPrevious: true)
+  }
+  environment {
+    FACTORY_CI = 'jenkins'
+    FACTORY_PR = "${env.CHANGE_ID ?: ''}"
+    FACTORY_BASE = "${env.CHANGE_TARGET ?: ''}"
+    FACTORY_RUN_URL = "${env.BUILD_URL ?: ''}"
+    // factory:secrets
+  }
+  stages {
+    stage('factory gate') {
+      steps { sh 'bash .factory/ci/factory-ci.sh gate' }
+    }
+    stage('factory lint') {
+      steps { sh 'bash .factory/ci/factory-ci.sh lint' }
+    }
+    // factory:analysis
+    stage('feature verification') {
+      steps { sh 'bash .factory/ci/factory-ci.sh feature-verification' }
+    }
+    stage('review-quorum') {
+      when { changeRequest() }
+      steps { sh 'bash .factory/ci/factory-ci.sh review-quorum' }
+    }
+    // factory:demo-video
+    stage('demo video') {
+      when { changeRequest() }
+      steps { sh 'bash .factory/ci/factory-ci.sh demo-video' }
+    }
+    stage('PR check') {
+      // On demand: "Build with Parameters" and tick PR_CHECK (Jenkins has no label or comment trigger).
+      when { allOf { changeRequest(); expression { return params.PR_CHECK == true } } }
+      steps { sh 'bash .factory/ci/factory-ci.sh pr-check' }
+    }
+  }
+  parameters {
+    booleanParam(name: 'PR_CHECK', defaultValue: false, description: 'Run the factory PR check (agents) on this pull request')
+  }
+}

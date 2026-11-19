@@ -1,0 +1,76 @@
+{
+  "$comment": "Language servers of this pack. `config` is the fragment `factory init` merges into the app repo's .factory/config.json (lsp.servers entries, see docs/code-intelligence.md for every field). `optional` holds further fragments to merge by hand. `install` says how to get each server's binary, per OS (`all` = every OS); `factory lsp setup` prints these lines for a server it cannot find. `verified` says whether this file was proven by running the server through the factory or written from the server's documentation.",
+  "verified": {
+    "status": "executed",
+    "on": "macOS arm64, .NET SDK, roslyn-language-server 5.13.0-1.26514.10, 2026-11-12",
+    "how": "factory lsp check on a scratch solution (hover, definition, references, diagnostics; prepare ran dotnet tool restore and dotnet restore; --owns wrote a solution filter). This is the eShop setup moved out of the engine. Linux and Windows not run."
+  },
+  "config": {
+    "lsp": {
+      "servers": [
+        {
+          "id": "csharp",
+          "extensions": [
+            ".cs"
+          ],
+          "languageIds": [
+            "csharp"
+          ],
+          "command": "node",
+          "args": [
+            "pack:dotnet/lsp/roslyn-proxy.mjs",
+            "dotnet",
+            "tool",
+            "run",
+            "roslyn-language-server",
+            "--stdio",
+            "--telemetryLevel",
+            "off",
+            "--logLevel",
+            "Warning"
+          ],
+          "env": {
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+            "DOTNET_NOLOGO": "1"
+          },
+          "leased": true,
+          "reportsState": true,
+          "loadTimeoutSec": 900,
+          "prepare": {
+            "command": "node",
+            "args": [
+              "pack:dotnet/lsp/prepare.mjs"
+            ],
+            "label": "restoring tools and NuGet packages",
+            "timeoutSec": 900
+          },
+          "scope": {
+            "module": "pack:dotnet/lsp/scope.mjs",
+            "options": {}
+          }
+        }
+      ]
+    }
+  },
+  "leased": {
+    "csharp": "yes: Roslyn loads every project of the solution (several GB on a large one). scope.mjs narrows it to the owned projects and their references when lspd starts with --owns."
+  },
+  "install": {
+    "csharp": {
+      "all": [
+        "dotnet new tool-manifest   # only when the repository has no dotnet-tools.json (.config/ or the root; .NET 10 writes it at the root)",
+        "dotnet tool install --local roslyn-language-server --version 5.13.0-1.26514.10",
+        "git add dotnet-tools.json .config/dotnet-tools.json   # whichever exists; the pinned version is part of the repository; `prepare` runs `dotnet tool restore` in every checkout"
+      ]
+    }
+  },
+  "requires": [
+    "the .NET SDK the repository builds with, on PATH or in project.toolPaths (~/.dotnet, ~/.dotnet/tools)"
+  ],
+  "notes": [
+    "scope.options.solution: solution file relative to the repository root. Needed when the root holds more than one .sln/.slnx, or none.",
+    "scope.options.restoreSolution: what to `dotnet restore` when the whole solution is opened, for a solution with projects that cannot be restored everywhere (MAUI workloads, ...).",
+    "roslyn-proxy.mjs sends Roslyn's solution/open notification, reports the load state (reportsState), asks for pull diagnostics and drops locations in source-generated files.",
+    ".razor and .cshtml have no server here: Roslyn's Razor support needs the editor's Razor extension host."
+  ]
+}

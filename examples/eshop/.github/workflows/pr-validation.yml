@@ -1,0 +1,48 @@
+name: eShop Pull Request Validation
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'src/ClientApp/**'
+      - 'tests/ClientApp.UnitTests/**'
+      - '.github/workflows/pr-validation-maui.yml'
+      - 'docs/**'
+      - 'img/**'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'src/ClientApp/**'
+      - 'tests/ClientApp.UnitTests/**'
+      - '.github/workflows/pr-validation-maui.yml'
+      - 'docs/**'
+      - 'img/**'
+
+jobs:  
+  test:
+    runs-on: ubuntu-latest    
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET (global.json)
+        uses: actions/setup-dotnet@v3
+      - name: Build 
+        run: dotnet build eShop.Web.slnf
+      - name: Test
+        run: dotnet test --solution eShop.Web.slnf --no-build --no-progress --output detailed
+
+  teststack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET (global.json)
+        uses: actions/setup-dotnet@v3
+      - name: Install Aspire CLI
+        run: |
+          curl -fsSL https://aspire.dev/install.sh | bash
+          echo "$HOME/.aspire/bin" >> "$GITHUB_PATH"
+      - name: Check generated compose stack is up to date
+        run: testing/teststack publish --check
+      - name: Validate scenarios
+        run: testing/teststack validate

@@ -1,0 +1,27 @@
+# Builds keep shared graphify cache entries for every doc version, so other branches can reuse them. This
+# job deletes entries that no remote branch or open merge request needs (and that are older than the grace
+# period), then pushes a branch and opens a merge request for review (git push options; GITLAB_TOKEN needs
+# write_repository). Schedule it weekly (Build > Pipeline schedules) with FACTORY_JOB=graphify-cache-prune;
+# FACTORY_GRACE_DAYS overrides the 14-day grace period.
+factory-graphify-cache-prune:
+  extends: .factory-base
+  resource_group: factory-graphify-cache-prune
+  interruptible: false
+  rules:
+    - if: ($CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web") && $FACTORY_JOB == "graphify-cache-prune"
+  script:
+    - curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH="$HOME/.local/bin:$PATH"
+    - version="$(sed -n 's/^GRAPHIFY_VERSION="\([^"]*\)".*/\1/p' scripts/graphify-build.sh)" && uv tool install "graphifyy[sql]==$version"
+    - scripts/graphify-build.sh --prune --grace-days "${FACTORY_GRACE_DAYS:-14}"
+    - if [ -z "$(git status --porcelain -- graphify-out/cache)" ]; then echo "Nothing to prune."; exit 0; fi
+    - |
+      git config user.name "${FACTORY_GIT_NAME:-factory-bot}"
+      git config user.email "${FACTORY_GIT_EMAIL:-factory-bot@noreply.invalid}"
+      # Pushes use the GITLAB_TOKEN project access token (write_repository), never the job token.
+      if [ -n "$GITLAB_TOKEN" ]; then git config --global http.extraHeader "AUTHORIZATION: basic $(printf "oauth2:%s" "$GITLAB_TOKEN" | base64 | tr -d "\n")"; git remote set-url origin "$CI_SERVER_URL/$CI_PROJECT_PATH.git"; fi
+    - |
+      branch="chore/graphify-cache-prune-$(date -u +%Y%m%d)"
+      git switch -c "$branch"
+      git add -A -- graphify-out/cache
+      GRAPHIFY_ALLOW_CACHE_PRUNE=1 git commit -m "chore(graphify): prune unused semantic cache entries"
+      git push -f origin "$branch" -o merge_request.create -o merge_request.target="$CI_DEFAULT_BRANCH" -o merge_request.title="chore(graphify): prune unused semantic cache entries" -o merge_request.remove_source_branch

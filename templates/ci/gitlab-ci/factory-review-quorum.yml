@@ -1,0 +1,13 @@
+# The review gate labels a bug-fix merge request that needs people `approvals:N`; this job passes once
+# approvals from distinct people (not the author, not from before the latest push) reach N.
+# GitLab runs it on each merge request pipeline: an approval does not start a pipeline, so re-run the job
+# (or the pipeline) after approving. On GitLab Premium, prefer approval rules for a fixed count.
+# The job installs and runs the factory pinned on the target branch, so a merge request cannot change how
+# its own approvals are counted; the job definition itself still comes from the merge request's branch.
+review-quorum:
+  extends: .factory-mr
+  variables:
+    FACTORY_FROM_BASE: "1"
+  script:
+    - if [ "${FACTORY_ABSENT:-0}" = 1 ]; then echo "review-quorum the factory is not on the target branch yet; nothing to enforce"; exit 0; fi
+    - factory review-quorum "$CI_MERGE_REQUEST_IID"

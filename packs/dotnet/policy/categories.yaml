@@ -1,0 +1,30 @@
+# The .NET policy library: categories of its rules, and the starter validators it replaces with .NET forms
+# (only while the repository still has the starter's version). See README.md.
+replacesStarterValidators: [VAL-SECRET-SCAN, VAL-DB-OWNERSHIP]
+# Starter rules replaced by their .NET form, again only while the repository still has the starter's version.
+replacesStarterRules: [SEC-001]
+categories:
+- id: architecture
+  prefix: ARCH
+  file: rules/architecture.yaml
+- id: api
+  prefix: API
+  file: rules/api.yaml
+- id: security
+  prefix: SEC
+  file: rules/security.yaml
+- id: data
+  prefix: DATA
+  file: rules/data.yaml
+- id: observability
+  prefix: OBS
+  file: rules/observability.yaml
+- id: resiliency
+  prefix: RES
+  file: rules/resiliency.yaml
+- id: error_handling
+  prefix: ERR
+  file: rules/error-handling.yaml
+- id: testing
+  prefix: TEST
+  file: rules/testing.yaml

@@ -1,0 +1,35 @@
+# The review gate labels a bug-fix pull request that needs people `approvals:N`; this pipeline passes once
+# approvals from distinct people (not the author, not from before the latest push) reach N.
+# Create a pipeline from this file named `review-quorum` and add it as a required build validation on the
+# target branch. Azure DevOps does not start a build when someone approves: set the build validation to
+# expire "immediately" on source updates and requeue it after approving, or rely on the branch policy
+# "Minimum number of reviewers" for a fixed count.
+# The factory pinned on the target branch counts the approvals, so a pull request cannot change how its own
+# approvals are counted (the pipeline definition itself still comes from the pull request's branch).
+trigger: none
+pr:
+  branches:
+    include: ['*']
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  FACTORY_CI: azure-pipelines
+
+jobs:
+- job: review_quorum
+  displayName: review-quorum
+  steps:
+  - template: templates/factory-setup.yml
+    parameters:
+      fromBase: true
+  - bash: |
+      for v in $(env | sed -n 's/^\([A-Z_][A-Z0-9_]*\)=\$(.*/\1/p'); do unset "$v"; done
+      if [ "$FACTORY_ABSENT" = 1 ]; then echo "review-quorum: the factory is not on the target branch yet; nothing to enforce"; exit 0; fi
+      cd "$FACTORY_WORKDIR"
+      factory review-quorum "${SYSTEM_PULLREQUEST_PULLREQUESTNUMBER:-$SYSTEM_PULLREQUEST_PULLREQUESTID}"
+    displayName: Count approvals
+    env:
+      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
+      # factory:secrets

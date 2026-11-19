@@ -1,0 +1,38 @@
+{
+  "$comment": "Default commands of this pack, used by the config generator to draft .factory/config.json. Keys map to: prepare -> implement.prepareCmd; checks -> implement.checks; unitTests -> implement.unitTests.cmd ({project} is a service's `unitTests` path); lint / format -> precheck.lint / precheck.fix by file extension ({files}); toolPaths -> project.toolPaths. {root} placeholders are for the generator to fill (a solution, a workspace manifest).",
+  "prepare": "python3 -m pip install -e . -q",
+  "checks": [
+    {
+      "name": "compile",
+      "cmd": "python3 -m compileall -q ."
+    }
+  ],
+  "unitTests": "python3 -m pytest -q {project}",
+  "lint": {
+    ".py": [
+      "ruff",
+      "check",
+      "{files}"
+    ]
+  },
+  "format": {
+    ".py": [
+      "ruff",
+      "format",
+      "{files}"
+    ]
+  },
+  "toolPaths": [
+    "~/.local/bin"
+  ],
+  "alternatives": {
+    "uv": {
+      "prepare": "uv sync",
+      "unitTests": "uv run pytest -q {project}"
+    },
+    "poetry": {
+      "prepare": "poetry install",
+      "unitTests": "poetry run pytest -q {project}"
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "$comment": "Language servers of this pack. `config` is the fragment `factory init` merges into the app repo's .factory/config.json (lsp.servers entries, see docs/code-intelligence.md for every field). `optional` holds further fragments to merge by hand. `install` says how to get each server's binary, per OS (`all` = every OS); `factory lsp setup` prints these lines for a server it cannot find. `verified` says whether this file was proven by running the server through the factory or written from the server's documentation.",
+  "verified": {
+    "status": "documentation",
+    "how": "Not run: jdtls is not installed on this machine. Written from the eclipse.jdt.ls README (the `jdtls` Python wrapper and its -data argument). Check the command line with `factory lsp check` before relying on it."
+  },
+  "config": {
+    "lsp": {
+      "servers": [
+        {
+          "id": "java",
+          "extensions": [
+            ".java"
+          ],
+          "languageIds": [
+            "java"
+          ],
+          "command": "jdtls",
+          "args": [
+            "-data",
+            "${stateDir}/jdtls-workspace"
+          ],
+          "leased": true,
+          "loadTimeoutSec": 900
+        }
+      ]
+    }
+  },
+  "leased": {
+    "java": "yes: one JVM per checkout (1 GB and more) that imports the whole Maven or Gradle build."
+  },
+  "install": {
+    "java": {
+      "macos": [
+        "brew install jdtls"
+      ],
+      "linux": [
+        "mkdir -p ~/.local/share/jdtls && curl -L https://download.eclipse.org/jdtls/milestones/<version>/<file from that folder>.tar.gz | tar -xz -C ~/.local/share/jdtls   # pick one milestone and keep it for the team",
+        "ln -s ~/.local/share/jdtls/bin/jdtls ~/.local/bin/jdtls   # the wrapper needs python3"
+      ],
+      "windows": [
+        "Download the same milestone archive, extract it, and put its bin folder (jdtls.bat) on PATH; python3 is required."
+      ]
+    }
+  },
+  "requires": [
+    "a JDK 21 or newer to run the server (the project may target an older one)",
+    "python3 for the jdtls wrapper script",
+    "Maven or Gradle wrapper files in the repository"
+  ],
+  "notes": [
+    "-data must be a directory per checkout: ${stateDir} is the checkout's own <git-dir>/lsp, so worktrees never share an Eclipse workspace.",
+    "The first start imports the build and downloads dependencies. Optional prepare: \"prepare\": {\"command\": \"./mvnw\", \"args\": [\"-q\", \"-DskipTests\", \"dependency:go-offline\"], \"label\": \"resolving Maven dependencies\"} (or \"./gradlew\" with [\"--quiet\", \"dependencies\"]).",
+    "Kotlin is not covered; add kotlin-language-server as its own entry if the repository needs it."
+  ]
+}

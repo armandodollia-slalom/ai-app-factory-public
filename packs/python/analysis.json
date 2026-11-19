@@ -1,0 +1,67 @@
+{
+  "$comment": "Static analysis for Python (docs/ai-pipeline/analysis.md). bandit (Apache-2.0): declared, with a parser tested against recorded output; not exercised end to end. It is the repository's own install (pip), not a pinned binary.",
+  "tools": {
+    "bandit": {
+      "description": "Bandit security checks on the changed Python files",
+      "licence": "Apache-2.0",
+      "when": [
+        "**/*.py"
+      ],
+      "extensions": [
+        ".py"
+      ],
+      "run": [
+        "bandit",
+        "-q",
+        "-f",
+        "json",
+        "-o",
+        "{out}",
+        "{files}"
+      ],
+      "output": "{out}",
+      "parse": "module:{packs}/python/analysis/bandit.mjs",
+      "scope": "changed-lines",
+      "baseline": "lines",
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ]
+    }
+  },
+  "stages": {
+    "pair": [
+      "bandit"
+    ],
+    "story": [
+      "bandit"
+    ],
+    "prCheck": [
+      "bandit"
+    ]
+  },
+  "suppressions": [
+    {
+      "id": "noqa",
+      "pattern": "#\\s*noqa"
+    },
+    {
+      "id": "type-ignore",
+      "pattern": "#\\s*type:\\s*ignore"
+    },
+    {
+      "id": "nosec",
+      "pattern": "#\\s*nosec"
+    }
+  ],
+  "protect": [
+    ".bandit",
+    "bandit.yaml"
+  ]
+}

@@ -1,0 +1,31 @@
+# Installs the agent CLI chosen by the PIPELINE_AGENT_CLI variable (claude, the default, copilot or codex),
+# or runs PIPELINE_AGENT_INSTALL for a custom PIPELINE_AGENT_CMD, and sets FACTORY_AGENT_READY to true when
+# a credential is available. The equivalent of the GitHub `setup-agent-cli` action. Steps that run agents
+# use `condition: eq(variables.FACTORY_AGENT_READY, 'true')`, so a missing credential skips them.
+steps:
+- bash: |
+    # An undefined variable reaches the script as the literal text "$(NAME)".
+    for v in PIPELINE_AGENT_CLI PIPELINE_AGENT_CMD PIPELINE_AGENT_INSTALL ANTHROPIC_API_KEY COPILOT_GITHUB_TOKEN CODEX_API_KEY; do case "${!v}" in '$('*) eval "$v=" ;; esac; done
+    cli="${PIPELINE_AGENT_CLI:-claude}"
+    skip() { echo "##vso[task.logissue type=warning]$1; skipping."; echo "##vso[task.setvariable variable=FACTORY_AGENT_READY]false"; exit 0; }
+    if [ -n "$PIPELINE_AGENT_CMD" ]; then
+      if [ -n "$PIPELINE_AGENT_INSTALL" ]; then bash -c "$PIPELINE_AGENT_INSTALL"; fi
+      echo "Agent: custom command"
+    else
+      case "$cli" in
+        claude) [ -n "$ANTHROPIC_API_KEY" ] || skip "PIPELINE_AGENT_CLI is claude but the ANTHROPIC_API_KEY variable is not set"; npm i -g @anthropic-ai/claude-code ;;
+        copilot) [ -n "$COPILOT_GITHUB_TOKEN" ] || skip "PIPELINE_AGENT_CLI is copilot but the COPILOT_GITHUB_TOKEN variable is not set"; npm i -g @github/copilot ;;
+        codex) [ -n "$CODEX_API_KEY" ] || skip "PIPELINE_AGENT_CLI is codex but the OPENAI_API_KEY variable is not set"; npm i -g @openai/codex ;;
+        *) echo "##vso[task.logissue type=error]Unknown PIPELINE_AGENT_CLI '$cli'. Use claude, copilot, codex or set PIPELINE_AGENT_CMD."; exit 1 ;;
+      esac
+      echo "Agent: $cli"
+    fi
+    echo "##vso[task.setvariable variable=FACTORY_AGENT_READY]true"
+  displayName: Install the agent CLI
+  env:
+    PIPELINE_AGENT_CLI: $(PIPELINE_AGENT_CLI)
+    PIPELINE_AGENT_CMD: $(PIPELINE_AGENT_CMD)
+    PIPELINE_AGENT_INSTALL: $(PIPELINE_AGENT_INSTALL)
+    ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+    COPILOT_GITHUB_TOKEN: $(COPILOT_GITHUB_TOKEN)
+    CODEX_API_KEY: $(OPENAI_API_KEY)

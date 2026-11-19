@@ -1,0 +1,91 @@
+name: AI app factory
+
+# The called feature verification check reads story issues; a called workflow cannot get more than its caller.
+permissions:
+  contents: read
+  issues: read
+
+# The factory's pull request gate, without any LLM call: the generated files are in step with the
+# engine version this repository pins, the configured models are allowed, then each stage's own gate.
+on:
+  pull_request:
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+    - uses: ./.github/actions/setup-factory
+      with:
+        token: ${{ secrets.FACTORY_TOKEN }}
+    - name: Generated files are in step (never edited by hand)
+      run: factory check
+    - name: Configured models are allowed (agent.allowedModels)
+      run: factory models check
+    - name: "Toolchain (yours: .github/actions/factory-toolchain), for a stack published from the application"
+      if: hashFiles('.factory/stack/**') != '' && hashFiles('.github/actions/factory-toolchain/action.yml') != ''
+      uses: ./.github/actions/factory-toolchain
+    - name: Test stack scenarios parse, and the stack matches the application
+      if: hashFiles('.factory/stack/**') != ''
+      run: |
+        factory teststack validate
+        if node -e "process.exit(require('./.factory/config.json').teststack?.commands?.drift ? 0 : 1)"; then factory teststack drift; fi
+
+  policy:
+    # The architecture policy's own checks, as the review stage applies them: the application's declarations
+    # (.factory/app.json policy), every project classified (by the profile or by its classification conventions),
+    # the conventions agreeing with the profile, linked-source folders profiled, the rules and validators valid.
+    # The toolchain lets the engine confirm a new project's facts with the build tool (MSBuild); without it, selfcheck
+    # says so and a new project the profile does not list goes to a person.
+    # (hashFiles is only available in step conditions, so each step checks for the policy.)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      if: hashFiles('.factory/policy/policy.yaml') != ''
+      with:
+        node-version: 20.x
+    - uses: ./.github/actions/setup-factory
+      if: hashFiles('.factory/policy/policy.yaml') != ''
+      with:
+        token: ${{ secrets.FACTORY_TOKEN }}
+    - name: "Toolchain (yours: .github/actions/factory-toolchain), so the policy can ask the build tool to confirm a new project's facts"
+      if: hashFiles('.factory/policy/policy.yaml') != '' && hashFiles('.github/actions/factory-toolchain/action.yml') != ''
+      uses: ./.github/actions/factory-toolchain
+    - name: Python for the policy engine
+      if: hashFiles('.factory/policy/policy.yaml') != ''
+      run: factory python setup
+    - name: Architecture policy selfcheck
+      if: hashFiles('.factory/policy/policy.yaml') != ''
+      run: factory arch selfcheck --policy-dir .factory/policy --workspace .
+
+  lint:
+    # The repository's linters (precheck.lint) on the lines this pull request changes.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+    - uses: ./.github/actions/setup-factory
+      with:
+        token: ${{ secrets.FACTORY_TOKEN }}
+    - name: "Toolchain (yours: .github/actions/factory-toolchain)"
+      if: hashFiles('.github/actions/factory-toolchain/action.yml') != ''
+      uses: ./.github/actions/factory-toolchain
+    - name: Lint the changed lines
+      env:
+        BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
+      run: factory lint --base "origin/$BASE_REF"
+
+  feature-verification:
+    needs: pipeline
+    uses: ./.github/workflows/factory-feature-verification-check.yml
+    secrets: inherit
+    with:
+      base-ref: origin/${{ github.base_ref || github.event.repository.default_branch }}

@@ -1,0 +1,47 @@
+# Turns recurring denials into lessons for the agents, runs the factory retro over the decision log
+# (.factory/metrics/decisions.jsonl), then opens a pull request with the changes for human review.
+# Create a pipeline from this file; run it by hand, or add a scheduled trigger (Pipelines > Edit > Triggers),
+# for example weekly on the default branch.
+trigger: none
+pr: none
+
+parameters:
+- name: calibrate
+  displayName: Re-audit recent 10/10 verdicts before computing lessons
+  type: boolean
+  default: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  FACTORY_CI: azure-pipelines
+
+jobs:
+- job: lessons
+  displayName: retro
+  timeoutInMinutes: 120
+  steps:
+  - template: templates/factory-setup.yml
+  - template: templates/factory-agent-cli.yml
+  - bash: |
+      for v in $(env | sed -n 's/^\([A-Z_][A-Z0-9_]*\)=\$(.*/\1/p'); do unset "$v"; done
+      git config user.name "$BUILD_REQUESTEDFOR"
+      git config user.email "${FACTORY_GIT_EMAIL:-factory-bot@noreply.invalid}"
+      # Scheduled and manual runs build the default branch: the base of the lessons pull request.
+      export PIPELINE_BASE_REF="origin/${BUILD_SOURCEBRANCH#refs/heads/}"
+      if [ "$CALIBRATE" = True ]; then factory retro calibrate --sample 3; fi
+      factory fv metrics
+      factory retro run
+    displayName: Calibrate, metrics, propose lessons
+    condition: and(succeeded(), eq(variables.FACTORY_AGENT_READY, 'true'))
+    env:
+      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
+      CALIBRATE: ${{ parameters.calibrate }}
+      PIPELINE_AGENT_CLI: $(PIPELINE_AGENT_CLI)
+      PIPELINE_AGENT_CMD: $(PIPELINE_AGENT_CMD)
+      PIPELINE_AGENT_API_KEY: $(PIPELINE_AGENT_API_KEY)
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+      COPILOT_GITHUB_TOKEN: $(COPILOT_GITHUB_TOKEN)
+      CODEX_API_KEY: $(OPENAI_API_KEY)
+      # factory:secrets

@@ -1,0 +1,70 @@
+# The factory's pipelines for Bitbucket Pipelines. Bitbucket reads one file, bitbucket-pipelines.yml: when the repository
+# has its own, `factory render` writes this as bitbucket-pipelines.factory.yml and `factory check` says which steps to
+# merge in. Secrets are secured repository variables (Repository settings > Pipelines > Repository variables):
+# FACTORY_TOKEN (a private factory), BITBUCKET_TOKEN (an access token with pullrequest:write, repository:write and
+# pipeline:read), the tracker's variables named in .factory/config.json, and the agent's credential. Secured variables
+# are never passed to pull requests from forks.
+# Scheduled runs (Repository settings > Pipelines > Schedules): the custom pipelines factory-tracker (hourly is the
+# shortest schedule Bitbucket offers), factory-retro (weekly) and factory-graphify-prune (weekly).
+image: node:20-bookworm
+
+definitions:
+  steps:
+    - step: &factory-gate
+        name: factory gate
+        script:
+          - bash .factory/ci/factory-ci.sh gate
+    - step: &factory-lint
+        name: factory lint
+        script:
+          - bash .factory/ci/factory-ci.sh lint
+    - step: &factory-fv
+        name: feature verification
+        script:
+          - bash .factory/ci/factory-ci.sh feature-verification
+    - step: &review-quorum
+        name: review-quorum
+        script:
+          - bash .factory/ci/factory-ci.sh review-quorum
+    # factory:demo-video
+    - step: &factory-demo-video
+        name: demo video
+        services: [docker]
+        script:
+          - export FACTORY_RUN_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME/pipelines/results/$BITBUCKET_BUILD_NUMBER"
+          - bash .factory/ci/factory-ci.sh demo-video
+
+pipelines:
+  pull-requests:
+    '**':
+      - parallel:
+          - step: *factory-gate
+          - step: *factory-lint
+          - step: *review-quorum
+          # factory:analysis-steps
+      - step: *factory-fv
+      # factory:demo-video
+      - step: *factory-demo-video
+  custom:
+    factory-pr-check:
+      - variables:
+          - name: FACTORY_PR
+      - step:
+          name: factory PR check
+          script:
+            - bash .factory/ci/factory-ci.sh pr-check
+    factory-tracker:
+      - step:
+          name: tracker sweep
+          script:
+            - bash .factory/ci/factory-ci.sh tracker
+    factory-retro:
+      - step:
+          name: retro
+          script:
+            - bash .factory/ci/factory-ci.sh retro
+    factory-graphify-prune:
+      - step:
+          name: code graph cache prune
+          script:
+            - bash .factory/ci/factory-ci.sh graphify-prune

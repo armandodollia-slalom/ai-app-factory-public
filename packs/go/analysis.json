@@ -1,0 +1,54 @@
+{
+  "$comment": "Static analysis for Go (docs/ai-pipeline/analysis.md). gosec (Apache-2.0): declared, SARIF; not exercised end to end. The repository's own install (go install), not a pinned binary.",
+  "tools": {
+    "gosec": {
+      "description": "gosec security checks",
+      "licence": "Apache-2.0",
+      "when": [
+        "**/go.mod"
+      ],
+      "run": [
+        "gosec",
+        "-quiet",
+        "-no-fail",
+        "-fmt",
+        "sarif",
+        "-out",
+        "{out}",
+        "./..."
+      ],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "changed-files",
+      "baseline": "merge-base",
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ]
+    }
+  },
+  "stages": {
+    "story": [
+      "gosec"
+    ],
+    "prCheck": [
+      "gosec"
+    ]
+  },
+  "suppressions": [
+    {
+      "id": "nolint",
+      "pattern": "//\\s*nolint"
+    },
+    {
+      "id": "nosec",
+      "pattern": "#nosec|//\\s*#?nosec"
+    }
+  ]
+}

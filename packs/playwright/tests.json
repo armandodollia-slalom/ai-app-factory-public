@@ -1,0 +1,36 @@
+{
+  "$comment": "Test runners of this pack, for `precheck.testRunners` in .factory/config.json (schema: scripts/feature-verification/lib/runners.mjs). Refer to one with \"<pack>/<name>\" or to all with \"<pack>\"; runners are tried in this order. `verified` says whether the run command was executed against a sample project when the pack was written.",
+  "runners": [
+    {
+      "name": "playwright",
+      "description": "Playwright end-to-end specs against the app stack. Titles carry the case id, so --grep selects the story.",
+      "match": [
+        "**/*.spec.ts",
+        "**/*.spec.js"
+      ],
+      "roots": [
+        "e2e"
+      ],
+      "run": [
+        "npx",
+        "playwright",
+        "test",
+        "--grep",
+        "{casePrefix}",
+        "{files}"
+      ],
+      "storyTag": {
+        "pattern": "{casePrefix}\\d+",
+        "note": "put the case id ({case}) in each test title"
+      },
+      "stack": true,
+      "evidence": true,
+      "env": {
+        "E2E_KEEP_VIDEOS": "1"
+      },
+      "lang": "ts",
+      "verified": false,
+      "verifiedNote": "The eShop pipeline ran this command with `-c playwright.teststack.config.ts`; add your own config flag with { \"use\": \"playwright/playwright\", \"run\": [...] }."
+    }
+  ]
+}

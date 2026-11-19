@@ -1,0 +1,44 @@
+{
+  "id": "python",
+  "name": "Python",
+  "extensions": [
+    ".py",
+    ".pyi"
+  ],
+  "unitFiles": [
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg"
+  ],
+  "rootFiles": [
+    "requirements.txt",
+    "Pipfile",
+    "uv.lock",
+    "poetry.lock",
+    "tox.ini"
+  ],
+  "toolPaths": [
+    "~/.local/bin"
+  ],
+  "testHints": {
+    "dir": "(^|/)tests?(/|$)",
+    "content": ""
+  },
+  "frontendHints": {
+    "content": "\\b(django|flask|jinja2|streamlit)\\b",
+    "files": [
+      "*.html",
+      "*.jinja",
+      "*.j2"
+    ]
+  },
+  "ignore": [
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".tox",
+    "dist",
+    "build"
+  ],
+  "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers)."
+}

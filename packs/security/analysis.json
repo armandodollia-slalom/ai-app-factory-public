@@ -1,0 +1,819 @@
+{
+  "$comment": "Language-neutral static analysis for every repository with an analysis section (docs/ai-pipeline/analysis.md). Every tool is a pinned release binary verified by SHA-256 (the release's own checksum file where it publishes one, else GitHub's recorded asset digest, checked against each other on 2026-11-16), runs offline, and states its licence. Verified by running on macOS arm64: betterleaks (git range, sarif, --redact: no secret in the report), osv-scanner (offline database prepare, offline scan, json), opengrep (--baseline-commit, sarif; rule validation), zizmor (--offline sarif), actionlint (json). Linux and Windows builds are pinned from the same releases and were not run here.",
+  "groups": {
+    "$comment": "The tools of each kind of check, for a commercial scanner that replaces them (analysis.commercial.replaces): the CI job of that id and these tools in the fix-loop stages.",
+    "sast": [
+      "opengrep",
+      "opengrep-interfile"
+    ],
+    "dependencies": [
+      "osv-scanner"
+    ],
+    "secrets": [
+      "betterleaks"
+    ]
+  },
+  "tools": {
+    "betterleaks": {
+      "description": "secrets in the commits of the change",
+      "licence": "MIT",
+      "install": {
+        "name": "betterleaks",
+        "version": "1.10.1",
+        "platforms": {
+          "linux-x64": {
+            "url": "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_linux_x64.tar.gz",
+            "sha256": "c174b42d7aa60caf58c0c3e555c0e4bed01fe6b0d99a412bce777b5af4ce913e",
+            "bin": "betterleaks"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_linux_arm64.tar.gz",
+            "sha256": "62a63199f9f61a6b5e5a6f58f048493db20fbc8c770014f4d903a4d97886e1bf",
+            "bin": "betterleaks"
+          },
+          "darwin-x64": {
+            "url": "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_darwin_x64.tar.gz",
+            "sha256": "1ae2e3885d161918d8ad2e911e205e73f0d9ffba52c85b38126586c52d355ef4",
+            "bin": "betterleaks"
+          },
+          "darwin-arm64": {
+            "url": "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_darwin_arm64.tar.gz",
+            "sha256": "ca91eb3b006f15478411f235b5e2712fb15cea74f6701ebadc2364efe0af1403",
+            "bin": "betterleaks"
+          },
+          "win32-x64": {
+            "url": "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_windows_x64.zip",
+            "sha256": "53d4b37635a999992fb8e1d79f8215279315cbb3b4139314289b69407e79143d",
+            "bin": "betterleaks.exe"
+          },
+          "win32-arm64": {
+            "url": "https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_windows_arm64.zip",
+            "sha256": "f93d26dfc7b939f967c74e3f908b44faec1b1cb6ffb29c75c0a1d7e713ab8f70",
+            "bin": "betterleaks.exe"
+          }
+        }
+      },
+      "run": [
+        "{bin}",
+        "git",
+        "--no-banner",
+        "--redact",
+        "--log-opts={range}",
+        "-f",
+        "sarif",
+        "-r",
+        "{out}",
+        "."
+      ],
+      "worktreeRun": ["{bin}", "dir", "--no-banner", "--redact", "-f", "sarif", "-r", "{out}", "{files}"],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "native",
+      "block": {
+        "rules": [
+          "*"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ],
+      "offline": [
+        "--redact"
+      ],
+      "forbid": [
+        "--validation"
+      ],
+      "version": {
+        "cmd": [
+          "{bin}",
+          "--version"
+        ],
+        "match": "1.10.1"
+      },
+      "protect": [
+        ".gitleaksignore",
+        ".betterleaksignore",
+        ".gitleaks.toml",
+        ".betterleaks.toml"
+      ]
+    },
+    "osv-scanner": {
+      "description": "known vulnerabilities in dependency lockfiles and manifests, from a local copy of the OSV database",
+      "licence": "Apache-2.0",
+      "install": {
+        "name": "osv-scanner",
+        "version": "2.7.1",
+        "platforms": {
+          "linux-x64": {
+            "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64",
+            "sha256": "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8",
+            "bin": "osv-scanner"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_arm64",
+            "sha256": "983d22fbad9724514e3fcc6acc83b5fa64c5ffa6b0d9f510028f22c1b223ff81",
+            "bin": "osv-scanner"
+          },
+          "darwin-x64": {
+            "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_darwin_amd64",
+            "sha256": "b8420d5485ba792626315f1bf9a5a2046e971d38eea75bf9090c38852dbc3b1b",
+            "bin": "osv-scanner"
+          },
+          "darwin-arm64": {
+            "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_darwin_arm64",
+            "sha256": "b22c02877a811c8f78956e8643efa554932b7378f590d13f8e97d4e9448a29f3",
+            "bin": "osv-scanner"
+          },
+          "win32-x64": {
+            "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_windows_amd64.exe",
+            "sha256": "7121dcf420aefbbf89a7f0050c4d3094e079ff93afd334dfc96f16b02ec85800",
+            "bin": "osv-scanner.exe"
+          },
+          "win32-arm64": {
+            "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_windows_arm64.exe",
+            "sha256": "5f3998b55c9268f8468502bbcb60645038fd5b145ee5e685e6ae2a32e923afc7",
+            "bin": "osv-scanner.exe"
+          }
+        }
+      },
+      "env": {
+        "OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY": "{cache}/db"
+      },
+      "prepare": [
+        "{bin}",
+        "scan",
+        "source",
+        "--offline-vulnerabilities",
+        "--download-offline-databases",
+        "--data-source",
+        "native",
+        "--allow-no-lockfiles",
+        "--format",
+        "json",
+        "--output-file",
+        "{cache}/prepare.json",
+        "-r",
+        "{root}"
+      ],
+      "run": [
+        "{bin}",
+        "scan",
+        "source",
+        "--offline",
+        "--data-source",
+        "native",
+        "--allow-no-lockfiles",
+        "--format",
+        "json",
+        "--output-file",
+        "{out}",
+        "-r",
+        "."
+      ],
+      "output": "{out}",
+      "parse": "osv-json",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "onChange": [
+        "**/package-lock.json",
+        "**/npm-shrinkwrap.json",
+        "**/yarn.lock",
+        "**/pnpm-lock.yaml",
+        "**/packages.lock.json",
+        "**/*.csproj",
+        "**/Directory.Packages.props",
+        "**/requirements*.txt",
+        "**/poetry.lock",
+        "**/Pipfile.lock",
+        "**/uv.lock",
+        "**/go.mod",
+        "**/go.sum",
+        "**/Cargo.lock",
+        "**/pom.xml",
+        "**/gradle.lockfile",
+        "**/composer.lock",
+        "**/Gemfile.lock",
+        "**/pubspec.lock",
+        "**/mix.lock"
+      ],
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ],
+      "offline": [
+        "--offline",
+        "--data-source native"
+      ],
+      "errorPattern": "could not load db|unable to fetch OSV database",
+      "freshness": {
+        "maxAgeDays": 7,
+        "what": "offline vulnerability database"
+      },
+      "version": {
+        "cmd": [
+          "{bin}",
+          "--version"
+        ],
+        "match": "2.7.1"
+      },
+      "data": [
+        {
+          "id": "osv-language-ecosystems",
+          "licence": "CC-BY-4.0",
+          "note": "Advisories for language package ecosystems (GitHub Advisory Database, PyPA, Go, RustSec, ...): CC-BY-4.0 or more permissive. Only the ecosystems the repository's lockfiles use are downloaded."
+        },
+        {
+          "id": "osv-os-distributions",
+          "paths": [
+            "Debian",
+            "Ubuntu",
+            "Alpine",
+            "Red Hat",
+            "SUSE",
+            "openSUSE",
+            "Rocky Linux",
+            "AlmaLinux",
+            "GIT"
+          ],
+          "licence": "unstated or share-alike (per distribution); NVD-converted",
+          "licenceReview": "pending",
+          "note": "Enabled by the owner's decision while a lawyer reviews the data licences; fetched only when the repository's ecosystems need them."
+        },
+        {
+          "id": "osv-wolfi-chainguard",
+          "paths": [
+            "Wolfi",
+            "Chainguard"
+          ],
+          "licence": "CC-BY-NC-ND-4.0",
+          "excluded": true,
+          "note": "Never fetched or kept: an explicit non-commercial term. Removed after every database download."
+        }
+      ]
+    },
+    "opengrep": {
+      "description": "security patterns (SAST) in the code the change introduces",
+      "licence": "LGPL-2.1-only",
+      "install": {
+        "name": "opengrep",
+        "version": "2.0.0",
+        "platforms": {
+          "linux-x64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_x86",
+            "sha256": "37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0",
+            "bin": "opengrep"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_aarch64",
+            "sha256": "6257b65423a744b704af2ff9beeb8f222c2f6925236af386b56b031d4c06d6d8",
+            "bin": "opengrep"
+          },
+          "darwin-x64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_osx_x86",
+            "sha256": "51d2f918d7aad0afc1426bb4fbf56e32fc70c3ffd5ddb78e32e7d61e51c029a2",
+            "bin": "opengrep"
+          },
+          "darwin-arm64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_osx_arm64",
+            "sha256": "b51b3d83f165a2e0934497b8f1b08abb1c3041ef20ef911c97e04cb39af1ad55",
+            "bin": "opengrep"
+          },
+          "win32-x64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_windows_x86.zip",
+            "sha256": "899a17e2b15863367cfd15032c93cdf482fd4e7ec8719c69de46f4f38b227864",
+            "bin": "opengrep.exe"
+          }
+        }
+      },
+      "run": [
+        "{bin}",
+        "scan",
+        "--quiet",
+        "{rules}",
+        "--baseline-commit",
+        "{mergeBase}",
+        "--sarif-output={out}",
+        "."
+      ],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "native",
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ],
+      "needsRules": true,
+      "rules": [
+        {
+          "id": "gitlab-sast-rules",
+          "repo": "https://gitlab.com/gitlab-org/security-products/sast-rules.git",
+          "commit": "83144bd2ec7d3200cda96347fa923f81c8ad8413",
+          "include": [
+            "java",
+            "scala",
+            "python",
+            "csharp",
+            "javascript"
+          ],
+          "requireHeader": "License: MIT (c) GitLab Inc.",
+          "licence": "MIT",
+          "note": "Only files carrying the MIT header are loaded. rules/lgpl-cc (Commons Clause) and rules/gitlab (GitLab EE licence) are never included."
+        },
+        {
+          "id": "gitlab-sast-rules-go-c",
+          "repo": "https://gitlab.com/gitlab-org/security-products/sast-rules.git",
+          "commit": "83144bd2ec7d3200cda96347fa923f81c8ad8413",
+          "include": [
+            "go",
+            "c"
+          ],
+          "licence": "MIT",
+          "licenceReview": "pending",
+          "note": "Enabled by the owner's decision while a lawyer reviews provenance: these files carry no MIT header, and the repository LICENSE says third-party components keep their original licence."
+        },
+        {
+          "id": "factory",
+          "builtin": "opengrep",
+          "include": [
+            "typescript",
+            "csharp"
+          ],
+          "licence": "MIT",
+          "note": "The factory's own rules (packs/security/rules/opengrep)."
+        }
+      ],
+      "validateRule": [
+        "{bin}",
+        "scan",
+        "--config",
+        "{rule}",
+        "{empty}"
+      ],
+      "version": {
+        "cmd": [
+          "{bin}",
+          "--version"
+        ],
+        "match": "2.0.0"
+      },
+      "timeoutSec": 900
+    },
+    "opengrep-interfile": {
+      "description": "the same rules with cross-file taint analysis (slow: CI and evidence only)",
+      "licence": "LGPL-2.1-only",
+      "install": {
+        "name": "opengrep",
+        "version": "2.0.0",
+        "platforms": {
+          "linux-x64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_x86",
+            "sha256": "37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0",
+            "bin": "opengrep"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_aarch64",
+            "sha256": "6257b65423a744b704af2ff9beeb8f222c2f6925236af386b56b031d4c06d6d8",
+            "bin": "opengrep"
+          },
+          "darwin-x64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_osx_x86",
+            "sha256": "51d2f918d7aad0afc1426bb4fbf56e32fc70c3ffd5ddb78e32e7d61e51c029a2",
+            "bin": "opengrep"
+          },
+          "darwin-arm64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_osx_arm64",
+            "sha256": "b51b3d83f165a2e0934497b8f1b08abb1c3041ef20ef911c97e04cb39af1ad55",
+            "bin": "opengrep"
+          },
+          "win32-x64": {
+            "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_windows_x86.zip",
+            "sha256": "899a17e2b15863367cfd15032c93cdf482fd4e7ec8719c69de46f4f38b227864",
+            "bin": "opengrep.exe"
+          }
+        }
+      },
+      "run": [
+        "{bin}",
+        "scan",
+        "--quiet",
+        "--enable-interfile",
+        "{rules}",
+        "--baseline-commit",
+        "{mergeBase}",
+        "--sarif-output={out}",
+        "."
+      ],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "native",
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ],
+      "needsRules": true,
+      "rules": [
+        {
+          "id": "gitlab-sast-rules",
+          "repo": "https://gitlab.com/gitlab-org/security-products/sast-rules.git",
+          "commit": "83144bd2ec7d3200cda96347fa923f81c8ad8413",
+          "include": [
+            "java",
+            "scala",
+            "python",
+            "csharp",
+            "javascript"
+          ],
+          "requireHeader": "License: MIT (c) GitLab Inc.",
+          "licence": "MIT",
+          "note": "Only files carrying the MIT header are loaded. rules/lgpl-cc (Commons Clause) and rules/gitlab (GitLab EE licence) are never included."
+        },
+        {
+          "id": "gitlab-sast-rules-go-c",
+          "repo": "https://gitlab.com/gitlab-org/security-products/sast-rules.git",
+          "commit": "83144bd2ec7d3200cda96347fa923f81c8ad8413",
+          "include": [
+            "go",
+            "c"
+          ],
+          "licence": "MIT",
+          "licenceReview": "pending",
+          "note": "Enabled by the owner's decision while a lawyer reviews provenance: these files carry no MIT header, and the repository LICENSE says third-party components keep their original licence."
+        },
+        {
+          "id": "factory",
+          "builtin": "opengrep",
+          "include": [
+            "typescript",
+            "csharp"
+          ],
+          "licence": "MIT",
+          "note": "The factory's own rules (packs/security/rules/opengrep)."
+        }
+      ],
+      "validateRule": [
+        "{bin}",
+        "scan",
+        "--config",
+        "{rule}",
+        "{empty}"
+      ],
+      "timeoutSec": 1800
+    },
+    "zizmor": {
+      "description": "security problems in GitHub Actions workflows",
+      "licence": "MIT",
+      "install": {
+        "name": "zizmor",
+        "version": "1.32.0",
+        "platforms": {
+          "linux-x64": {
+            "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-unknown-linux-gnu.tar.gz",
+            "sha256": "bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b",
+            "bin": "zizmor"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-aarch64-unknown-linux-gnu.tar.gz",
+            "sha256": "cb152b207f815116d7fa1c1ee4614f61578803351395052908095e79adfd9fd0",
+            "bin": "zizmor"
+          },
+          "darwin-x64": {
+            "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-apple-darwin.tar.gz",
+            "sha256": "6983143c719ada6845a69cc4dd2bacc215f971662fecd8bbd2678388e5ce5969",
+            "bin": "zizmor"
+          },
+          "darwin-arm64": {
+            "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-aarch64-apple-darwin.tar.gz",
+            "sha256": "6efed18c4539a663fd3c851a2be9533fd8456c4e646d9416206da059154a0d3c",
+            "bin": "zizmor"
+          },
+          "win32-x64": {
+            "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-pc-windows-msvc.zip",
+            "sha256": "d284a16e09d9df4ce2c000357e7b59bd531be093bea5718a1ce225b449b59d49",
+            "bin": "zizmor.exe"
+          }
+        }
+      },
+      "run": [
+        "{bin}",
+        "--offline",
+        "--format",
+        "sarif",
+        "."
+      ],
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "when": [
+        ".github/workflows/*.yml",
+        ".github/workflows/*.yaml"
+      ],
+      "onChange": [
+        ".github/workflows/*.yml",
+        ".github/workflows/*.yaml"
+      ],
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "offline": [
+        "--offline"
+      ],
+      "version": {
+        "cmd": [
+          "{bin}",
+          "--version"
+        ],
+        "match": "1.32.0"
+      },
+      "$comment": "zizmor exits 0 with findings in SARIF mode: the report is read, not the exit code. Its release publishes no checksum file: the SHA-256 is GitHub's recorded asset digest."
+    },
+    "actionlint": {
+      "description": "GitHub Actions workflow errors",
+      "licence": "MIT",
+      "install": {
+        "name": "actionlint",
+        "version": "1.7.12",
+        "platforms": {
+          "linux-x64": {
+            "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+            "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+            "bin": "actionlint"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz",
+            "sha256": "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6",
+            "bin": "actionlint"
+          },
+          "darwin-x64": {
+            "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_amd64.tar.gz",
+            "sha256": "5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644",
+            "bin": "actionlint"
+          },
+          "darwin-arm64": {
+            "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz",
+            "sha256": "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f",
+            "bin": "actionlint"
+          },
+          "win32-x64": {
+            "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip",
+            "sha256": "6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9",
+            "bin": "actionlint.exe"
+          },
+          "win32-arm64": {
+            "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_arm64.zip",
+            "sha256": "cadcf7ea4efe3a68728893813643cebe1185e5b1d4be5b96245f65c9a4d5ea41",
+            "bin": "actionlint.exe"
+          }
+        }
+      },
+      "run": [
+        "{bin}",
+        "-no-color",
+        "-shellcheck=",
+        "-pyflakes=",
+        "-format",
+        "{{json .}}"
+      ],
+      "parse": "actionlint-json",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "when": [
+        ".github/workflows/*.yml",
+        ".github/workflows/*.yaml"
+      ],
+      "onChange": [
+        ".github/workflows/*.yml",
+        ".github/workflows/*.yaml"
+      ],
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "correctness",
+      "okExit": [
+        0,
+        1
+      ],
+      "version": {
+        "cmd": [
+          "{bin}",
+          "-version"
+        ],
+        "match": "1.7.12"
+      }
+    },
+    "jscpd": {
+      "enabled": false,
+      "description": "duplicated code (evidence for the rewrite lens; keep its semantic mode off: it downloads a large model)",
+      "licence": "MIT",
+      "run": [
+        "npx",
+        "--no-install",
+        "jscpd",
+        "--silent",
+        "--reporters",
+        "sarif",
+        "--output",
+        "{out}",
+        "{files}"
+      ],
+      "output": "{out}/jscpd-sarif.json",
+      "parse": "sarif",
+      "scope": "changed-files",
+      "baseline": "merge-base",
+      "lens": "rewrite"
+    },
+    "lizard": {
+      "enabled": false,
+      "description": "complexity warnings (evidence for the rewrite lens)",
+      "licence": "MIT",
+      "run": [
+        "lizard",
+        "-w",
+        "{files}"
+      ],
+      "parse": "gcc",
+      "scope": "changed-lines",
+      "baseline": "lines",
+      "lens": "rewrite",
+      "okExit": [
+        0,
+        1
+      ]
+    },
+    "psalm-taint": {
+      "enabled": false,
+      "description": "PHP taint analysis (declared, not exercised end to end)",
+      "licence": "MIT",
+      "when": [
+        "composer.json"
+      ],
+      "run": [
+        "vendor/bin/psalm",
+        "--taint-analysis",
+        "--no-progress",
+        "--report={out}"
+      ],
+      "output": "{out}.sarif",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "lens": "security",
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "okExit": [
+        0,
+        1,
+        2
+      ]
+    },
+    "trivy-config": {
+      "enabled": false,
+      "description": "IaC and container configuration (optional; pin by digest yourself: Trivy's releases were compromised in March 2026, and its database and telemetry call out)",
+      "licence": "Apache-2.0",
+      "run": [
+        "trivy",
+        "config",
+        "--format",
+        "sarif",
+        "--output",
+        "{out}",
+        "."
+      ],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "lens": "security"
+    }
+  },
+  "optionalRules": {
+    "$comment": "Rule sources a repository may add to analysis.tools.opengrep.rules (each off by default).",
+    "opengrep": [
+      {
+        "id": "gitlab-sast-rules-lgpl",
+        "enabled": false,
+        "repo": "https://gitlab.com/gitlab-org/security-products/sast-rules.git",
+        "commit": "83144bd2ec7d3200cda96347fa923f81c8ad8413",
+        "include": [
+          "rules/lgpl"
+        ],
+        "licence": "LGPL-3.0-only",
+        "note": "Optional, off: LGPL-3.0 rule content needs an acceptLicence entry."
+      },
+      {
+        "id": "0xdea-c",
+        "enabled": false,
+        "repo": "https://github.com/0xdea/semgrep-rules.git",
+        "commit": "<pin a commit>",
+        "exclude": [
+          "rules/raptor-bad-words.yaml"
+        ],
+        "licence": "MIT",
+        "note": "Optional C/C++ rules (MIT), without raptor-bad-words. Pin a commit to enable."
+      }
+    ]
+  },
+  "stages": {
+    "pair": [
+      "betterleaks",
+      "opengrep",
+      "osv-scanner",
+      "zizmor",
+      "actionlint"
+    ],
+    "story": [
+      "betterleaks",
+      "opengrep",
+      "osv-scanner",
+      "zizmor",
+      "actionlint"
+    ],
+    "prCheck": [
+      "betterleaks",
+      "opengrep",
+      "osv-scanner",
+      "zizmor",
+      "actionlint"
+    ],
+    "featureVerification": [
+      "betterleaks",
+      "opengrep"
+    ]
+  },
+  "suppressions": [
+    {
+      "id": "secret-allow",
+      "pattern": "betterleaks:allow|gitleaks:allow"
+    },
+    {
+      "id": "nosemgrep",
+      "pattern": "nosemgrep|nosem\\b|noopengrep"
+    }
+  ],
+  "ci": [
+    {
+      "id": "secrets",
+      "name": "Secret scan",
+      "tools": [
+        "betterleaks"
+      ],
+      "required": true
+    },
+    {
+      "id": "dependencies",
+      "name": "Dependency audit",
+      "tools": [
+        "osv-scanner"
+      ],
+      "required": true
+    },
+    {
+      "id": "sast",
+      "name": "Security patterns (SAST)",
+      "tools": [
+        "opengrep-interfile"
+      ],
+      "required": true,
+      "timeoutMin": 45
+    },
+    {
+      "id": "workflows",
+      "name": "Workflow lint",
+      "tools": [
+        "zizmor",
+        "actionlint"
+      ],
+      "required": true
+    }
+  ]
+}

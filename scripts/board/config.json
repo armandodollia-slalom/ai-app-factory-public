@@ -1,0 +1,49 @@
+{
+  "agent": {
+    "models": {
+      "escalationQuestions": "sonnet"
+    }
+  },
+  "board": {
+    "owner": null,
+    "ownerType": "user",
+    "repo": null,
+    "projectNumber": null,
+    "projectTitle": null,
+    "statusField": "Status",
+    "fields": {
+      "impact": "Impact",
+      "complexity": "Complexity",
+      "fixRisk": "Fix risk",
+      "severity": "Severity",
+      "confidence": "Confidence",
+      "reopens": "Human reopens"
+    },
+    "columns": {
+      "backlog": "Backlog",
+      "ready": "Ready",
+      "inProgress": "In Progress",
+      "testing": "Testing",
+      "review": "Pending Review",
+      "failed": "Failed",
+      "done": "Done"
+    },
+    "storyLabel": "story",
+    "blockedLabel": "needs-human",
+    "resolvedLabel": "escalation-resolved",
+    "questions": {
+      "maxQuestions": 3,
+      "timeoutSec": 300,
+      "logTailChars": 4000
+    },
+    "epicLabel": "epic",
+    "spikeLabel": "spike",
+    "evidence": {
+      "playwright": null,
+      "timeoutSec": 1800,
+      "maxExchanges": 60,
+      "maxBodyChars": 1500,
+      "maxCommentChars": 60000
+    }
+  }
+}

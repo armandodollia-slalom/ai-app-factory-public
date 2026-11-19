@@ -1,0 +1,114 @@
+{
+  "plansDir": ".factory/plans",
+  "scenariosDir": ".factory/stack/scenarios",
+  "agent": {
+    "models": {
+      "plan": null,
+      "automation": "sonnet",
+      "verifier": null,
+      "audit": null
+    }
+  },
+  "loops": {
+    "requiredScore": 9,
+    "consecutivePasses": 1,
+    "planMaxRounds": 5,
+    "automationMaxRounds": 5
+  },
+  "timeoutsSec": {
+    "plan": 1800,
+    "automation": 3600,
+    "verifier": 900,
+    "lessons": 1200,
+    "tests": 1800
+  },
+  "lessons": {
+    "storyThreshold": 3,
+    "maxRules": 15,
+    "retireAfterStories": 10,
+    "revertMinRounds": 6,
+    "intervalDays": 7,
+    "examplesPerCategory": 5,
+    "retro": {
+      "enabled": true,
+      "windowDays": 7,
+      "allowedPaths": [
+        ".factory/agents/",
+        ".factory/policy/"
+      ]
+    }
+  },
+  "testRoots": [],
+  "testExtensions": [],
+  "evidence": {
+    "manifest": "artifacts/e2e-videos/manifest.json"
+  },
+  "precheck": {
+    "runTests": true,
+    "fix": {
+      ".md": [
+        "node_modules/.bin/markdownlint",
+        "--fix",
+        "{files}"
+      ]
+    },
+    "lint": {
+      ".md": [
+        "node_modules/.bin/markdownlint",
+        "{files}"
+      ]
+    },
+    "scenarioFile": "scenario.yaml",
+    "validateScenario": null,
+    "testRunners": null,
+    "automationNotes": [],
+    "lintExclude": [
+      "**/node_modules/**",
+      "**/bin/**",
+      "**/obj/**",
+      "**/dist/**",
+      "**/wwwroot/lib/**",
+      "**/*.min.js",
+      "**/*.min.css",
+      "**/*.bundle.js",
+      ".factory/bin/**",
+      "**/graphify-out/**"
+    ]
+  },
+  "categories": {
+    "plan": [
+      "ac-not-covered",
+      "missing-sad-path",
+      "untestable-expectation",
+      "invented-requirement",
+      "vague-steps",
+      "duplicate-case",
+      "stale-vs-story",
+      "other"
+    ],
+    "automation": [
+      "case-not-covered",
+      "tests-different-path",
+      "wrong-assertion",
+      "missing-assertion",
+      "missing-setup",
+      "over-mocked",
+      "flaky-wait",
+      "wrong-layer",
+      "visual-mismatch",
+      "other"
+    ],
+    "sadPathSubtypes": [
+      "validation",
+      "auth",
+      "ownership",
+      "not-found",
+      "boundary",
+      "concurrency",
+      "conflict",
+      "dependency-failure"
+    ]
+  },
+  "useSlots": true,
+  "slotWaitSec": 21600
+}

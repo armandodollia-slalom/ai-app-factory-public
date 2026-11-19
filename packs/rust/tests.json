@@ -1,0 +1,46 @@
+{
+  "$comment": "Test runners of this pack, for `precheck.testRunners` in .factory/config.json (schema: scripts/feature-verification/lib/runners.mjs). Refer to one with \"<pack>/<name>\" or to all with \"<pack>\"; runners are tried in this order. `verified` says whether the run command was executed against a sample project when the pack was written.",
+  "runners": [
+    {
+      "name": "cargo-test",
+      "description": "cargo test, one run per crate (nearest Cargo.toml). Test names cannot hold a dash, so the story is selected by a name prefix.",
+      "match": [
+        ".rs"
+      ],
+      "discover": {
+        "marker": [
+          "Cargo.toml"
+        ]
+      },
+      "build": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "{unit}/Cargo.toml",
+        "--no-run",
+        "--quiet"
+      ],
+      "run": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "{unit}/Cargo.toml",
+        "{caseIdent}"
+      ],
+      "storyTag": {
+        "pattern": "fn\\s+{caseIdent}\\d+",
+        "template": "a test function named `{caseIdent}NN_<what_it_checks>`",
+        "caseTemplate": "a `// {case}` comment on the line above the function"
+      },
+      "lang": "rust",
+      "verified": true,
+      "verifiedNote": "Executed with cargo (stable) on a sample workspace crate: build (--no-run) and run passed; the filter ran tc_shop_1_01 and filtered out tc_shop_12_01.",
+      "runAll": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "{unit}/Cargo.toml"
+      ]
+    }
+  ]
+}

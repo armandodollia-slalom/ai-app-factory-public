@@ -1,0 +1,44 @@
+{
+  "$comment": "Default commands of this pack, used by the config generator to draft .factory/config.json. Keys map to: prepare -> implement.prepareCmd; checks -> implement.checks; unitTests -> implement.unitTests.cmd ({project} is a service's `unitTests` path); lint / format -> precheck.lint / precheck.fix by file extension ({files}); toolPaths -> project.toolPaths. {root} placeholders are for the generator to fill (a solution, a workspace manifest).",
+  "prepare": "dotnet tool restore && dotnet restore {solution} -v q",
+  "checks": [
+    {
+      "name": "build",
+      "cmd": "dotnet build {solution} -nologo -v q -clp:ErrorsOnly"
+    }
+  ],
+  "unitTests": "dotnet test --project {project}",
+  "lint": {
+    ".cs": [
+      "dotnet",
+      "format",
+      "{solution}",
+      "--verify-no-changes",
+      "--include",
+      "{files}"
+    ]
+  },
+  "format": {
+    ".cs": [
+      "dotnet",
+      "format",
+      "{solution}",
+      "--include",
+      "{files}"
+    ]
+  },
+  "toolPaths": [
+    "~/.dotnet",
+    "~/.dotnet/tools"
+  ],
+  "placeholders": {
+    "solution": {
+      "description": "the solution or solution filter to build (*.sln, *.slnx, *.slnf). The generator picks the one the CI workflows build, else the only one at the repository root; with several and no hint it leaves {solution} for the onboarding to fill.",
+      "candidates": [
+        "*.sln",
+        "*.slnx",
+        "*.slnf"
+      ]
+    }
+  }
+}

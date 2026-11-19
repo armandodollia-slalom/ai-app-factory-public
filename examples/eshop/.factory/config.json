@@ -1,0 +1,1104 @@
+{
+  "$comment": "eShop (.NET 10, Aspire, Blazor) as a worked example of .factory/config.json: the settings the factory was first built with. Engine defaults are in the factory under scripts/*/config.json.",
+  "project": {
+    "name": "eshop",
+    "languages": [
+      "dotnet",
+      "typescript"
+    ],
+    "toolPaths": [
+      "~/.dotnet",
+      "~/.dotnet/tools",
+      "~/.aspire/bin"
+    ],
+    "services": [
+      {
+        "name": "Catalog.API",
+        "paths": [
+          "src/Catalog.API/**"
+        ],
+        "kind": "backend",
+        "unitTests": "tests/Application.UnitTests"
+      },
+      {
+        "name": "Basket.API",
+        "paths": [
+          "src/Basket.API/**"
+        ],
+        "kind": "backend",
+        "unitTests": "tests/Basket.UnitTests"
+      },
+      {
+        "name": "Ordering.API",
+        "paths": [
+          "src/Ordering.API/**",
+          "src/Ordering.Domain/**",
+          "src/Ordering.Infrastructure/**"
+        ],
+        "kind": "backend",
+        "unitTests": "tests/Ordering.UnitTests"
+      },
+      {
+        "name": "Identity.API",
+        "paths": [
+          "src/Identity.API/**"
+        ],
+        "kind": "backend",
+        "unitTests": "tests/Application.UnitTests"
+      },
+      {
+        "name": "Webhooks.API",
+        "paths": [
+          "src/Webhooks.API/**"
+        ],
+        "kind": "backend",
+        "unitTests": "tests/Application.UnitTests"
+      },
+      {
+        "name": "Promotions.API",
+        "paths": [
+          "src/Promotions.API/**"
+        ],
+        "kind": "backend"
+      },
+      {
+        "name": "WebApp",
+        "paths": [
+          "src/WebApp/**",
+          "src/WebAppComponents/**"
+        ],
+        "kind": "frontend"
+      },
+      {
+        "name": "WebhookClient",
+        "paths": [
+          "src/WebhookClient/**"
+        ],
+        "kind": "frontend",
+        "unitTests": "tests/Application.UnitTests"
+      },
+      {
+        "name": "OrderProcessor",
+        "paths": [
+          "src/OrderProcessor/**"
+        ],
+        "kind": "worker",
+        "unitTests": "tests/Application.UnitTests"
+      },
+      {
+        "name": "PaymentProcessor",
+        "paths": [
+          "src/PaymentProcessor/**"
+        ],
+        "kind": "worker",
+        "unitTests": "tests/Application.UnitTests"
+      },
+      {
+        "name": "ClientApp",
+        "paths": [
+          "src/ClientApp/**"
+        ],
+        "kind": "frontend",
+        "unitTests": "tests/ClientApp.UnitTests"
+      },
+      {
+        "name": "HybridApp",
+        "paths": [
+          "src/HybridApp/**"
+        ],
+        "kind": "frontend"
+      },
+      {
+        "name": "EventBus",
+        "paths": [
+          "src/EventBus/**",
+          "src/EventBusRabbitMQ/**",
+          "src/IntegrationEventLogEF/**"
+        ],
+        "kind": "library"
+      },
+      {
+        "name": "ServiceDefaults",
+        "paths": [
+          "src/eShop.ServiceDefaults/**",
+          "src/Shared/**"
+        ],
+        "kind": "library"
+      },
+      {
+        "name": "AppHost",
+        "paths": [
+          "src/eShop.AppHost/**"
+        ],
+        "kind": "library",
+        "unitTests": "tests/eShop.AppHost.UnitTests"
+      }
+    ],
+    "frontendPaths": [
+      "src/**/*.razor",
+      "src/**/*.cshtml",
+      "src/**/*.css",
+      "src/**/*.scss",
+      "src/**/*.less",
+      "src/**/*.js",
+      "src/**/*.ts",
+      "src/**/*.html",
+      "src/**/Views/**",
+      "src/**/Pages/**",
+      "src/**/wwwroot/**"
+    ]
+  },
+  "tickets": {
+    "repo": "armandodollia-slalom/AI-Immersion-eShop",
+    "spikeEpic": {
+      "key": "epic-targeted-advertising",
+      "title": "Targeted Advertising"
+    }
+  },
+  "implExclude": [
+    "tests",
+    "e2e",
+    ".factory",
+    "graphify-out"
+  ],
+  "implement": {
+    "prepareCmd": "export PATH=$HOME/.dotnet:$PATH && dotnet restore eShop.Web.slnf -v q",
+    "checks": [
+      {
+        "name": "build",
+        "cmd": "export PATH=$HOME/.dotnet:$PATH && dotnet build eShop.Web.slnf -nologo -v q -clp:ErrorsOnly"
+      },
+      {
+        "name": "generated test stack up to date (CI drift check; only when the AppHost or deploy/teststack changed)",
+        "cmd": "git diff --quiet origin/main -- src/eShop.AppHost deploy/teststack || (export PATH=$HOME/.dotnet:$PATH && testing/teststack publish --check)"
+      }
+    ],
+    "unitTests": {
+      "cmd": "export PATH=$HOME/.dotnet:$PATH && dotnet test --project {project}"
+    },
+    "uiStory": {
+      "titleTags": [
+        "FE"
+      ],
+      "components": [
+        "WebApp",
+        "WebAppComponents",
+        "Blazor"
+      ],
+      "filePatterns": [
+        ".razor"
+      ]
+    },
+    "pathHints": {
+      "roots": [
+        "src",
+        "tests",
+        "testing",
+        "deploy",
+        "scripts",
+        "docs"
+      ],
+      "extensions": [
+        "props",
+        "targets",
+        "json",
+        "sln",
+        "slnx",
+        "slnf"
+      ]
+    },
+    "requeue": {
+      "envKeys": [
+        "DOTNET_ROOT"
+      ]
+    },
+    "ui": {
+      "teststackCmd": [
+        "testing/teststack"
+      ]
+    },
+    "lsp": {},
+    "reviewGate": {
+      "systems": [
+        {
+          "name": "Catalog.API",
+          "paths": [
+            "src/Catalog.API/**"
+          ]
+        },
+        {
+          "name": "Basket.API",
+          "paths": [
+            "src/Basket.API/**"
+          ]
+        },
+        {
+          "name": "Ordering.API",
+          "paths": [
+            "src/Ordering.API/**",
+            "src/Ordering.Domain/**",
+            "src/Ordering.Infrastructure/**"
+          ]
+        },
+        {
+          "name": "Identity.API",
+          "paths": [
+            "src/Identity.API/**"
+          ]
+        },
+        {
+          "name": "Webhooks.API",
+          "paths": [
+            "src/Webhooks.API/**"
+          ]
+        },
+        {
+          "name": "Promotions.API",
+          "paths": [
+            "src/Promotions.API/**"
+          ]
+        },
+        {
+          "name": "WebApp",
+          "paths": [
+            "src/WebApp/**",
+            "src/WebAppComponents/**"
+          ]
+        },
+        {
+          "name": "WebhookClient",
+          "paths": [
+            "src/WebhookClient/**"
+          ]
+        },
+        {
+          "name": "OrderProcessor",
+          "paths": [
+            "src/OrderProcessor/**"
+          ]
+        },
+        {
+          "name": "PaymentProcessor",
+          "paths": [
+            "src/PaymentProcessor/**"
+          ]
+        },
+        {
+          "name": "Mobile clients",
+          "paths": [
+            "src/ClientApp/**",
+            "src/HybridApp/**"
+          ]
+        },
+        {
+          "name": "Integration events",
+          "paths": [
+            "src/**/IntegrationEvents/Events/**"
+          ],
+          "shared": true,
+          "contract": true
+        },
+        {
+          "name": "EventBus",
+          "paths": [
+            "src/EventBus/**",
+            "src/EventBusRabbitMQ/**",
+            "src/IntegrationEventLogEF/**"
+          ],
+          "shared": true
+        },
+        {
+          "name": "ServiceDefaults",
+          "paths": [
+            "src/eShop.ServiceDefaults/**",
+            "src/Shared/**"
+          ],
+          "shared": true
+        },
+        {
+          "name": "AppHost",
+          "paths": [
+            "src/eShop.AppHost/**"
+          ],
+          "shared": true
+        },
+        {
+          "name": "Build",
+          "paths": [
+            "Directory.Build.props",
+            "Directory.Build.targets",
+            "Directory.Packages.props",
+            "global.json",
+            "nuget.config"
+          ],
+          "shared": true
+        }
+      ],
+      "ignore": [
+        "tests/**",
+        "e2e/**",
+        "testing/**",
+        "docs/**",
+        ".factory/metrics/**",
+        ".factory/lessons/**",
+        "graphify-out/**",
+        "**/*.md"
+      ],
+      "floor": {
+        "paths": [
+          "src/Identity.API/**",
+          "src/PaymentProcessor/**",
+          "**/Migrations/**",
+          ".github/workflows/**",
+          ".github/CODEOWNERS",
+          ".factory/config.json"
+        ]
+      }
+    }
+  },
+  "testRoots": [
+    "e2e",
+    "tests",
+    ".factory/stack/scenarios"
+  ],
+  "testExtensions": [
+    ".ts",
+    ".cs"
+  ],
+  "precheck": {
+    "fix": {
+      ".md": [
+        "node_modules/.bin/markdownlint",
+        "--fix",
+        "{files}"
+      ],
+      ".ts": [
+        "node_modules/.bin/eslint",
+        "--fix",
+        "--no-warn-ignored",
+        "{files}"
+      ],
+      ".cs": [
+        "dotnet",
+        "format",
+        "eShop.Web.slnf",
+        "--include",
+        "{files}"
+      ]
+    },
+    "lint": {
+      ".md": [
+        "node_modules/.bin/markdownlint",
+        "{files}"
+      ],
+      ".ts": [
+        "node_modules/.bin/eslint",
+        "--no-warn-ignored",
+        "{files}"
+      ],
+      ".cs": [
+        "dotnet",
+        "format",
+        "eShop.Web.slnf",
+        "--verify-no-changes",
+        "--include",
+        "{files}"
+      ]
+    },
+    "scenarioFile": "scenario.yaml",
+    "validateScenario": [
+      "testing/teststack",
+      "validate",
+      "{scenario}"
+    ],
+    "testRunners": [
+      {
+        "use": "playwright/playwright",
+        "match": [
+          ".ts"
+        ],
+        "run": [
+          "npx",
+          "playwright",
+          "test",
+          "-c",
+          "playwright.teststack.config.ts",
+          "--grep",
+          "{casePrefix}",
+          "{files}"
+        ]
+      },
+      "dotnet/mstest",
+      "dotnet/xunit"
+    ],
+    "automationNotes": [
+      "Playwright specs under e2e/teststack/ build every URL from e2e/teststack/ports.ts (WEBAPP_URL, IDENTITY_URL, CATALOG_URL, port(name)); never hard-code 18xxx ports, so the specs run on whichever stack slot the run leased."
+    ]
+  },
+  "prCheck": {
+    "frontendPaths": [
+      "src/WebApp/",
+      "src/WebAppComponents/",
+      ".razor",
+      ".razor.css",
+      ".css"
+    ],
+    "conventions": [
+      "AGENTS.md",
+      "CONTRIBUTING.md",
+      ".editorconfig",
+      ".markdownlint.json",
+      "docs/architecture/services.md",
+      "docs/architecture/event-flows.md",
+      "docs/architecture/infrastructure.md",
+      "agents/implementer.agent.md"
+    ]
+  },
+  "prVideo": {
+    "specPatterns": [
+      "e2e/teststack/*.spec.ts"
+    ],
+    "backendPaths": [
+      "src/**"
+    ],
+    "neutralPaths": [
+      "src/eShop.AppHost/**",
+      "src/eShop.ServiceDefaults/**"
+    ],
+    "api": {
+      "extractor": "aspnet-minimal-api",
+      "sources": [
+        "src/**/*.cs"
+      ],
+      "exclude": [
+        "**/test/**",
+        "**/tests/**"
+      ],
+      "openapi": [
+        "http://localhost:18082/openapi/v1.json",
+        "http://localhost:18082/openapi/v2.json",
+        "http://localhost:18084/openapi/v1.json",
+        "http://localhost:18085/openapi/v1.json"
+      ]
+    }
+  },
+  "board": {
+    "owner": "armandodollia-slalom",
+    "ownerType": "user",
+    "repo": "armandodollia-slalom/AI-Immersion-eShop",
+    "projectNumber": 1,
+    "projectTitle": "eShop Story Board",
+    "evidence": {
+      "playwright": [
+        "npx",
+        "playwright",
+        "test",
+        "-c",
+        "playwright.teststack.config.ts",
+        "--grep",
+        "{casePrefix}",
+        "--trace",
+        "on",
+        "--output",
+        "{output}",
+        "--reporter",
+        "json",
+        "{files}"
+      ]
+    }
+  },
+  "resources": {
+    "lspServerGb": 0.8
+  },
+  "review": {
+    "maxRounds": 5,
+    "timeoutSec": 1200,
+    "codeAgents": [
+      "implementer"
+    ],
+    "policy": {
+      "enabled": true,
+      "agent": "architecture-policy/agents/arch_review.py",
+      "dir": ".factory/policy",
+      "command": [
+        "python",
+        "{agent}",
+        "review",
+        "-"
+      ],
+      "lessonsCommand": [
+        "python",
+        "{agent}",
+        "get_lessons",
+        "-"
+      ],
+      "categories": {
+        "security": "security",
+        "data": "data",
+        "resiliency": "resilience",
+        "observability": "resilience",
+        "error_handling": "correctness",
+        "api": "fit",
+        "architecture": "fit",
+        "testing": "maintainability"
+      },
+      "maxLessons": 5,
+      "requester": "implementer",
+      "semantic": "auto",
+      "timeoutSec": 600
+    }
+  },
+  "lsp": {
+    "maxLanguageServers": 6,
+    "idleSec": 900,
+    "callTimeoutSec": 60,
+    "diagnosticsTimeoutSec": 20,
+    "servers": [
+      {
+        "id": "csharp",
+        "extensions": [
+          ".cs"
+        ],
+        "languageIds": [
+          "csharp"
+        ],
+        "command": "node",
+        "args": [
+          "pack:dotnet/lsp/roslyn-proxy.mjs",
+          "dotnet",
+          "tool",
+          "run",
+          "roslyn-language-server",
+          "--stdio",
+          "--telemetryLevel",
+          "off",
+          "--logLevel",
+          "Warning"
+        ],
+        "env": {
+          "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+          "DOTNET_NOLOGO": "1"
+        },
+        "leased": true,
+        "reportsState": true,
+        "loadTimeoutSec": 900,
+        "prepare": {
+          "command": "node",
+          "args": [
+            "pack:dotnet/lsp/prepare.mjs"
+          ],
+          "label": "restoring tools and NuGet packages",
+          "timeoutSec": 900
+        },
+        "scope": {
+          "module": "pack:dotnet/lsp/scope.mjs",
+          "options": {
+            "solution": "eShop.slnx",
+            "restoreSolution": "eShop.Web.slnf"
+          }
+        }
+      },
+      {
+        "id": "typescript",
+        "extensions": [
+          ".ts",
+          ".tsx",
+          ".mts",
+          ".cts",
+          ".js",
+          ".jsx",
+          ".mjs",
+          ".cjs"
+        ],
+        "languageIds": [
+          "typescript",
+          "typescriptreact",
+          "javascript",
+          "javascriptreact"
+        ],
+        "command": "typescript-language-server",
+        "args": [
+          "--stdio"
+        ]
+      },
+      {
+        "id": "css",
+        "extensions": [
+          ".css"
+        ],
+        "languageIds": [
+          "css"
+        ],
+        "command": "vscode-css-language-server",
+        "args": [
+          "--stdio"
+        ],
+        "hook": false
+      },
+      {
+        "id": "html",
+        "extensions": [
+          ".html",
+          ".htm"
+        ],
+        "languageIds": [
+          "html"
+        ],
+        "command": "vscode-html-language-server",
+        "args": [
+          "--stdio"
+        ],
+        "hook": false
+      }
+    ],
+    "check": [
+      [
+        "csharp",
+        "src/Catalog.API/Apis/CatalogApi.cs",
+        13,
+        42
+      ],
+      [
+        "typescript",
+        "e2e/teststack/catalog-api.spec.ts",
+        20,
+        16
+      ],
+      [
+        "bash",
+        "scripts/graphify-build.sh"
+      ],
+      [
+        "json",
+        "package.json"
+      ],
+      [
+        "yaml",
+        ".github/dependabot.yml"
+      ]
+    ]
+  },
+  "stack": {
+    "composeProject": "eshop-teststack",
+    "imageTag": "teststack",
+    "composeFile": ".factory/stack/docker-compose.yaml",
+    "envTemplate": ".factory/stack/.env",
+    "env": {
+      "POSTGRES_PASSWORD": "teststack-postgres",
+      "REDIS_PASSWORD": "teststack-redis",
+      "EVENTBUS_PASSWORD": "teststack-rabbit"
+    },
+    "ports": {
+      "webapp": {
+        "base": 18080,
+        "env": "WEBAPP_HOST_PORT"
+      },
+      "identity": {
+        "base": 18081,
+        "env": "IDENTITY_API_HOST_PORT"
+      },
+      "catalog": {
+        "base": 18082,
+        "env": "CATALOG_API_HOST_PORT"
+      },
+      "basket": {
+        "base": 18083,
+        "env": "BASKET_API_HOST_PORT"
+      },
+      "ordering": {
+        "base": 18084,
+        "env": "ORDERING_API_HOST_PORT"
+      },
+      "webhooks": {
+        "base": 18085,
+        "env": "WEBHOOKS_API_HOST_PORT"
+      },
+      "webhooksclient": {
+        "base": 18086,
+        "env": "WEBHOOKSCLIENT_HOST_PORT"
+      },
+      "mobileBff": {
+        "base": 18087,
+        "env": "MOBILE_BFF_HOST_PORT"
+      },
+      "promotions": {
+        "base": 18088,
+        "env": "PROMOTIONS_API_HOST_PORT"
+      },
+      "dashboard": {
+        "base": 18888,
+        "env": "DASHBOARD_HOST_PORT"
+      },
+      "postgres": {
+        "base": 18432,
+        "env": "POSTGRES_HOST_PORT"
+      },
+      "redis": {
+        "base": 18379,
+        "env": "REDIS_HOST_PORT"
+      },
+      "rabbitmq": {
+        "base": 18672,
+        "env": "EVENTBUS_HOST_PORT"
+      }
+    },
+    "urls": {
+      "webapp": "http://localhost:{port:webapp}",
+      "identity": "http://host.docker.internal:{port:identity}",
+      "dashboard": "http://localhost:{port:dashboard}"
+    },
+    "baseUrl": "webapp",
+    "resolver": "pack:dotnet/stack/services.mjs",
+    "services": {
+      "identity-api": {
+        "project": "src/Identity.API/Identity.API.csproj",
+        "image": {
+          "env": "IDENTITY_API_IMAGE"
+        }
+      },
+      "basket-api": {
+        "project": "src/Basket.API/Basket.API.csproj",
+        "image": {
+          "env": "BASKET_API_IMAGE"
+        }
+      },
+      "catalog-api": {
+        "project": "src/Catalog.API/Catalog.API.csproj",
+        "image": {
+          "env": "CATALOG_API_IMAGE"
+        }
+      },
+      "ordering-api": {
+        "project": "src/Ordering.API/Ordering.API.csproj",
+        "image": {
+          "env": "ORDERING_API_IMAGE"
+        }
+      },
+      "order-processor": {
+        "project": "src/OrderProcessor/OrderProcessor.csproj",
+        "image": {
+          "env": "ORDER_PROCESSOR_IMAGE"
+        }
+      },
+      "payment-processor": {
+        "project": "src/PaymentProcessor/PaymentProcessor.csproj",
+        "image": {
+          "env": "PAYMENT_PROCESSOR_IMAGE"
+        }
+      },
+      "webhooks-api": {
+        "project": "src/Webhooks.API/Webhooks.API.csproj",
+        "image": {
+          "env": "WEBHOOKS_API_IMAGE"
+        }
+      },
+      "promotions-api": {
+        "project": "src/Promotions.API/Promotions.API.csproj",
+        "image": {
+          "env": "PROMOTIONS_API_IMAGE"
+        }
+      },
+      "webhooksclient": {
+        "project": "src/WebhookClient/WebhookClient.csproj",
+        "image": {
+          "env": "WEBHOOKSCLIENT_IMAGE"
+        }
+      },
+      "webapp": {
+        "project": "src/WebApp/WebApp.csproj",
+        "image": {
+          "env": "WEBAPP_IMAGE"
+        }
+      }
+    },
+    "rebuildAll": [
+      "Directory.Build.props",
+      "Directory.Build.targets",
+      "Directory.Packages.props",
+      "global.json",
+      "nuget.config",
+      "src/Directory.Build.props",
+      "src/Directory.Build.targets",
+      "src/eShop.AppHost/",
+      ".factory/stack/.env"
+    ],
+    "build": {
+      "all": "aspire do prepare-teststack --apphost src/eShop.AppHost/eShop.AppHost.csproj -e teststack -o {out} --non-interactive",
+      "service": "aspire do build-{service} --apphost src/eShop.AppHost/eShop.AppHost.csproj -e teststack -o {out} --non-interactive",
+      "serviceNext": "aspire do build-{service} --apphost src/eShop.AppHost/eShop.AppHost.csproj -e teststack -o {out} --non-interactive --no-build",
+      "env": {
+        "TestStack": "true",
+        "Parameters__postgres_password": "teststack-postgres",
+        "Parameters__redis_password": "teststack-redis",
+        "Parameters__eventbus_password": "teststack-rabbit"
+      },
+      "envFile": [
+        "{out}/.env.*",
+        "{out}/.env"
+      ],
+      "builtTag": "latest",
+      "inputs": [
+        "src",
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "Directory.Packages.props",
+        "global.json",
+        "nuget.config"
+      ],
+      "exclude": [
+        "src/ClientApp/",
+        "src/HybridApp/",
+        "src/WebAppComponents/wwwroot/images/"
+      ]
+    },
+    "publish": "aspire publish --apphost src/eShop.AppHost/eShop.AppHost.csproj -o {out} --non-interactive"
+  },
+  "teststack": {
+    "scenariosDir": ".factory/stack/scenarios",
+    "baseScenario": "_base",
+    "defaultScenario": "default",
+    "stores": {
+      "postgres": {
+        "type": "postgres",
+        "service": "postgres",
+        "username": "postgres",
+        "passwordEnv": "POSTGRES_PASSWORD",
+        "databases": [
+          "catalogdb",
+          "identitydb",
+          "orderingdb",
+          "promotionsdb",
+          "webhooksdb"
+        ],
+        "preserveTables": [
+          "__EFMigrationsHistory"
+        ],
+        "migrationsReady": {
+          "table": "__EFMigrationsHistory",
+          "column": "MigrationId"
+        },
+        "onMissingTemplate": "drop",
+        "sequences": [
+          {
+            "database": "orderingdb",
+            "sequence": "ordering.buyerseq",
+            "table": "ordering.buyers",
+            "column": "Id"
+          },
+          {
+            "database": "orderingdb",
+            "sequence": "ordering.paymentseq",
+            "table": "ordering.paymentmethods",
+            "column": "Id"
+          },
+          {
+            "database": "orderingdb",
+            "sequence": "ordering.orderseq",
+            "table": "ordering.orders",
+            "column": "Id"
+          },
+          {
+            "database": "orderingdb",
+            "sequence": "ordering.orderitemseq",
+            "table": "ordering.orderItems",
+            "column": "Id"
+          }
+        ]
+      },
+      "redis": {
+        "type": "redis",
+        "service": "redis",
+        "passwordEnv": "REDIS_PASSWORD"
+      },
+      "eventbus": {
+        "type": "rabbitmq",
+        "service": "eventbus",
+        "queues": [
+          "Basket",
+          "Catalog",
+          "Ordering",
+          "Ordering.webapp",
+          "OrderProcessor",
+          "PaymentProcessor",
+          "Promotions",
+          "Webhooks"
+        ]
+      }
+    },
+    "infrastructureServices": [
+      "postgres",
+      "redis",
+      "eventbus",
+      "teststack-dashboard"
+    ],
+    "services": [
+      {
+        "name": "identity-api",
+        "url": "http://localhost:{port:identity}/.well-known/openid-configuration",
+        "databases": [
+          "identitydb"
+        ]
+      },
+      {
+        "name": "catalog-api",
+        "url": "http://localhost:{port:catalog}/api/catalog/items?api-version=1.0&pageSize=1",
+        "databases": [
+          "catalogdb"
+        ],
+        "queues": [
+          "Catalog"
+        ]
+      },
+      {
+        "name": "basket-api",
+        "url": "http://localhost:{port:basket}/",
+        "http2": true,
+        "queues": [
+          "Basket"
+        ]
+      },
+      {
+        "name": "ordering-api",
+        "url": "http://localhost:{port:ordering}/",
+        "databases": [
+          "orderingdb"
+        ],
+        "queues": [
+          "Ordering"
+        ]
+      },
+      {
+        "name": "promotions-api",
+        "url": "http://localhost:{port:promotions}/api/promotions/active?api-version=1.0",
+        "databases": [
+          "promotionsdb"
+        ],
+        "queues": [
+          "Promotions"
+        ]
+      },
+      {
+        "name": "webhooks-api",
+        "url": "http://localhost:{port:webhooks}/",
+        "databases": [
+          "webhooksdb"
+        ],
+        "queues": [
+          "Webhooks"
+        ]
+      },
+      {
+        "name": "order-processor",
+        "queues": [
+          "OrderProcessor"
+        ]
+      },
+      {
+        "name": "payment-processor",
+        "queues": [
+          "PaymentProcessor"
+        ]
+      },
+      {
+        "name": "mobile-bff",
+        "url": "http://localhost:{port:mobileBff}/"
+      },
+      {
+        "name": "webhooksclient",
+        "url": "http://localhost:{port:webhooksclient}/"
+      },
+      {
+        "name": "webapp",
+        "url": "http://localhost:{port:webapp}/",
+        "queues": [
+          "Ordering.webapp"
+        ]
+      }
+    ],
+    "restartAfterLoad": [
+      {
+        "service": "ordering-api",
+        "when": "sequencesUsed"
+      }
+    ],
+    "commands": {
+      "hash-password": "pack:dotnet/stack/hash-password.mjs"
+    }
+  },
+  "$councilSample": {
+    "$comment": "A documented sample, not enabled: rename this key to \"council\" to seat council verifiers (docs/ai-pipeline/council.md). The codex member needs agent.modelIds.codex.sol.",
+    "rounds": 3,
+    "passScore": 9,
+    "blockOn": "any",
+    "onUnavailable": "fail",
+    "members": [
+      {
+        "name": "opus",
+        "cli": "claude",
+        "model": "opus",
+        "effort": "high",
+        "lens": "correctness"
+      },
+      {
+        "name": "sol",
+        "cli": "codex",
+        "model": "sol",
+        "effort": "high",
+        "lens": "correctness"
+      },
+      {
+        "name": "tests",
+        "cli": "copilot",
+        "model": "sonnet",
+        "lens": "test-value"
+      },
+      {
+        "name": "rewrite",
+        "cli": "claude",
+        "model": "opus",
+        "lens": "rewrite",
+        "blocking": false
+      }
+    ],
+    "stages": {
+      "pairVerify": {
+        "members": [
+          "opus",
+          "tests"
+        ]
+      },
+      "review": {
+        "members": [
+          "opus",
+          "sol",
+          "rewrite"
+        ]
+      },
+      "testAutomation": {
+        "members": [
+          "tests",
+          "sol"
+        ],
+        "rounds": 5
+      },
+      "prCheck": {
+        "rounds": 6
+      }
+    }
+  },
+  "$analysisSample": {
+    "$comment": "A documented sample, not enabled: rename to \"analysis\" to turn static analysis on (docs/ai-pipeline/analysis.md). With project.languages [\"dotnet\", \"typescript\"] this runs Betterleaks, OSV-Scanner, Opengrep (GitLab's MIT rules, the factory's own C# and TypeScript rules), zizmor and actionlint, the .NET SDK's security analyzers and NuGet audit (which a NoWarn of NU1901-NU1904 in Directory.Build.props does not silence), and eslint-plugin-security where the repository has it. Then: factory analysis install, factory render, factory doctor.",
+    "vars": {
+      "solution": "eShop.slnx"
+    },
+    "fixLoop": {
+      "bounces": 2
+    },
+    "tools": {
+      "roslyn-security": {
+        "timeoutSec": 2400
+      }
+    },
+    "licenceReview": "default"
+  }
+}

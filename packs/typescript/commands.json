@@ -1,0 +1,174 @@
+{
+  "$comment": "Default commands of this pack, used by the config generator to draft .factory/config.json. Keys map to: prepare -> implement.prepareCmd; checks -> implement.checks; unitTests -> implement.unitTests.cmd ({project} is a service's `unitTests` path); lint / format -> precheck.lint / precheck.fix by file extension ({files}); toolPaths -> project.toolPaths. {root} placeholders are for the generator to fill (a solution, a workspace manifest). `requires` (on a check, or `lintRequires` / `formatRequires` for the lint and format maps) drafts a command only when the repository has what it runs: `rootFiles` (globs of files at the root) or `manifest` (a regex one of the pack's unit files must match). `lintFallback` / `formatFallback` are drafted instead when the repository has TypeScript or JavaScript but no ESLint of its own: the factory's ESLint with recommended rules (packs/typescript/lint/eslint.mjs).",
+  "prepare": "npm ci",
+  "checks": [
+    {
+      "name": "typecheck",
+      "cmd": "npx tsc --noEmit",
+      "requires": {
+        "rootFiles": [
+          "tsconfig.json",
+          "tsconfig.*.json"
+        ]
+      }
+    }
+  ],
+  "unitTests": "npm test --prefix {project}",
+  "lint": {
+    ".ts": [
+      "node_modules/.bin/eslint",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".tsx": [
+      "node_modules/.bin/eslint",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".js": [
+      "node_modules/.bin/eslint",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".mjs": [
+      "node_modules/.bin/eslint",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".cjs": [
+      "node_modules/.bin/eslint",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".jsx": [
+      "node_modules/.bin/eslint",
+      "--no-warn-ignored",
+      "{files}"
+    ]
+  },
+  "format": {
+    ".ts": [
+      "node_modules/.bin/eslint",
+      "--fix",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".tsx": [
+      "node_modules/.bin/eslint",
+      "--fix",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".js": [
+      "node_modules/.bin/eslint",
+      "--fix",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".mjs": [
+      "node_modules/.bin/eslint",
+      "--fix",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".cjs": [
+      "node_modules/.bin/eslint",
+      "--fix",
+      "--no-warn-ignored",
+      "{files}"
+    ],
+    ".jsx": [
+      "node_modules/.bin/eslint",
+      "--fix",
+      "--no-warn-ignored",
+      "{files}"
+    ]
+  },
+  "toolPaths": [],
+  "alternatives": {
+    "pnpm": {
+      "prepare": "pnpm install --frozen-lockfile",
+      "unitTests": "pnpm --dir {project} test"
+    },
+    "yarn": {
+      "prepare": "yarn install --immutable",
+      "unitTests": "yarn --cwd {project} test"
+    }
+  },
+  "lintRequires": {
+    "manifest": "\"eslint\"\\s*:"
+  },
+  "formatRequires": {
+    "manifest": "\"eslint\"\\s*:"
+  },
+  "lintFallback": {
+    ".ts": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "{files}"
+    ],
+    ".tsx": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "{files}"
+    ],
+    ".js": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "{files}"
+    ],
+    ".mjs": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "{files}"
+    ],
+    ".cjs": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "{files}"
+    ],
+    ".jsx": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "{files}"
+    ]
+  },
+  "formatFallback": {
+    ".ts": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "--fix",
+      "{files}"
+    ],
+    ".tsx": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "--fix",
+      "{files}"
+    ],
+    ".js": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "--fix",
+      "{files}"
+    ],
+    ".mjs": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "--fix",
+      "{files}"
+    ],
+    ".cjs": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "--fix",
+      "{files}"
+    ],
+    ".jsx": [
+      "node",
+      "{packs}/typescript/lint/eslint.mjs",
+      "--fix",
+      "{files}"
+    ]
+  }
+}

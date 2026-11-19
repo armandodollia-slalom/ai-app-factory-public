@@ -1,0 +1,22 @@
+# Turns recurring denials into lessons for the agents, runs the factory retro over the decision log
+# (.factory/metrics/decisions.jsonl), then opens a merge request with the changes for human review.
+# Runs from a pipeline schedule (Build > Pipeline schedules) with the variable FACTORY_JOB=retro, or by hand
+# (Run pipeline with FACTORY_JOB=retro; FACTORY_RETRO_CALIBRATE=false skips the verifier calibration).
+factory-retro:
+  extends: .factory-agent
+  resource_group: factory-retro
+  interruptible: false
+  rules:
+    - if: ($CI_PIPELINE_SOURCE == "schedule" || $CI_PIPELINE_SOURCE == "web") && $FACTORY_JOB == "retro"
+  variables:
+    PIPELINE_BASE_REF: origin/$CI_DEFAULT_BRANCH
+  script:
+    - if [ "$FACTORY_AGENT_READY" != true ]; then exit 0; fi
+    - |
+      git config user.name "${FACTORY_GIT_NAME:-factory-bot}"
+      git config user.email "${FACTORY_GIT_EMAIL:-factory-bot@noreply.invalid}"
+      # Pushes use the GITLAB_TOKEN project access token (write_repository), never the job token.
+      if [ -n "$GITLAB_TOKEN" ]; then git config --global http.extraHeader "AUTHORIZATION: basic $(printf "oauth2:%s" "$GITLAB_TOKEN" | base64 | tr -d "\n")"; git remote set-url origin "$CI_SERVER_URL/$CI_PROJECT_PATH.git"; fi
+    - if [ "${FACTORY_RETRO_CALIBRATE:-true}" = true ]; then factory retro calibrate --sample 3; fi
+    - factory fv metrics
+    - factory retro run

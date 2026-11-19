@@ -1,0 +1,76 @@
+{
+  "$comment": "Static analysis for Rust (docs/ai-pipeline/analysis.md). cargo-deny (MIT OR Apache-2.0): advisories, bans, licences and sources of the dependency graph; declared, with a parser tested against recorded output; not exercised end to end. Note that cargo-deny's advisory check fetches the RustSec database.",
+  "tools": {
+    "cargo-deny": {
+      "description": "cargo-deny on the dependency graph",
+      "licence": "Apache-2.0",
+      "when": [
+        "**/Cargo.toml"
+      ],
+      "onChange": [
+        "**/Cargo.toml",
+        "**/Cargo.lock",
+        "deny.toml"
+      ],
+      "run": [
+        "cargo",
+        "deny",
+        "--format",
+        "json",
+        "check",
+        "advisories",
+        "bans",
+        "licenses",
+        "sources"
+      ],
+      "output": "stderr",
+      "parse": "module:{packs}/rust/analysis/cargo-deny.mjs",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ],
+      "data": [
+        {
+          "id": "rustsec-advisory-db",
+          "licence": "CC0-1.0"
+        }
+      ]
+    }
+  },
+  "stages": {
+    "story": [
+      "cargo-deny"
+    ],
+    "prCheck": [
+      "cargo-deny"
+    ]
+  },
+  "suppressions": [
+    {
+      "id": "allow-attr",
+      "pattern": "#\\[allow\\(|#!\\[allow\\("
+    }
+  ],
+  "protect": [
+    "deny.toml"
+  ],
+  "ci": [
+    {
+      "id": "dependencies",
+      "name": "Dependency audit",
+      "tools": [
+        "cargo-deny"
+      ],
+      "required": true,
+      "toolchain": true
+    }
+  ]
+}

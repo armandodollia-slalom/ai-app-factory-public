@@ -1,0 +1,61 @@
+# Records the e2e specs a pull request adds or changes on the test stack and adds the videos to a
+# "Demo video" section of its description; backend-only changes get an "API changes" section instead.
+# See docs/ai-pipeline/pr-demo-video.md in the factory. Create a pipeline from this file and add it as an
+# optional build validation. Azure DevOps starts no build when a pull request is abandoned, so the videos of
+# an abandoned pull request stay on the videos branch until `factory pr-video cleanup --pr <id>` is run.
+trigger: none
+pr:
+  branches:
+    include: ['*']
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  FACTORY_CI: azure-pipelines
+
+jobs:
+- job: record
+  displayName: PR demo video
+  timeoutInMinutes: 60
+  condition: and(succeeded(), ne(variables['System.PullRequest.IsFork'], 'True'))
+  steps:
+  - template: templates/factory-setup.yml
+  - bash: |
+      for v in $(env | sed -n 's/^\([A-Z_][A-Z0-9_]*\)=\$(.*/\1/p'); do unset "$v"; done
+      PR_NUMBER="${SYSTEM_PULLREQUEST_PULLREQUESTNUMBER:-$SYSTEM_PULLREQUEST_PULLREQUESTID}"
+      HEAD_SHA="$(git rev-parse -q --verify HEAD^2 || git rev-parse HEAD)"
+      RUN_URL="${SYSTEM_COLLECTIONURI}${SYSTEM_TEAMPROJECT}/_build/results?buildId=${BUILD_BUILDID}"
+      list=$(factory pr-video specs --base "$BASE_REF" | paste -sd, -)
+      scope=$(factory pr-video scope --base "$BASE_REF")
+      eval "$scope"
+      echo "Specs: ${list:-none}; $(echo $scope)"
+      record=false; stack=false
+      if [ -n "$list" ] && { [ "$video" = true ] || [ "$api" = true ]; }; then record=true; fi
+      if { [ -n "$list" ] && [ "$video" = true ]; } || [ "$api" = true ]; then stack=true; fi
+      if [ "$video" != true ]; then factory pr-video publish --pr "$PR_NUMBER" --remove; fi
+      if [ "$video" = true ] && [ -z "$list" ]; then
+        factory pr-video publish --pr "$PR_NUMBER" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --note "No \`e2e/teststack/*.spec.ts\` changed in this pull request, so there is no demo video. User-facing changes need one: see the factory's feature-demo-video skill."
+      fi
+      failed=false
+      if [ "$stack" = true ]; then
+        if [ -f .factory/ci/toolchain.sh ]; then . .factory/ci/toolchain.sh; fi
+        sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        npx playwright install --with-deps chromium
+        factory teststack up
+      fi
+      if [ "$record" = true ]; then
+        E2E_KEEP_VIDEOS=1 E2E_API_LOG=1 npx playwright test -c playwright.teststack.config.ts --project scenarios --no-deps ${list//,/ } || failed=true
+      fi
+      if [ "$record" = true ] && [ "$video" = true ]; then factory pr-video publish --pr "$PR_NUMBER" --specs "$list" --head-sha "$HEAD_SHA" --run-url "$RUN_URL"; fi
+      factory pr-video api --pr "$PR_NUMBER" --base "$BASE_REF" --api "$api" --frontend "$frontend" --specs "$list" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" || echo "##vso[task.logissue type=warning]Could not add the API summary."
+      if [ "$failed" = true ]; then echo "##vso[task.logissue type=error]A changed e2e spec failed; its video is marked failed in the description."; exit 1; fi
+    displayName: Record the changed specs and publish them
+    env:
+      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
+      # factory:secrets
+  - publish: artifacts/e2e-videos
+    artifact: pr-demo-video-$(System.JobAttempt)
+    displayName: Upload the videos
+    condition: always()
+    continueOnError: true

@@ -1,0 +1,26 @@
+# Tracker automations without tracker events: a pipeline cannot start on a ticket being assigned or a
+# comment being edited, so a schedule sweeps the tracker instead. It gives every open epic's stories the
+# epic's assignees and checks the answers of escalations a person marked resolved (`factory automations`).
+# Create a pipeline from this file and add a scheduled trigger (Pipelines > Edit > Triggers), every
+# 15 minutes or so on the default branch.
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  FACTORY_CI: azure-pipelines
+
+jobs:
+- job: sweep
+  displayName: tracker automations
+  steps:
+  - template: templates/factory-setup.yml
+  - bash: |
+      for v in $(env | sed -n 's/^\([A-Z_][A-Z0-9_]*\)=\$(.*/\1/p'); do unset "$v"; done
+      factory automations
+    displayName: Sweep the tracker
+    env:
+      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
+      # factory:secrets

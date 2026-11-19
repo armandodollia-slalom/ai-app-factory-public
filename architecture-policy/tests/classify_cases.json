@@ -1,0 +1,318 @@
+{
+ "$comment": "Manifests the classifier must read the way MSBuild does (council A6, Opus's table B and finding 3; council A7, both reviewers' new probes). `expect`: a type/layer the project is derived as, or `person` (unclassified, needs_person: a person classifies it). Used by architecture-policy/tests/test_topology.py and, end to end through arch.py, scripts/factory/test/policy-library.test.mjs.",
+ "conventions": [
+  {
+   "type": "test",
+   "layer": "test",
+   "match": {
+    "roots": [
+     "tests/*"
+    ],
+    "test_project": true
+   }
+  },
+  {
+   "type": "host",
+   "layer": "host",
+   "content": {
+    "maps_endpoints": false
+   },
+   "match": {
+    "roots": [
+     "src/*"
+    ],
+    "sdk": [
+     "Aspire.AppHost.Sdk"
+    ]
+   }
+  },
+  {
+   "type": "api",
+   "layer": "presentation",
+   "service": "required",
+   "content": {
+    "maps_endpoints": true
+   },
+   "match": {
+    "roots": [
+     "src/*"
+    ],
+    "sdk": [
+     "Microsoft.NET.Sdk.Web"
+    ],
+    "name": [
+     "*.API"
+    ]
+   }
+  },
+  {
+   "type": "web",
+   "layer": "presentation",
+   "service": "required",
+   "content": {
+    "maps_api_routes": false
+   },
+   "match": {
+    "roots": [
+     "src/*"
+    ],
+    "sdk": [
+     "Microsoft.NET.Sdk.Web"
+    ],
+    "not_name": [
+     "*.API"
+    ]
+   }
+  },
+  {
+   "type": "library",
+   "layer": "shared",
+   "content": {
+    "maps_api_routes": false
+   },
+   "match": {
+    "roots": [
+     "src/*"
+    ],
+    "sdk": [
+     "Microsoft.NET.Sdk"
+    ],
+    "output_type": "Library",
+    "test_project": false
+   }
+  }
+ ],
+ "service_names": {
+  "Catalog": "catalog",
+  "Probe": "probe"
+ },
+ "cases": [
+  {
+   "name": "B3: a Web project preceded by a comment naming the AppHost SDK",
+   "files": {
+    "src/Catalog.Probe/Catalog.Probe.csproj": "<!-- migrated from <Project Sdk=\"Aspire.AppHost.Sdk/13.6.0\"> -->\n<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n",
+    "src/Catalog.Probe/Apis/ProbeApi.cs": "app.MapPost(\"/api/probe\", Handle);\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "B3': same, without SQL (the comment must not make it a host)",
+   "files": {
+    "src/Catalog.Probe/Catalog.Probe.csproj": "<!-- <Project Sdk=\"Aspire.AppHost.Sdk/13.6.0\"> -->\n<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n",
+    "src/Catalog.Probe/Apis/ProbeApi.cs": "app.MapPost(\"/api/probe\", h);\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "B4: OutputType set under a Condition and then again",
+   "files": {
+    "src/Catalog.Lib/Catalog.Lib.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType Condition=\"'$(X)' == ''\">Library</OutputType><OutputType>Exe</OutputType></PropertyGroup><ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "B6: two manifests in one folder",
+   "files": {
+    "src/Catalog.Reviews.API/Catalog.Reviews.API.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />\n",
+    "src/Catalog.Reviews.API/Catalog.Reviews.API.Contracts.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+    "src/Catalog.Reviews.API/Apis/A.cs": "app.MapGet(\"/api/r\", h);\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "B7: xunit only inside a comment is not a test project",
+   "files": {
+    "tests/Catalog.Probe/Catalog.Probe.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><!-- <ItemGroup><PackageReference Include=\"xunit\" /></ItemGroup> --></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "a conditional test-framework reference",
+   "files": {
+    "tests/Catalog.Cond/Catalog.Cond.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup Condition=\"'$(CI)' == 'true'\"><PackageReference Include=\"xunit\" /></ItemGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "Directory.Build.props sets a property the classifier reads",
+   "files": {
+    "src/Directory.Build.props": "<Project><PropertyGroup><OutputType>Library</OutputType></PropertyGroup></Project>\n",
+    "src/Catalog.Lib2/Catalog.Lib2.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "an explicit <Import>",
+   "files": {
+    "src/Catalog.Imp/Catalog.Imp.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><Import Project=\"../x.props\" /></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "a manifest that is not well-formed XML",
+   "files": {
+    "src/Catalog.Bad/Catalog.Bad.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "finding 3: src/Probe.Api (lower-case Api) is an api",
+   "files": {
+    "src/Probe.Api/Probe.Api.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />\n",
+    "src/Probe.Api/Apis/P.cs": "app.MapPost(\"/api/probe\", h);\n"
+   },
+   "expect": "api/presentation"
+  },
+  {
+   "name": "finding 3: src/Catalog.Admin (web) mapping /api routes contradicts its class",
+   "files": {
+    "src/Catalog.Admin/Catalog.Admin.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />\n",
+    "src/Catalog.Admin/Apis/AdminApi.cs": "app.MapPost(\"/api/admin\", h);\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "an api that maps no endpoint yet keeps its class, with a note (scaffolding; council A7)",
+   "files": {
+    "src/Catalog.Empty.API/Catalog.Empty.API.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />\n",
+    "src/Catalog.Empty.API/Program.cs": "var app = WebApplication.Create();\n"
+   },
+   "expect": "api/presentation"
+  },
+  {
+   "name": "a library mapping /api routes contradicts its class",
+   "files": {
+    "src/Catalog.Helpers/Catalog.Helpers.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+    "src/Catalog.Helpers/Routes.cs": "app.MapGet(\"/api/x\", h);\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "the last assignment wins, as in MSBuild (same value twice is fine)",
+   "files": {
+    "src/Catalog.Lib3/Catalog.Lib3.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Library</OutputType></PropertyGroup><PropertyGroup><OutputType>Library</OutputType></PropertyGroup></Project>\n"
+   },
+   "expect": "library/shared"
+  },
+  {
+   "name": "honest: a new web API of an existing service",
+   "files": {
+    "src/Catalog.Search.API/Catalog.Search.API.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />\n",
+    "src/Catalog.Search.API/Apis/S.cs": "app.MapGet(\"/api/search\", h);\n"
+   },
+   "expect": "api/presentation"
+  },
+  {
+   "name": "honest: a new test project",
+   "files": {
+    "tests/Catalog.Search.Tests/Catalog.Search.Tests.csproj": "<Project Sdk=\"MSTest.Sdk\" />\n"
+   },
+   "expect": "test/test"
+  },
+  {
+   "name": "A7 Sol: a lower-case <outputtype>Exe</outputtype> is OutputType",
+   "files": {
+    "src/Catalog.Low/Catalog.Low.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><outputtype>Exe</outputtype></PropertyGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "A7 Sol: OutputType Library under a Condition, Library by default: the same class either way",
+   "files": {
+    "src/Catalog.Helpers2/Catalog.Helpers2.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType Condition=\"'$(Configuration)' == 'Debug'\">Library</OutputType></PropertyGroup></Project>\n"
+   },
+   "expect": "library/shared"
+  },
+  {
+   "name": "OutputType Exe under a Condition: the class depends on it",
+   "files": {
+    "src/Catalog.Cond2/Catalog.Cond2.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType Condition=\"'$(Configuration)' == 'Release'\">Exe</OutputType></PropertyGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "A7 Opus N3b: a Directory.Build.targets imports a file under a Condition",
+   "files": {
+    "src/Catalog.Host/Catalog.Host.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Library</OutputType></PropertyGroup></Project>\n",
+    "src/Catalog.Host/Directory.Build.targets": "<Project><Import Project=\"build/host.targets\" Condition=\"'$(Configuration)' == 'Release'\" /></Project>\n",
+    "src/Catalog.Host/build/host.targets": "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "A7 Opus N3: a Directory.Build.targets imports a file that sets OutputType",
+   "files": {
+    "src/Catalog.Host3/Catalog.Host3.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n",
+    "src/Catalog.Host3/Directory.Build.targets": "<Project><Import Project=\"build/host.targets\" /></Project>\n",
+    "src/Catalog.Host3/build/host.targets": "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "A7 Sol: a Directory.Build.props imports a props file that sets OutputType",
+   "files": {
+    "src/Catalog.Imp2/Catalog.Imp2.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n",
+    "src/Directory.Build.props": "<Project><Import Project=\"$(MSBuildThisFileDirectory)common.props\" /></Project>\n",
+    "src/common.props": "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "honest: a Directory.Build.props that imports the one above (GetPathOfFileAbove)",
+   "files": {
+    "src/Catalog.Reporting.API/Catalog.Reporting.API.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n",
+    "src/Catalog.Reporting.API/Directory.Build.props": "<Project><Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" /><PropertyGroup><Nullable>enable</Nullable></PropertyGroup></Project>\n",
+    "src/Catalog.Reporting.API/Apis/R.cs": "app.MapGet(\"/api/reports\", () => 1);\n"
+   },
+   "expect": "api/presentation"
+  },
+  {
+   "name": "A7 Opus N5: a library maps an /api route through a constant",
+   "files": {
+    "src/Catalog.Lib5/Catalog.Lib5.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n",
+    "src/Catalog.Lib5/Routes.cs": "static class R { const string Prefix = \"/api\"; static void M(IEndpointRouteBuilder app) { app.MapPost(Prefix + \"/reviews\", () => 1); } }\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "A7 Opus N6: a web project maps an /api route through an interpolated constant",
+   "files": {
+    "src/Catalog.Portal/Catalog.Portal.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n",
+    "src/Catalog.Portal/Routes.cs": "static class R { public const string Prefix = \"api\"; static void M(IEndpointRouteBuilder app) { app.MapGroup($\"{R.Prefix}/portal\").MapGet(\"/\", () => 1); } }\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "a library maps a route the classifier cannot read",
+   "files": {
+    "src/Catalog.Lib6/Catalog.Lib6.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n",
+    "src/Catalog.Lib6/Routes.cs": "static class R { static void M(IEndpointRouteBuilder app, string p) { app.MapGet(p, () => 1); } }\n"
+   },
+   "expect": "person"
+  },
+  {
+   "name": "a web project with a non-/api constant route keeps its class",
+   "files": {
+    "src/Catalog.Site/Catalog.Site.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n",
+    "src/Catalog.Site/Routes.cs": "static class R { const string Home = \"/home\"; static void M(IEndpointRouteBuilder app) { app.MapGet(Home, () => 1); } }\n"
+   },
+   "expect": "web/presentation"
+  },
+  {
+   "name": "A7 Opus N8: an upper-case .CSPROJ is a project manifest",
+   "files": {
+    "src/Catalog.Up.API/Catalog.Up.API.CSPROJ": "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n",
+    "src/Catalog.Up.API/Apis/U.cs": "app.MapGet(\"/api/up\", () => 1);\n"
+   },
+   "expect": "api/presentation"
+  },
+  {
+   "name": "A7 Opus N11: a lower-case directory.build.targets that sets OutputType",
+   "files": {
+    "src/Catalog.N11/Catalog.N11.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n",
+    "src/Catalog.N11/directory.build.targets": "<Project><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>\n"
+   },
+   "expect": "person"
+  }
+ ]
+}

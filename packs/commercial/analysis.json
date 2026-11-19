@@ -1,0 +1,423 @@
+{
+  "$comment": "Ready-made definitions of commercial scanners a client may already license (docs/providers/commercial-scanners.md). Every one is off: it runs only when analysis.commercial names it, a named person accepted its licence (analysis.acceptLicence) and the client's own token variable is set. The factory bundles no vendor binary and no vendor rule: the client's CLI or service does the scanning. 'verified' says whether the definition was run against the real product; none could be (no licence or login on the build machine), so every definition is checked against fakes and the vendor's public documentation only, with the links and the date it was read.",
+  "tools": {
+    "semgrep": {
+      "enabled": false,
+      "description": "Semgrep AppSec Platform (semgrep ci): the client's rules and policies, diff-aware on pull requests",
+      "licence": "LicenseRef-Semgrep-AppSec-Platform",
+      "run": [
+        "semgrep",
+        "ci",
+        "--sarif",
+        "--sarif-output={out}",
+        "--no-suppress-errors"
+      ],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "okExit": [
+        0,
+        1
+      ],
+      "timeoutSec": 1800,
+      "lens": "security",
+      "missingPattern": "semgrep: command not found|'semgrep' is not recognized",
+      "severity": {
+        "critical": "blocking",
+        "high": "blocking",
+        "medium": "major",
+        "low": "minor",
+        "info": "minor"
+      },
+      "commercial": {
+        "vendor": "Semgrep",
+        "product": "Semgrep AppSec Platform (Code, Supply Chain, Secrets)",
+        "modes": [
+          "local",
+          "server"
+        ],
+        "tokenEnv": "SEMGREP_APP_TOKEN",
+        "check": "semgrep-cloud-platform/scan",
+        "jobs": [
+          "sast",
+          "dependencies",
+          "secrets"
+        ],
+        "server": {
+          "adapter": "semgrep",
+          "url": "https://semgrep.dev",
+          "submit": [
+            "semgrep",
+            "ci",
+            "--no-suppress-errors"
+          ]
+        },
+        "verified": false,
+        "verifiedNote": "Checked against the documentation and a fake findings API; not run against a Semgrep deployment.",
+        "docs": [
+          "https://semgrep.dev/docs/cli-reference",
+          "https://semgrep.dev/docs/semgrep-ci/configuring-blocking-and-errors-in-ci",
+          "https://semgrep.dev/api/v1/docs/#tag/Finding"
+        ],
+        "docsRead": "2026-11-17"
+      },
+      "protect": [
+        ".semgrepignore"
+      ]
+    },
+    "codeql": {
+      "enabled": false,
+      "description": "CodeQL (GitHub Advanced Security): a database built from the code, the client's query suite",
+      "licence": "LicenseRef-GitHub-CodeQL-Terms",
+      "run": "codeql database create \"{cache}/db\" --language={codeqlLanguage} --source-root . --overwrite && codeql database analyze \"{cache}/db\" {codeqlSuite} --format=sarif-latest --output=\"{out}\"",
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "okExit": [
+        0
+      ],
+      "timeoutSec": 3600,
+      "lens": "security",
+      "missingPattern": "codeql: command not found|'codeql' is not recognized",
+      "severity": {
+        "critical": "blocking",
+        "high": "blocking",
+        "medium": "major",
+        "low": "minor",
+        "info": "minor"
+      },
+      "commercial": {
+        "vendor": "GitHub",
+        "product": "GitHub code scanning with CodeQL",
+        "modes": [
+          "local",
+          "server"
+        ],
+        "tokenEnv": "GITHUB_TOKEN",
+        "tokenScope": "security_events (read) for server mode; none for the local CLI",
+        "check": "CodeQL",
+        "jobs": [
+          "sast"
+        ],
+        "vars": {
+          "codeqlLanguage": "the CodeQL language (csharp, javascript-typescript, java-kotlin, python, go, ...)",
+          "codeqlSuite": "a query suite, e.g. codeql/csharp-queries:codeql-suites/csharp-security-extended.qls"
+        },
+        "server": {
+          "adapter": "github-code-scanning"
+        },
+        "verified": false,
+        "verifiedNote": "The REST endpoints were read from the documentation and run against a fake. One live read-only call on 2026-11-17 to the public test repository (no code scanning set up there): analyses and alerts both answer 404 \"no analysis found\", which the adapter reads as a pending result (the head waits, then fails closed at the timeout). No alert was read live. The CodeQL CLI is on the factory's rejected licence list (closed-source use needs paid GitHub Advanced Security): the person accepting it adds \"rejected\": true.",
+        "docs": [
+          "https://docs.github.com/en/rest/code-scanning/code-scanning",
+          "https://docs.github.com/en/code-security/codeql-cli/codeql-cli-manual/database-analyze"
+        ],
+        "docsRead": "2026-11-17"
+      },
+      "protect": [
+        ".github/codeql"
+      ]
+    },
+    "snyk-code": {
+      "enabled": false,
+      "description": "Snyk Code (SAST) through the Snyk CLI",
+      "licence": "LicenseRef-Snyk-Terms",
+      "run": [
+        "snyk",
+        "code",
+        "test",
+        "--sarif-file-output={out}"
+      ],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "okExit": [
+        0,
+        1,
+        3
+      ],
+      "timeoutSec": 1800,
+      "lens": "security",
+      "missingPattern": "snyk: command not found|'snyk' is not recognized",
+      "errorPattern": "Authentication error|MissingApiTokenError",
+      "severity": {
+        "critical": "blocking",
+        "high": "blocking",
+        "medium": "major",
+        "low": "minor",
+        "info": "minor"
+      },
+      "commercial": {
+        "vendor": "Snyk",
+        "product": "Snyk Code",
+        "modes": [
+          "local",
+          "server"
+        ],
+        "tokenEnv": "SNYK_TOKEN",
+        "check": "code/snyk",
+        "jobs": [
+          "sast"
+        ],
+        "server": {
+          "adapter": "check-only",
+          "submit": [
+            "snyk",
+            "code",
+            "test",
+            "--report"
+          ]
+        },
+        "exitCodes": {
+          "0": "no issues",
+          "1": "issues found",
+          "2": "failure",
+          "3": "no supported projects (the scan is skipped)"
+        },
+        "verified": false,
+        "verifiedNote": "Exit codes and flags from the CLI's own help (snyk@1.1308.4). Server mode waits for Snyk's check on the head; Snyk's findings API is not read (findings come from the local CLI run).",
+        "docs": [
+          "https://docs.snyk.io/snyk-cli/commands/code-test",
+          "https://unpkg.com/snyk@1.1308.4/help/cli-commands/code-test.md"
+        ],
+        "docsRead": "2026-11-17",
+        "suppressions": [
+          {
+            "id": "snyk-code-ignore",
+            "pattern": "deepcode\\s+ignore"
+          }
+        ]
+      },
+      "protect": [
+        ".snyk",
+        ".dcignore"
+      ]
+    },
+    "snyk-open-source": {
+      "enabled": false,
+      "description": "Snyk Open Source (dependencies) through the Snyk CLI",
+      "licence": "LicenseRef-Snyk-Terms",
+      "run": [
+        "snyk",
+        "test",
+        "--all-projects",
+        "--sarif-file-output={out}"
+      ],
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "okExit": [
+        0,
+        1,
+        3
+      ],
+      "timeoutSec": 1800,
+      "lens": "security",
+      "missingPattern": "snyk: command not found|'snyk' is not recognized",
+      "errorPattern": "Authentication error|MissingApiTokenError",
+      "severity": {
+        "critical": "blocking",
+        "high": "blocking",
+        "medium": "major",
+        "low": "minor",
+        "info": "minor"
+      },
+      "commercial": {
+        "vendor": "Snyk",
+        "product": "Snyk Open Source",
+        "modes": [
+          "local",
+          "server"
+        ],
+        "tokenEnv": "SNYK_TOKEN",
+        "check": "security/snyk",
+        "jobs": [
+          "dependencies"
+        ],
+        "server": {
+          "adapter": "check-only",
+          "submit": [
+            "snyk",
+            "monitor",
+            "--all-projects"
+          ]
+        },
+        "exitCodes": {
+          "0": "no vulnerabilities",
+          "1": "vulnerabilities found",
+          "2": "failure",
+          "3": "no supported projects (the scan is skipped)"
+        },
+        "verified": false,
+        "verifiedNote": "Exit codes and flags from the CLI's own help (snyk@1.1308.4).",
+        "docs": [
+          "https://docs.snyk.io/snyk-cli/commands/test",
+          "https://unpkg.com/snyk@1.1308.4/help/cli-commands/test.md"
+        ],
+        "docsRead": "2026-11-17"
+      },
+      "protect": [
+        ".snyk"
+      ]
+    },
+    "sonarqube": {
+      "enabled": false,
+      "description": "SonarQube Server / SonarQube Cloud: the scanner uploads, the server's quality gate and issues decide",
+      "licence": "LicenseRef-SonarSource-Commercial",
+      "run": null,
+      "parse": "sarif",
+      "scope": "repo",
+      "lens": "security",
+      "severity": {
+        "critical": "blocking",
+        "high": "blocking",
+        "medium": "major",
+        "low": "minor",
+        "info": "minor"
+      },
+      "commercial": {
+        "vendor": "SonarSource",
+        "product": "SonarQube Server (Developer edition or higher for pull request analysis) / SonarQube Cloud",
+        "modes": [
+          "server"
+        ],
+        "tokenEnv": "SONAR_TOKEN",
+        "check": "SonarQube Code Analysis",
+        "jobs": [
+          "sast"
+        ],
+        "server": {
+          "adapter": "sonarqube",
+          "submit": [
+            "sonar-scanner",
+            "-Dsonar.projectKey={project}",
+            "-Dsonar.host.url={url}"
+          ]
+        },
+        "verified": false,
+        "verifiedNote": "Web API paths from SonarSource's web API reference (api/qualitygates/project_status with pullRequest, api/issues/search with pullRequest). SonarQube Server does not return the analysed commit of a pull request (a SonarSource community answer), so the head binding comes from the scanner's check on the host, which is required.",
+        "docs": [
+          "https://docs.sonarsource.com/sonarqube-server/latest/extension-guide/web-api/",
+          "https://next.sonarqube.com/sonarqube/web_api/api/qualitygates/project_status",
+          "https://next.sonarqube.com/sonarqube/web_api/api/issues/search"
+        ],
+        "docsRead": "2026-11-17"
+      },
+      "protect": [
+        "sonar-project.properties"
+      ]
+    },
+    "checkmarx": {
+      "enabled": false,
+      "description": "Checkmarx One through the cx CLI",
+      "licence": "LicenseRef-Checkmarx-One",
+      "run": "cx scan create --project-name \"{project}\" -s . --branch \"$(git rev-parse --abbrev-ref HEAD)\" --scan-types sast --report-format sarif --output-path \"{cache}\" --output-name factory-report && cp \"{cache}/factory-report.sarif\" \"{out}\"",
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "okExit": [
+        0
+      ],
+      "timeoutSec": 3600,
+      "lens": "security",
+      "missingPattern": "cx: command not found|'cx' is not recognized",
+      "severity": {
+        "critical": "blocking",
+        "high": "blocking",
+        "medium": "major",
+        "low": "minor",
+        "info": "minor"
+      },
+      "commercial": {
+        "vendor": "Checkmarx",
+        "product": "Checkmarx One",
+        "modes": [
+          "local",
+          "server"
+        ],
+        "tokenEnv": "CX_CLIENT_SECRET",
+        "otherEnv": [
+          "CX_CLIENT_ID",
+          "CX_BASE_URI",
+          "CX_TENANT",
+          "CX_BASE_AUTH_URI"
+        ],
+        "check": "Checkmarx One Scan",
+        "jobs": [
+          "sast"
+        ],
+        "server": {
+          "adapter": "check-only"
+        },
+        "verified": false,
+        "verifiedNote": "Flags from the scan create reference (--report-format sarif, --output-path, --output-name, default name cx_result); the exit code on findings is not documented, so the definition reads findings from the SARIF report and a non-zero exit without a report fails closed.",
+        "docs": [
+          "https://docs.checkmarx.com/en/34965-68643-scan.html",
+          "https://docs.checkmarx.com/en/34965-112039-sarif-output-for-checkmarx-one--example-for-github-action-.html",
+          "https://docs.checkmarx.com/en/34965-350124-running-scans-via-the-cli.html"
+        ],
+        "docsRead": "2026-11-17"
+      }
+    },
+    "veracode": {
+      "enabled": false,
+      "description": "Veracode Pipeline Scan of a built artifact",
+      "licence": "LicenseRef-Veracode",
+      "run": "umask 077 && mkdir -p \"{cache}/home/.veracode\" && printf '[default]\\nveracode_api_key_id = %s\\nveracode_api_key_secret = %s\\n' \"$VERACODE_API_KEY_ID\" \"$VERACODE_API_KEY_SECRET\" > \"{cache}/home/.veracode/credentials\" && HOME=\"{cache}/home\" java -jar \"{veracodePipelineScan}\" --file \"{veracodeArtifact}\" --json_output_file \"{out}\"; s=$?; rm -f \"{cache}/home/.veracode/credentials\"; exit $s",
+      "output": "{out}",
+      "parse": "module:{packs}/commercial/parsers/veracode-pipeline.mjs",
+      "sample": "{packs}/commercial/parsers/veracode-sample.json",
+      "scope": "repo",
+      "baseline": "merge-base",
+      "okExit": [
+        0
+      ],
+      "timeoutSec": 3600,
+      "lens": "security",
+      "severity": {
+        "critical": "blocking",
+        "high": "blocking",
+        "medium": "major",
+        "low": "minor",
+        "info": "minor"
+      },
+      "commercial": {
+        "vendor": "Veracode",
+        "product": "Veracode Pipeline Scan",
+        "modes": [
+          "local",
+          "server"
+        ],
+        "tokenEnv": "VERACODE_API_KEY_SECRET",
+        "otherEnv": [
+          "VERACODE_API_KEY_ID"
+        ],
+        "check": "Veracode",
+        "jobs": [
+          "sast"
+        ],
+        "vars": {
+          "veracodePipelineScan": "the path of pipeline-scan.jar on the runner",
+          "veracodeArtifact": "the built artifact to scan (the build must run first)"
+        },
+        "server": {
+          "adapter": "check-only"
+        },
+        "verified": false,
+        "verifiedNote": "Unverified. Parameters (--file, --json_output_file, default results.json) from the Pipeline Scan parameters page; credentials go in a credentials file the definition writes from the environment for the scan's own HOME and deletes afterwards (printf is a shell builtin, so the values never appear on a command line). No public schema of results.json was found: the parser reads the 0-5 severity scale Veracode's SARIF converter documents and the fields findings[].severity, cwe_id, files.source_file.file/line. Pipeline Scan's exit code counts flaws, so a missing report, not the exit code, is the failure signal.",
+        "docs": [
+          "https://docs.veracode.com/r/r_pipeline_scan_commands",
+          "https://docs.veracode.com/r/t_run_pipeline_scan",
+          "https://hub.docker.com/r/veracode/pipeline-scan",
+          "https://github.com/veracode/veracode-pipeline-scan-results-to-sarif"
+        ],
+        "docsRead": "2026-11-17"
+      }
+    }
+  }
+}

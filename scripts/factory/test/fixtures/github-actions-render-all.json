@@ -1,0 +1,46 @@
+{
+  ".github/actions/setup-agent-cli/action.yml": {
+    "kind": "file",
+    "sha": "2bf9045211ea34b9"
+  },
+  ".github/actions/setup-factory/action.yml": {
+    "kind": "file",
+    "sha": "ce3ac79fe3144cbf"
+  },
+  ".github/workflows/factory-board-epic-assign.yml": {
+    "kind": "file",
+    "sha": "089c9152d2223115"
+  },
+  ".github/workflows/factory-board-escalation-resolve.yml": {
+    "kind": "file",
+    "sha": "088e2ba93d398f11"
+  },
+  ".github/workflows/factory-feature-verification-check.yml": {
+    "kind": "file",
+    "sha": "b4af01705cb1bb8a"
+  },
+  ".github/workflows/factory-gate.yml": {
+    "kind": "file",
+    "sha": "cd7c2e605a554b86"
+  },
+  ".github/workflows/factory-graphify-cache-prune.yml": {
+    "kind": "file",
+    "sha": "3a00614c1fee5f15"
+  },
+  ".github/workflows/factory-pr-check.yml": {
+    "kind": "file",
+    "sha": "1e9f7341f65096da"
+  },
+  ".github/workflows/factory-pr-demo-video.yml": {
+    "kind": "file",
+    "sha": "849b54b8c7c02d4d"
+  },
+  ".github/workflows/factory-retro.yml": {
+    "kind": "file",
+    "sha": "e338c7b288221b5e"
+  },
+  ".github/workflows/factory-review-quorum.yml": {
+    "kind": "file",
+    "sha": "572c9d880231490d"
+  }
+}

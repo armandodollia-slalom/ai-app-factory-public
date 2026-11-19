@@ -1,0 +1,71 @@
+{
+  "$comment": "Language servers of this pack. `config` is the fragment `factory init` merges into the app repo's .factory/config.json (lsp.servers entries, see docs/code-intelligence.md for every field). `optional` holds further fragments to merge by hand. `install` says how to get each server's binary, per OS (`all` = every OS); `factory lsp setup` prints these lines for a server it cannot find. `verified` says whether this file was proven by running the server through the factory or written from the server's documentation.",
+  "verified": {
+    "status": "executed",
+    "on": "macOS arm64, node 20, pyright 1.1.414 from npm, 2026-11-12",
+    "how": "factory lsp check on a scratch package (hover, definition, references, diagnostics). The basedpyright alternative was not run."
+  },
+  "config": {
+    "lsp": {
+      "servers": [
+        {
+          "id": "python",
+          "extensions": [
+            ".py",
+            ".pyi"
+          ],
+          "languageIds": [
+            "python"
+          ],
+          "command": "pyright-langserver",
+          "args": [
+            "--stdio"
+          ]
+        }
+      ]
+    }
+  },
+  "optional": {
+    "basedpyright": {
+      "config": {
+        "lsp": {
+          "servers": [
+            {
+              "id": "python",
+              "extensions": [
+                ".py",
+                ".pyi"
+              ],
+              "languageIds": [
+                "python"
+              ],
+              "command": "basedpyright-langserver",
+              "args": [
+                "--stdio"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "leased": {
+    "python": "no: one node process whose memory follows the files it analyses. Set \"leased\": true in the app repo for a very large codebase."
+  },
+  "install": {
+    "python": {
+      "all": [
+        "npm install --save-dev pyright@1.1.414   # in the app repository (found in node_modules/.bin), or",
+        "pip install pyright==1.1.414   # into the project's virtualenv; add its bin folder to project.toolPaths, or",
+        "pip install basedpyright==1.40.2   # for the optional basedpyright fragment (basedpyright-langserver)"
+      ]
+    }
+  },
+  "requires": [
+    "node 20+ for the npm package (the pip package downloads its own node)",
+    "the project's virtualenv, named in pyrightconfig.json or [tool.pyright] (venvPath, venv), or imports report as unresolved"
+  ],
+  "notes": [
+    "Pyright reads its settings from pyrightconfig.json or pyproject.toml in the repository; nothing is passed on the command line."
+  ]
+}

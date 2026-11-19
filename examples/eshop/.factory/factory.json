@@ -1,0 +1,12 @@
+{
+  "source": "https://github.com/OWNER/ai-app-factory",
+  "version": "0.1.0",
+  "features": {
+    "lsp": true,
+    "graphify": true,
+    "ci": true,
+    "agentFiles": true,
+    "gitHooks": true,
+    "demoVideo": true
+  }
+}

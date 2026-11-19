@@ -1,0 +1,88 @@
+{
+  "source": "dogfood C16 held-out round: the review council's decisions (metrics decisions.jsonl.d, stages council-review and review) of the feature ticket that ended unresolved; member fields and finding items copied as recorded",
+  "rounds": [
+    {
+      "round": 1,
+      "members": [
+        {
+          "name": "opus",
+          "cli": "claude",
+          "lens": "acceptance",
+          "score": 9,
+          "verdict": "APPROVED",
+          "findings": 0
+        },
+        {
+          "name": "sol",
+          "cli": "codex",
+          "lens": "correctness",
+          "score": 8,
+          "verdict": "CHANGES_REQUESTED",
+          "findings": 2
+        }
+      ],
+      "items": [
+        {
+          "members": [
+            "sol"
+          ],
+          "lens": "correctness",
+          "severity": "blocking",
+          "action": "fix",
+          "file": "src/Basket.API/Proto/basket.proto",
+          "line": 24,
+          "reason": "Catalog prices are unrestricted decimals, but the new double field cannot preserve them. An unchanged price of 19.99000000000001 round-trips as 19.99, causing the cart to display a false 'Price changed: was $19.99' note. Larger two-decimal prices can also lose cents. This violates AC1 and AC2.",
+          "fix": "Use an optional representation that preserves the catalog decimal exactly, such as an invariant decimal string, and update both mappings while retaining absent-field compatibility. Do not introduce a narrower catalog price limit."
+        },
+        {
+          "members": [
+            "sol"
+          ],
+          "lens": "correctness",
+          "severity": "blocking",
+          "action": "fix",
+          "file": "src/Basket.API/Grpc/BasketService.cs",
+          "line": 112,
+          "reason": "The newly accepted protobuf double can contain NaN, infinity, or values outside decimal range. The unchecked cast throws OverflowException, so an authenticated UpdateBasket request produces an unhandled gRPC server error instead of a client validation response.",
+          "fix": "Validate and convert the optional price before persistence, returning RpcException with StatusCode.InvalidArgument for malformed or unrepresentable values. Preserve acceptance of omitted prices. Apply equivalent parse validation if replacing the wire representation."
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "members": [
+        {
+          "name": "opus",
+          "cli": "claude",
+          "lens": "acceptance",
+          "score": 9,
+          "verdict": "APPROVED",
+          "findings": 1
+        },
+        {
+          "name": "sol",
+          "cli": "codex",
+          "lens": "correctness",
+          "score": 8,
+          "verdict": "CHANGES_REQUESTED",
+          "findings": 1
+        }
+      ],
+      "items": [
+        {
+          "members": [
+            "opus",
+            "sol"
+          ],
+          "lens": "acceptance",
+          "severity": "blocking",
+          "action": "fix",
+          "file": "src/Basket.API/Grpc/BasketService.cs",
+          "line": 120,
+          "reason": "Adds an error response no ticket line names; it is validation of the new input field and does not affect existing callers.",
+          "fix": "None required; keep it as validation of the new field."
+        }
+      ]
+    }
+  ]
+}

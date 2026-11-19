@@ -1,0 +1,77 @@
+# Profile: what this codebase looks like. Rules and validators never hard-code paths, project names or
+# datastores; they ask the profile. Fill it from the architecture docs and the code layout
+# (the author-architecture-policy skill walks through it), then run `arch.py selfcheck`.
+kind: Profile
+schema_version: 1
+id: default
+# Main language(s), informational: rust, java, python, go, typescript, csharp, mixed, ...
+language: mixed
+description: >
+  Describe the architecture in two or three sentences: the services or modules, how they talk to each other
+  and who owns which data.
+# File extensions that count as source, informational.
+source_extensions: []
+# Line prefixes that mark a comment in this codebase. Text validators skip matches on comment lines; with an
+# empty list nothing is skipped. Examples: ["//", "/*", "*"] for C-like languages, ["#"] for Python or Ruby.
+comment_prefixes: []
+# Globs of the files that define a buildable unit. Selfcheck fails when one of them lies outside every project
+# below, so a new module cannot be added without classifying it.
+# Examples: ["**/Cargo.toml"], ["**/pom.xml"], ["**/package.json"], ["**/go.mod"], ["**/*.csproj"].
+project_manifests: []
+# Paths no rule ever looks at: build output, vendored and generated trees, the factory's own folder.
+global_exclude:
+  - ".factory/**"
+  - "**/node_modules/**"
+  - "**/target/**"
+  - "**/build/**"
+  - "**/dist/**"
+  - "**/vendor/**"
+
+# One entry per buildable unit (crate, Maven module, package, Go module, .NET project, ...).
+#   name:    how the build system names it (used in messages, by name-based dependency references, and to
+#            match coverage packages)
+#   path:    its directory, relative to the repository root
+#   type:    its role; your own vocabulary, rules select on it with applicability.project_types
+#            (for example api, web, worker, library, cli, test)
+#   service: the service (below) it belongs to; omit for shared libraries
+#   layer:   its layer; must be a key of layer_dependencies
+# projects:
+#   - { name: orders-api,    path: services/orders/api,    type: api,     service: orders, layer: presentation }
+#   - { name: orders-domain, path: services/orders/domain, type: library, service: orders, layer: domain }
+#   - { name: common,        path: libs/common,            type: library, layer: shared }
+#   - { name: orders-tests,  path: services/orders/tests,  type: test,    layer: test }
+projects: []
+
+# One entry per independently owned part of the system (a service, a bounded context, a deployable).
+#   id:              referenced by projects[].service
+#   owns_datastores: names of the databases, schemas, buckets or caches only this service may connect to
+#   traits:          facts rules can select on with applicability.service_traits; your own vocabulary
+#                    (for example owns_database, exposes_http_api, publishes_events, consumes_events)
+# services:
+#   - { id: orders,  owns_datastores: [ordersdb],  traits: [owns_database, exposes_http_api] }
+#   - { id: billing, owns_datastores: [billingdb], traits: [owns_database, consumes_events] }
+services: []
+
+# Datastore names that are not owned by one service (a shared broker, a cache used through an abstraction).
+shared_datastore_names: []
+
+# Which layers a layer may depend on, as project references inside this repository.
+#   "same_service:<layer>" a project of that layer;  "shared" a project whose layer is shared;  "*" anything.
+# layer_dependencies:
+#   domain: []
+#   application: ["same_service:domain", "shared"]
+#   infrastructure: ["same_service:domain", "same_service:application", "shared"]
+#   presentation: ["same_service:application", "shared"]
+#   shared: ["shared"]
+#   test: ["*"]
+layer_dependencies: {}
+
+# Third-party packages a layer must not depend on (a name, or a prefix ending at a separator).
+# forbidden_packages_by_layer:
+#   domain: [sqlx, diesel, axum]
+forbidden_packages_by_layer: {}
+
+# Where the tests of a source tree live. A change under `source` must come with a change under one of `tests`.
+# test_mapping:
+#   - { source: services/orders/api, tests: ["services/orders/tests/**"] }
+test_mapping: []

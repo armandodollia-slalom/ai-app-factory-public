@@ -1,0 +1,9 @@
+# Used by `npm run lint:md` (locally and in .github/workflows/lint.yml) and by editors
+.dotnet/
+.github/skills/graphify/
+# Generated locally (gitignored)
+node_modules/
+artifacts/
+graphify-out/
+playwright-report/
+test-results/

@@ -1,0 +1,45 @@
+{
+  "$comment": "Language servers of this pack. `config` is the fragment `factory init` merges into the app repo's .factory/config.json (lsp.servers entries, see docs/code-intelligence.md for every field). `optional` holds further fragments to merge by hand. `install` says how to get each server's binary, per OS (`all` = every OS); `factory lsp setup` prints these lines for a server it cannot find. `verified` says whether this file was proven by running the server through the factory or written from the server's documentation.",
+  "verified": {
+    "status": "executed",
+    "on": "macOS arm64, go 1.26.2, gopls v0.24.0, 2026-11-12",
+    "how": "factory lsp check on a scratch module (hover, definition, references, diagnostics), gopls found through project.toolPaths."
+  },
+  "config": {
+    "lsp": {
+      "servers": [
+        {
+          "id": "go",
+          "extensions": [
+            ".go"
+          ],
+          "languageIds": [
+            "go"
+          ],
+          "command": "gopls",
+          "args": [
+            "serve"
+          ]
+        }
+      ]
+    }
+  },
+  "leased": {
+    "go": "no for one module of ordinary size. Set \"leased\": true in the app repo for a large monorepo, where gopls holds the type information of every package (several GB)."
+  },
+  "install": {
+    "go": {
+      "all": [
+        "go install golang.org/x/tools/gopls@v0.24.0   # installs to $(go env GOPATH)/bin"
+      ]
+    }
+  },
+  "requires": [
+    "the go toolchain on PATH",
+    "$(go env GOPATH)/bin (usually ~/go/bin) in project.toolPaths"
+  ],
+  "notes": [
+    "gopls needs go.mod (or go.work) at or above the opened file; a repository with several modules and no go.work is served one module at a time.",
+    "Optional prepare: \"prepare\": {\"command\": \"go\", \"args\": [\"mod\", \"download\"], \"label\": \"downloading modules\"} (only runs for leased servers)."
+  ]
+}

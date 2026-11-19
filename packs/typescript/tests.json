@@ -1,0 +1,117 @@
+{
+  "$comment": "Test runners of this pack, for `precheck.testRunners` in .factory/config.json (schema: scripts/feature-verification/lib/runners.mjs). Refer to one with \"<pack>/<name>\" or to all with \"<pack>\"; runners are tried in this order. `verified` says whether the run command was executed against a sample project when the pack was written.",
+  "runners": [
+    {
+      "name": "vitest",
+      "description": "Vitest: packages with a vitest config.",
+      "match": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.test.js",
+        "**/*.test.jsx",
+        "**/*.test.mjs",
+        "**/__tests__/**"
+      ],
+      "exclude": [
+        "**/node_modules/**"
+      ],
+      "discover": {
+        "marker": [
+          "vitest.config.*",
+          "vitest.workspace.*"
+        ],
+        "required": true
+      },
+      "run": [
+        "npx",
+        "vitest",
+        "run",
+        "--root",
+        "{unit}",
+        "-t",
+        "{casePrefix}"
+      ],
+      "storyTag": {
+        "pattern": "{casePrefix}\\d+",
+        "note": "put the case id ({case}) in each test title"
+      },
+      "lang": "ts",
+      "verified": false,
+      "runAll": [
+        "npx",
+        "vitest",
+        "run",
+        "--root",
+        "{unit}"
+      ]
+    },
+    {
+      "name": "jest",
+      "description": "Jest: packages with a jest config.",
+      "match": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.test.js",
+        "**/*.test.jsx",
+        "**/*.test.mjs",
+        "**/__tests__/**"
+      ],
+      "exclude": [
+        "**/node_modules/**"
+      ],
+      "discover": {
+        "marker": [
+          "jest.config.*"
+        ],
+        "required": true
+      },
+      "run": [
+        "npx",
+        "jest",
+        "--rootDir",
+        "{unit}",
+        "-t",
+        "{casePrefix}",
+        "{files}"
+      ],
+      "storyTag": {
+        "pattern": "{casePrefix}\\d+",
+        "note": "put the case id ({case}) in each test title"
+      },
+      "lang": "ts",
+      "verified": false,
+      "runAll": [
+        "npx",
+        "jest",
+        "--rootDir",
+        "{unit}"
+      ]
+    },
+    {
+      "name": "node-test",
+      "description": "Node's built-in test runner, for packages with neither.",
+      "match": [
+        "**/*.test.mjs",
+        "**/*.test.js",
+        "**/*.test.cjs"
+      ],
+      "exclude": [
+        "**/node_modules/**"
+      ],
+      "run": [
+        "node",
+        "--test",
+        "--test-name-pattern",
+        "{casePrefix}",
+        "{files}"
+      ],
+      "storyTag": {
+        "pattern": "{casePrefix}\\d+",
+        "note": "put the case id ({case}) in each test title"
+      },
+      "lang": "js",
+      "verified": true,
+      "verifiedNote": "Executed with node 20 on a sample file: the name pattern ran TC-SHOP-1-01 and skipped TC-SHOP-12-01."
+    }
+  ]
+}

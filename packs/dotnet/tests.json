@@ -1,0 +1,113 @@
+{
+  "$comment": "Test runners of this pack, for `precheck.testRunners` in .factory/config.json (schema: scripts/feature-verification/lib/runners.mjs). Refer to one with \"<pack>/<name>\" or to all with \"<pack>\"; runners are tried in this order. `verified` says whether the run command was executed against a sample project when the pack was written.",
+  "runners": [
+    {
+      "name": "mstest",
+      "description": "MSTest (MSTest.Sdk or the MSTest packages): projects whose project file mentions MSTest.",
+      "match": [
+        ".cs"
+      ],
+      "roots": [
+        "tests",
+        "test"
+      ],
+      "testFile": "\\[\\s*(Fact|Theory|TestMethod|DataTestMethod)\\b",
+      "discover": {
+        "marker": [
+          "*.csproj"
+        ],
+        "required": true,
+        "contains": "MSTest"
+      },
+      "build": [
+        "dotnet",
+        "build",
+        "{unit}",
+        "--nologo",
+        "-v",
+        "quiet",
+        "--disable-build-servers"
+      ],
+      "run": [
+        "dotnet",
+        "test",
+        "--project",
+        "{unit}",
+        "--no-build",
+        "--filter",
+        "TestCategory={story}"
+      ],
+      "storyTag": {
+        "pattern": "TestCategory\\(\\s*\"{story}\"\\s*\\)",
+        "template": "[TestCategory(\"{story}\")]",
+        "caseTemplate": "[TestProperty(\"TestCase\", \"{case}\")]"
+      },
+      "lang": "csharp",
+      "verified": false,
+      "verifiedNote": "Commands are the ones the eShop pipeline ran before the extraction (dotnet test on Microsoft.Testing.Platform); not re-executed here.",
+      "runAll": [
+        "dotnet",
+        "test",
+        "--project",
+        "{unit}",
+        "--no-build"
+      ]
+    },
+    {
+      "name": "xunit",
+      "description": "xUnit v3 on Microsoft.Testing.Platform: every other .NET test project.",
+      "match": [
+        ".cs"
+      ],
+      "roots": [
+        "tests",
+        "test"
+      ],
+      "testFile": "\\[\\s*(Fact|Theory|TestMethod|DataTestMethod)\\b",
+      "discover": {
+        "marker": [
+          "*.csproj"
+        ],
+        "fallbackDepth": 2
+      },
+      "build": [
+        "dotnet",
+        "build",
+        "{unit}",
+        "--nologo",
+        "-v",
+        "quiet",
+        "--disable-build-servers"
+      ],
+      "run": [
+        "dotnet",
+        "test",
+        "--project",
+        "{unit}",
+        "--no-build",
+        "--",
+        "--filter-trait",
+        "Story={story}"
+      ],
+      "storyTag": {
+        "pattern": "Trait\\(\\s*\"Story\"\\s*,\\s*\"{story}\"\\s*\\)",
+        "template": "[Trait(\"Story\", \"{story}\")]",
+        "caseTemplate": "[Trait(\"TestCase\", \"{case}\")]"
+      },
+      "lang": "csharp",
+      "verified": false,
+      "verifiedNote": "Commands are the ones the eShop pipeline ran before the extraction; not re-executed here.",
+      "runAll": [
+        "dotnet",
+        "test",
+        "--project",
+        "{unit}",
+        "--no-build"
+      ],
+      "sharedFixture": {
+        "perClass": "IClassFixture\\s*<\\s*([A-Za-z_][\\w.]*)\\s*>",
+        "note": "declare one [CollectionDefinition(Name)] class implementing ICollectionFixture<TheFixture>, put [Collection(Name)] on every class that uses the fixture, and remove their IClassFixture<TheFixture>; make the tests independent of each other's data (unique ids, restore shared rows)"
+      }
+    }
+  ]
+}

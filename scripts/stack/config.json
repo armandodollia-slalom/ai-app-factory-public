@@ -1,0 +1,31 @@
+{
+  "poolSize": 2,
+  "maxSlot": 8,
+  "slotStride": 1000,
+  "leaseTtlMinutes": 240,
+  "stackMemoryMb": 2000,
+  "composeProject": null,
+  "imageTag": null,
+  "stateDir": ".factory/state/teststack",
+  "composeFile": ".factory/stack/docker-compose.yaml",
+  "envTemplate": null,
+  "env": {},
+  "ports": {},
+  "urls": {},
+  "baseUrl": null,
+  "services": {},
+  "resolver": null,
+  "rebuildAll": [],
+  "build": {
+    "all": null,
+    "service": null,
+    "serviceNext": null,
+    "env": {},
+    "envFile": null,
+    "builtTag": "latest",
+    "inputs": ["."],
+    "exclude": []
+  },
+  "publish": null,
+  "publishCheck": null
+}

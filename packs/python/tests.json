@@ -1,0 +1,37 @@
+{
+  "$comment": "Test runners of this pack, for `precheck.testRunners` in .factory/config.json (schema: scripts/feature-verification/lib/runners.mjs). Refer to one with \"<pack>/<name>\" or to all with \"<pack>\"; runners are tried in this order. `verified` says whether the run command was executed against a sample project when the pack was written.",
+  "runners": [
+    {
+      "name": "pytest",
+      "description": "pytest. Function names cannot hold a dash, so the story is selected with -k on a name prefix.",
+      "match": [
+        "**/test_*.py",
+        "**/*_test.py"
+      ],
+      "run": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "-k",
+        "{caseIdent}",
+        "{files}"
+      ],
+      "storyTag": {
+        "pattern": "def\\s+test_{caseIdent}\\d+",
+        "template": "a test function named `test_{caseIdent}NN_<what_it_checks>`",
+        "caseTemplate": "a `# {case}` comment on the line above the function"
+      },
+      "lang": "python",
+      "verified": false,
+      "verifiedNote": "pytest is not installed on the machine the pack was written on.",
+      "runAll": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "{unit}"
+      ]
+    }
+  ]
+}

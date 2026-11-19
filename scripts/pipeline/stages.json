@@ -1,0 +1,98 @@
+{
+  "stages": [
+    {
+      "name": "implement",
+      "description": "Implements every story in a folder headlessly: a worktree and branch per story, the implementer agent, then the review and feature verification stages",
+      "cli": "scripts/implement/implement.mjs",
+      "hooks": [
+        "session-start"
+      ],
+      "gitHooks": [],
+      "commands": [
+        "status",
+        "resume",
+        "metrics"
+      ]
+    },
+    {
+      "name": "review",
+      "description": "Architecture review of the implementation, looping with the implementation agent until approved",
+      "cli": "scripts/review/review.mjs",
+      "hooks": [
+        "story-start",
+        "stop",
+        "session-start"
+      ],
+      "gitHooks": [],
+      "commands": [
+        "status",
+        "resume",
+        "metrics"
+      ]
+    },
+    {
+      "name": "feature-verification",
+      "description": "Verified test plans from stories and verified automated tests once the review approves",
+      "cli": "scripts/feature-verification/feature-verification.mjs",
+      "hooks": [
+        "story-start",
+        "stop",
+        "session-start"
+      ],
+      "gitHooks": [
+        "post-commit",
+        "post-merge",
+        "pre-push"
+      ],
+      "commands": [
+        "status",
+        "resume",
+        "metrics"
+      ]
+    },
+    {
+      "name": "pr-check",
+      "description": "Adversarial PR check against the story (acceptance criteria, flow, UI design, style, video): from the Stop hook once feature verification has verified the tests (findings go back to the agent), or on demand with a fix loop to 10/10",
+      "cli": "scripts/pr-check/pr-check.mjs",
+      "hooks": [
+        "story-start",
+        "stop",
+        "session-start"
+      ],
+      "gitHooks": [],
+      "commands": [
+        "status",
+        "resume",
+        "metrics"
+      ]
+    },
+    {
+      "name": "board",
+      "description": "Moves the story's card on the GitHub Project board as pipeline events happen (In Progress, Testing, back to In Progress on a product bug, Pending Review with evidence, Failed) and keeps its epic in step",
+      "cli": "scripts/board/board.mjs",
+      "hooks": [
+        "story-start",
+        "stop"
+      ],
+      "gitHooks": [],
+      "commands": [
+        "status"
+      ]
+    },
+    {
+      "name": "retro",
+      "description": "Lessons for this repository's agents and proposed fixes to the factory, from the agents' logged decisions (this checkout's and the metrics store's)",
+      "cli": "scripts/retro/retro.mjs",
+      "hooks": [
+        "session-start"
+      ],
+      "gitHooks": [
+        "post-merge"
+      ],
+      "commands": [
+        "status",
+        "resume"
+      ]
+    }
+  ]
+}

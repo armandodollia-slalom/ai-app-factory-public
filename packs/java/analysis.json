@@ -1,0 +1,36 @@
+{
+  "$comment": "Static analysis for Java (docs/ai-pipeline/analysis.md). SpotBugs (LGPL-2.1) with FindSecBugs (LGPL-3.0): both are run, never shipped (execute-only use). Needs a build and the jars on the machine: off by default, declared, not exercised end to end.",
+  "tools": {
+    "spotbugs-findsecbugs": {
+      "enabled": false,
+      "description": "SpotBugs with the FindSecBugs plugin on the built classes (needs a build)",
+      "licence": "LGPL-2.1-only",
+      "when": [
+        "**/pom.xml",
+        "**/build.gradle",
+        "**/build.gradle.kts"
+      ],
+      "run": "spotbugs -textui -quiet -effort:max -pluginList \"$FINDSECBUGS_JAR\" -sarif={out} target/classes",
+      "output": "{out}",
+      "parse": "sarif",
+      "scope": "changed-files",
+      "baseline": "merge-base",
+      "block": {
+        "levels": [
+          "error"
+        ]
+      },
+      "lens": "security",
+      "okExit": [
+        0,
+        1
+      ]
+    }
+  },
+  "suppressions": [
+    {
+      "id": "suppress-warnings",
+      "pattern": "@SuppressWarnings|@SuppressFBWarnings"
+    }
+  ]
+}

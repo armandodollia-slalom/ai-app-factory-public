@@ -1,0 +1,71 @@
+{
+  "id": "dotnet",
+  "name": ".NET",
+  "extensions": [
+    ".cs",
+    ".fs",
+    ".vb",
+    ".razor",
+    ".cshtml"
+  ],
+  "unitFiles": [
+    "*.csproj",
+    "*.fsproj",
+    "*.vbproj"
+  ],
+  "rootFiles": [
+    "*.sln",
+    "*.slnx",
+    "*.slnf",
+    "global.json",
+    "Directory.Build.props"
+  ],
+  "toolPaths": [
+    "~/.dotnet",
+    "~/.dotnet/tools"
+  ],
+  "testHints": {
+    "dir": "(^|/)tests?(/|$)|\\.(Unit|Functional|Integration)?Tests?$",
+    "content": "Microsoft\\.NET\\.Test\\.Sdk|xunit|MSTest|NUnit"
+  },
+  "frontendHints": {
+    "content": "Microsoft\\.NET\\.Sdk\\.(Razor|BlazorWebAssembly)|Microsoft\\.AspNetCore\\.Components",
+    "files": [
+      "*.razor",
+      "*.cshtml"
+    ]
+  },
+  "ignore": [
+    "bin",
+    "obj"
+  ],
+  "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers).",
+  "hostHints": {
+    "content": "Aspire\\.AppHost\\.Sdk"
+  },
+  "contractHints": {
+    "content": "\\brecord\\s+\\w*IntegrationEvent\\b[^;{]*:\\s*IntegrationEvent\\b|\\bclass\\s+\\w*IntegrationEvent\\b[^;{]*:\\s*IntegrationEvent\\b",
+    "name": "Integration events"
+  },
+  "reviewGate": {
+    "$comment": "Drafted into implement.reviewGate by factory init: build files every project builds with are shared; EF Core migrations change a schema in production, so they always get the High floor.",
+    "sharedPaths": {
+      "Build": [
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "Directory.Packages.props",
+        "global.json",
+        "nuget.config"
+      ]
+    },
+    "floorPaths": [
+      "**/Migrations/**"
+    ]
+  },
+  "referenceHints": {
+    "pattern": "ProjectReference\\s+Include\\s*=\\s*\"(?<ref>[^\"]+)\""
+  },
+  "executableHints": {
+    "content": "Microsoft\\.NET\\.Sdk\\.(Web|Worker)|<OutputType[^>]*>\\s*(Exe|WinExe)\\s*<|Aspire\\.AppHost\\.Sdk"
+  }
+}

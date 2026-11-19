@@ -1,0 +1,98 @@
+# Adversarial AI review of a pull request against its story (acceptance criteria, flow, UI design, code
+# style, video evidence). Opt-in: the `ai-pr-check` label on the pull request (add this pipeline as an
+# optional, automatic build validation: it exits early without the label; queue it again after adding the
+# label), or run it by hand with the `pr` parameter. Report only: the scores and findings are posted as a
+# pull request comment. The run's records are committed back to the source branch so the retro learns from
+# them once it merges.
+trigger: none
+pr:
+  branches:
+    include: ['*']
+
+parameters:
+- name: pr
+  displayName: Pull request number (manual runs)
+  type: string
+  default: ' '
+- name: story
+  displayName: Story key, when the pull request does not name it
+  type: string
+  default: ' '
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  FACTORY_CI: azure-pipelines
+
+jobs:
+- job: pr_check
+  displayName: PR check
+  timeoutInMinutes: 120
+  # Never for a pull request from a fork: the job holds the agent's credential.
+  condition: and(succeeded(), ne(variables['System.PullRequest.IsFork'], 'True'))
+  steps:
+  - template: templates/factory-setup.yml
+  - bash: |
+      for v in $(env | sed -n 's/^\([A-Z_][A-Z0-9_]*\)=\$(.*/\1/p'); do unset "$v"; done
+      pr="$(echo "$PARAM_PR" | xargs)"
+      if [ -z "$pr" ]; then
+        pr="${SYSTEM_PULLREQUEST_PULLREQUESTID:-}"
+        # Labels of an Azure Repos pull request (the build service reads them with its own token).
+        labels=$(curl -fsS -H "Authorization: Bearer $AZURE_DEVOPS_TOKEN" "${SYSTEM_COLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${pr}/labels?api-version=7.1" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log((JSON.parse(s).value||[]).map(l=>l.name).join(',')))" || true)
+        case ",$labels," in *,ai-pr-check,*) ;; *) echo "No ai-pr-check label on pull request $pr; nothing to do."; pr= ;; esac
+      fi
+      if [ -n "$pr" ] && git log -1 --format=%s "$(git rev-parse -q --verify HEAD^2 || echo HEAD)" | grep -q '^Record PR check results'; then echo "Last commit is the PR check's own records; nothing to check."; pr=; fi
+      echo "##vso[task.setvariable variable=PR_NUMBER]$pr"
+    displayName: Should the check run
+    env:
+      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
+      PARAM_PR: ${{ parameters.pr }}
+  - template: templates/factory-agent-cli.yml
+  - bash: |
+      for v in $(env | sed -n 's/^\([A-Z_][A-Z0-9_]*\)=\$(.*/\1/p'); do unset "$v"; done
+      sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      mkdir -p "$AGENT_TEMPDIRECTORY/metrics-before"
+      for f in .factory/metrics/*.jsonl; do [ -f "$f" ] && wc -l < "$f" > "$AGENT_TEMPDIRECTORY/metrics-before/$(basename "$f")"; done
+      args=(run --pr "$PR_NUMBER" --no-fix --comment --json)
+      story="$(echo "$PARAM_STORY" | xargs)"
+      if [ -n "$story" ]; then args+=(--story "$story"); fi
+      factory pr-check "${args[@]}" > result.json || status=$?
+      cat result.json
+      exit "${status:-0}"
+    displayName: Run the PR check
+    condition: and(succeeded(), ne(variables.PR_NUMBER, ''), eq(variables.FACTORY_AGENT_READY, 'true'))
+    env:
+      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
+      PARAM_STORY: ${{ parameters.story }}
+      PIPELINE_AGENT_CLI: $(PIPELINE_AGENT_CLI)
+      PIPELINE_AGENT_CMD: $(PIPELINE_AGENT_CMD)
+      PIPELINE_AGENT_API_KEY: $(PIPELINE_AGENT_API_KEY)
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+      COPILOT_GITHUB_TOKEN: $(COPILOT_GITHUB_TOKEN)
+      CODEX_API_KEY: $(OPENAI_API_KEY)
+      # factory:secrets
+  - bash: |
+      head="${SYSTEM_PULLREQUEST_SOURCEBRANCH#refs/heads/}"
+      if [ -z "$head" ] || [ "$SYSTEM_PULLREQUEST_ISFORK" = True ]; then echo "Manual run or fork: records are in the artifact only."; exit 0; fi
+      git fetch --quiet origin "$head"
+      git worktree add --quiet "$AGENT_TEMPDIRECTORY/pr-head" FETCH_HEAD
+      for f in .factory/metrics/*.jsonl; do
+        [ -f "$f" ] || continue
+        before=$(cat "$AGENT_TEMPDIRECTORY/metrics-before/$(basename "$f")" 2>/dev/null || echo 0)
+        tail -n +"$((before + 1))" "$f" >> "$AGENT_TEMPDIRECTORY/pr-head/$f"
+      done
+      cd "$AGENT_TEMPDIRECTORY/pr-head"
+      if [ -z "$(git status --porcelain -- .factory/metrics)" ]; then echo "No new records."; exit 0; fi
+      git config user.name "$BUILD_REQUESTEDFOR"
+      git config user.email "${FACTORY_GIT_EMAIL:-factory-bot@noreply.invalid}"
+      git add .factory/metrics/*.jsonl
+      git commit --quiet -m "Record PR check results for !$PR_NUMBER [skip ci]"
+      git push --quiet origin "HEAD:$head" || echo "##vso[task.logissue type=warning]Could not push the records to $head (the branch moved); they are in the artifact."
+    displayName: Commit the run's records to the pull request branch
+    condition: and(always(), ne(variables.PR_NUMBER, ''), eq(variables.FACTORY_AGENT_READY, 'true'))
+  - publish: .factory/state/pr-check
+    artifact: pr-check-$(System.JobAttempt)
+    displayName: Upload the run
+    condition: and(always(), ne(variables.PR_NUMBER, ''), eq(variables.FACTORY_AGENT_READY, 'true'))
+    continueOnError: true

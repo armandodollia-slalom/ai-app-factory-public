@@ -1,0 +1,42 @@
+{
+  "id": "typescript",
+  "name": "TypeScript / JavaScript",
+  "extensions": [
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs"
+  ],
+  "unitFiles": [
+    "package.json"
+  ],
+  "rootFiles": [
+    "tsconfig.json",
+    "pnpm-workspace.yaml"
+  ],
+  "toolPaths": [],
+  "testHints": {
+    "dir": "(^|/)(tests?|__tests__|e2e|spec)(/|$)",
+    "content": "\"(jest|vitest|mocha|@playwright/test|cypress)\""
+  },
+  "frontendHints": {
+    "content": "\"(react|vue|svelte|@angular/core|next|nuxt|solid-js|@sveltejs/kit|astro)\"",
+    "files": [
+      "*.tsx",
+      "*.jsx",
+      "*.vue",
+      "*.svelte"
+    ]
+  },
+  "ignore": [
+    "node_modules",
+    "dist",
+    "build",
+    ".next"
+  ],
+  "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers)."
+}

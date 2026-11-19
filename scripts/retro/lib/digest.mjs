@@ -1,0 +1,134 @@
+// The factory retro: a bounded digest of the decision log (.factory/metrics/decisions.jsonl) since the
+// last lessons run, so the retro agent can see *why* agents decided what they did and propose
+// improvements anywhere in the factory (agent definitions, docs, story template, policies), not
+// only the per-agent lessons files.
+import { git, revExists } from '../../pipeline/lib/git.mjs';
+import { reviewDigest } from '../../review-gate/lib/review-retro.mjs';
+import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
+
+// The factory's own commits since the retro window opened (the installed engine is a git checkout of its
+// release), so the retro can tell a finding a later release already fixed from one still open (council C1:
+// the retro proposed a fix for nested graphify output that 0.2.21 had already shipped).
+export function factoryChanges(since, root = INSTALL_ROOT, max = 60) {
+  const args = ['log', '--no-merges', `--max-count=${max}`, '--format=%h%x09%cI%x09%s', ...(since ? [`--since=${since}`] : [])];
+  const r = git(root, args);
+  if (r.status !== 0) return [];
+  return String(r.stdout).split('\n').filter(Boolean).map((l) => l.split('\t')).filter(([, , subject]) => subject && !/^release \d/.test(subject)).map(([sha, ts, subject]) => ({ sha, ts, subject }));
+}
+
+const take = (list, n) => list.slice(-n);
+const key = (...parts) => parts.map((p) => p ?? '').join('\u0000');
+
+function group(items, keyOf) {
+  const map = new Map();
+  for (const item of items) {
+    const k = keyOf(item);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(item);
+  }
+  return [...map.values()];
+}
+
+// Start of the retro window: the last lessons commit on the base branch, else `windowDays` ago.
+export function retroSince(config, now = Date.now()) {
+  const fallback = new Date(now - (config.lessons.retro?.windowDays ?? config.lessons.intervalDays) * 86_400_000).toISOString();
+  if (!revExists(config.root, config.baseRef)) return fallback;
+  const last = git(config.root, ['log', '-1', '--format=%cI', '--grep=Update agent lessons', config.baseRef]).stdout.trim();
+  return last ? new Date(last).toISOString() : fallback;
+}
+
+// Every decision in the window, grouped by the question it answers. Empty `counts` means nothing to review.
+// `outcomes` (decision-outcomes.jsonl) and `policy` ({ table, retro }: the review gate's approvals table and
+// its retro settings) add the review section: the review gate's pr-review records grouped by PR class.
+export function retroDigest(config, decisions, since, { outcomes = [], policy = null, prChecks = [], verifierRuns = [], implementRuns = [], escalations = [] } = {}) {
+  const n = config.lessons.examplesPerCategory;
+  const recent = decisions.filter((d) => !since || d.ts > since);
+  const of = (stage) => recent.filter((d) => d.stage === stage);
+
+  // Latest "## Why" per case, so later findings about a case can be read next to the reason it was written.
+  const why = new Map();
+  for (const d of of('plan')) for (const item of d.items ?? []) why.set(key(d.story, item.case), item.reason);
+  const withWhy = (story, item) => ({ story, case: item.case, why_written: why.get(key(story, item.case)) ?? null });
+
+  const plans = group(of('plan'), (d) => d.story).map((ds) => {
+    const last = ds.at(-1);
+    return { story: last.story, rounds: ds.length, cases: (last.items ?? []).length, summary: last.reason, excluded: last.excluded ?? [] };
+  });
+  const verifyGaps = of('plan-verify').flatMap((d) => (d.items ?? []).map((item) => ({ ...withWhy(d.story, item), category: item.category, subtype: item.subtype, reason: item.reason })));
+  const tracedToPlan = of('automation-verify').flatMap((d) =>
+    (d.items ?? []).filter((i) => i.root_stage === 'plan').map((item) => ({ ...withWhy(d.story, item), category: item.category, reason: item.reason })),
+  );
+  const bugs = of('automation').flatMap((d) => (d.items ?? []).map((item) => ({ ...withWhy(d.story, item), expected: item.expected, actual: item.actual, location: item.location, reason: item.reason })));
+
+  const findingGroups = (decisionsOf, keyOf) =>
+    group(
+      decisionsOf.flatMap((d) => (d.items ?? []).map((item) => ({ ...item, story: d.story, agent: d.agent, decision: d.decision }))),
+      keyOf,
+    )
+      .map((items) => ({
+        ...Object.fromEntries(Object.entries(items[0]).filter(([k]) => ['agent', 'category', 'subtype', 'rule', 'severity'].includes(k))),
+        count: items.length,
+        stories: new Set(items.map((i) => i.story)).size,
+        examples: take(items, n).map(({ story, case: c, file, line, reason, fix, location }) => ({ story, case: c, location: location ?? (file ? `${file}${line ? `:${line}` : ''}` : null), reason, fix })),
+      }))
+      .sort((a, b) => b.stories - a.stories || b.count - a.count);
+
+  const reviews = of('review');
+  const blocked = reviews.filter((d) => d.decision !== 'approved');
+  const digest = {
+    since,
+    counts: Object.fromEntries(group(recent, (d) => key(d.stage, d.decision)).map((ds) => [`${ds[0].stage}:${ds[0].decision}`, ds.length])),
+    // 1. Ticket to test cases: why the plan agent wrote (and left out) what it did, and how those cases fared.
+    plans: {
+      stories: take(plans, n * 2),
+      verifierGaps: findingGroups(of('plan-verify'), (i) => key(i.category, i.subtype)).slice(0, n * 2),
+      casesTracedBackToPlan: take(tracedToPlan, n * 2),
+      casesThatCaughtBugs: take(bugs.map(({ story, case: c, why_written }) => ({ story, case: c, why_written })), n * 2),
+      gapExamples: take(verifyGaps, n),
+    },
+    // 2. Why the architecture review blocked (or approved) the implementer.
+    review: {
+      blocked: findingGroups(blocked, (i) => key(i.agent, i.rule ?? i.category, i.severity)).slice(0, n * 2),
+      blockedSummaries: take(blocked.map((d) => ({ story: d.story, round: d.round, agent: d.agent, reason: d.reason })), n),
+      approvals: take(reviews.filter((d) => d.decision === 'approved').map((d) => ({ story: d.story, round: d.round, agent: d.agent, reason: d.reason })), n),
+    },
+    // 3. Why the automation verifier denied the feature verification agent's tests.
+    automation: {
+      verifierGaps: findingGroups(of('automation-verify').filter((d) => d.decision === 'denied'), (i) => key(i.category, i.subtype, i.subject)).slice(0, n * 2),
+      deniedSummaries: take(of('automation-verify').filter((d) => d.decision === 'denied').map((d) => ({ story: d.story, round: d.round, score: d.score, reason: d.reason })), n),
+    },
+    // 4. Why the integration tests failed the implementer's code.
+    productBugs: take(bugs, n * 2),
+    // 5. How the orchestrator split stories into subtasks (and why), and why the pair verifiers sent
+    //    subtasks back: model, verification and split choices next to how they fared.
+    implement: {
+      plans: take(
+        of('implement-plan')
+          .filter((d) => ['plan-written', 'plan-rejected', 'blocked'].includes(d.decision))
+          .map((d) => ({ story: d.story, decision: d.decision, mode: d.mode ?? null, reason: d.reason, subtasks: (d.items ?? []).map(({ id, modelClass, modelReason, verify, verifyReason, confidence }) => ({ id, modelClass, modelReason, verify, verifyReason, confidence })) })),
+        n * 2,
+      ),
+      escalations: take(of('implement-plan').filter((d) => d.decision?.startsWith('escalation-') || d.decision === 'gave-up').map((d) => ({ story: d.story, subtask: d.subtask, decision: d.decision, pairOutcome: d.pair_outcome, reason: d.reason })), n),
+      verifierFindings: findingGroups(of('implement-verify').filter((d) => d.decision !== 'approved'), (i) => key(i.agent, i.category, i.severity)).slice(0, n * 2),
+    },
+    // 6. How people reviewed the bug-fix PRs the review gate sent them (all pr-review records, so each
+    //    class has its whole sample): whether the 2nd and 3rd reviewers found what the earlier ones
+    //    didn't, escapes by approval count, latency per extra reviewer. The approvals policy proposals
+    //    are computed here, in code; the lessons run applies them to the table in its PR.
+    // 7. What did not go through on its own: every escalation of any stage, every run that did not end
+    //    done, each verifier's first score per story (a first round below the bar is a sign even when a
+    //    later round passed), and the PR checks (score, rounds, what stayed upheld, escalations).
+    escalations: take(escalations.filter((e) => !since || e.ts > since).map(({ ts, story, stage, title }) => ({ ts, story, stage, title })), n * 2),
+    runOutcomes: take(implementRuns.filter((r) => (!since || r.ts > since) && r.outcome !== 'done').map(({ ts, story, outcome, reason }) => ({ ts, story, outcome, reason: reason ?? null })), n * 2),
+    firstVerifierScores: group(verifierRuns.filter((r) => (!since || r.ts > since) && r.round != null), (r) => key(r.story, r.stage))
+      .map((rs) => { const first = [...rs].sort((a, b) => (a.ts < b.ts ? -1 : 1))[0]; return { story: first.story, stage: first.stage, firstRound: first.round, score: first.score, gaps: first.gaps ?? null, rounds: rs.length, finalScore: rs.at(-1).score }; }),
+    prChecks: group(prChecks.filter((r) => !since || r.ts > since), (r) => key(r.target ?? r.story, r.story))
+      .map((rs) => ({ target: rs[0].target ?? rs[0].story, story: rs[0].story, rounds: rs.length, scores: rs.map((r) => r.score), upheld: take(rs.flatMap((r) => (r.upheld ?? []).map((u) => ({ round: r.round, id: u.id, lens: u.lens, severity: u.severity, title: u.title, repeat: Boolean(u.repeat) }))), n * 3) })),
+    reviews: reviewDigest(outcomes, policy ?? {}),
+    newPrReviews: outcomes.filter((r) => r.type === 'pr-review' && (!since || r.ts > since)).length,
+    factoryChanges: factoryChanges(since),
+  };
+  return digest;
+}
+
+export const digestIsEmpty = (digest) => Object.keys(digest.counts).length === 0 && !digest.newPrReviews && !(digest.reviews?.proposals ?? []).length && !(digest.escalations ?? []).length && !(digest.prChecks ?? []).length && !(digest.runOutcomes ?? []).length;

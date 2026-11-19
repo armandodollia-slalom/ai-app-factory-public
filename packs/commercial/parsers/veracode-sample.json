@@ -1,0 +1,1 @@
+{"scan_id":"sample","findings":[{"issue_id":1001,"title":"SQL Injection","severity":4,"cwe_id":"89","files":{"source_file":{"file":"src/Orders/Repo.cs","line":42}}}]}

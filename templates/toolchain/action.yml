@@ -1,0 +1,12 @@
+name: Toolchain for the factory's jobs
+description: >
+  Installs what this codebase needs to build and run its test stack on a CI runner (SDKs, package
+  restore, browsers). The factory's workflows call it before they start the stack. This file is yours:
+  `factory init` wrote it once and never touches it again.
+runs:
+  using: composite
+  steps:
+  # Examples: actions/setup-java, actions/setup-dotnet, dtolnay/rust-toolchain, actions/setup-go,
+  # then your restore or install command.
+  - shell: bash
+    run: echo "No toolchain steps yet. Edit .github/actions/factory-toolchain/action.yml."

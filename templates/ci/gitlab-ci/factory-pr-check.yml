@@ -1,0 +1,56 @@
+# Adversarial AI review of a merge request against its story (acceptance criteria, flow, UI design, code
+# style, video evidence). Opt-in: the `ai-pr-check` label (it runs on the next pipeline of the merge
+# request: push, or Run pipeline), or a pipeline started by hand or through a trigger token with
+# FACTORY_PR_CHECK_MR=<merge request iid> (and FACTORY_PR_CHECK_STORY when the MR does not name its story).
+# Report only: the scores and findings are posted as a merge request comment. The run's records are
+# committed back to the source branch (with ci.skip) so the retro learns from them once it merges.
+factory-pr-check:
+  extends: .factory-agent
+  rules:
+    # Not for a fork's merge request run in this project: the job holds the agent's credential.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_LABELS =~ /(^|,)ai-pr-check(,|$)/ && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "api") && $FACTORY_PR_CHECK_MR
+  script:
+    - PR="${CI_MERGE_REQUEST_IID:-$FACTORY_PR_CHECK_MR}"
+    - if [ "$FACTORY_AGENT_READY" != true ]; then exit 0; fi
+    # The records commit below must not start another check.
+    - if git log -1 --format=%s "$(git rev-parse -q --verify HEAD^2 || echo HEAD)" | grep -q '^Record PR check results'; then echo "Last commit is the PR check's own records; nothing to check."; exit 0; fi
+    - apt-get update -qq && apt-get install -y -qq ffmpeg jq >/dev/null
+    - mkdir -p /tmp/metrics-before && for f in .factory/metrics/*.jsonl; do [ -f "$f" ] && wc -l < "$f" > "/tmp/metrics-before/$(basename "$f")"; done; true
+    - |
+      args=(run --pr "$PR" --no-fix --comment --json)
+      if [ -n "$FACTORY_PR_CHECK_STORY" ]; then args+=(--story "$FACTORY_PR_CHECK_STORY"); fi
+      factory pr-check "${args[@]}" > result.json || status=$?
+      cat result.json
+      echo "${status:-0}" > /tmp/pr-check-status
+    - |
+      git config user.name "${FACTORY_GIT_NAME:-factory-bot}"
+      git config user.email "${FACTORY_GIT_EMAIL:-factory-bot@noreply.invalid}"
+      # Pushes use the GITLAB_TOKEN project access token (write_repository), never the job token.
+      if [ -n "$GITLAB_TOKEN" ]; then git config --global http.extraHeader "AUTHORIZATION: basic $(printf "oauth2:%s" "$GITLAB_TOKEN" | base64 | tr -d "\n")"; git remote set-url origin "$CI_SERVER_URL/$CI_PROJECT_PATH.git"; fi
+    - |
+      head="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-}"
+      if [ -n "$head" ] && [ "${CI_MERGE_REQUEST_SOURCE_PROJECT_ID:-$CI_PROJECT_ID}" = "$CI_PROJECT_ID" ]; then
+        git fetch --quiet origin "$head" && git worktree add --quiet /tmp/pr-head FETCH_HEAD
+        for f in .factory/metrics/*.jsonl; do
+          [ -f "$f" ] || continue
+          before=$(cat "/tmp/metrics-before/$(basename "$f")" 2>/dev/null || echo 0)
+          tail -n +"$((before + 1))" "$f" >> "/tmp/pr-head/$f"
+        done
+        cd /tmp/pr-head
+        if [ -n "$(git status --porcelain -- .factory/metrics)" ]; then
+          git add .factory/metrics/*.jsonl
+          git commit --quiet -m "Record PR check results for !$PR"
+          git push --quiet -o ci.skip origin "HEAD:$head" || echo "Could not push the records to $head (the branch moved); they are in the artifacts."
+        fi
+        cd "$CI_PROJECT_DIR"
+      else
+        echo "Fork merge request or manual run: records are in the artifacts only."
+      fi
+    - exit "$(cat /tmp/pr-check-status)"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .factory/state/pr-check/
+      - .factory/metrics/
