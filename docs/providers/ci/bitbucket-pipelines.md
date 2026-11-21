@@ -2,6 +2,8 @@
 
 **Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
 
+**Alpha.** The Bitbucket adapters were written from the vendor's documentation and are covered by tests against fakes only: no delivery has run against a real Bitbucket workspace. Expect gaps ([what is missing](https://github.com/armandodollia-slalom/ai-app-factory-public/issues/13)).
+
 `ci.provider: "bitbucket-pipelines"`, the default with a Bitbucket Cloud host. The adapter is `scripts/pipeline/lib/ci/bitbucket-pipelines.mjs`. The head's run is the pipeline whose target commit is the head, either a pull request pipeline or a branch pipeline. Logs are its steps' logs.
 
 **Generated files:** `bitbucket-pipelines.yml`, with a pull-request pipeline (gate, lint, feature verification, review-quorum, the analysis steps) and custom pipelines for the schedules and the PR check. A repository that already has its own file gets `bitbucket-pipelines.factory.yml`: that file is never overwritten, and `factory check` says what to merge. Secrets are secured repository variables, which are never passed to pull requests from forks. Schedules are added by hand (Repository settings → Pipelines → Schedules). Hourly is the shortest schedule Bitbucket offers, so the tracker sweep runs at most hourly.

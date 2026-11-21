@@ -24,8 +24,9 @@ run them. The engine stays outside your codebase, and `factory uninstall` remove
    that cannot be confirmed, the run stops and a person decides. On hold means a draft, a label or, where
    configured, closed until release, so a run that stops there can leave the PR still on hold.
 
-To see the flow for your own settings, open [docs/pipeline-explorer.html](docs/pipeline-explorer.html) in a
-browser: change a setting and the map redraws, with every decision, exit and resume path.
+To see the flow for your own settings, open the [pipeline explorer](https://armandodollia-slalom.github.io/ai-app-factory-public/)
+(or [docs/pipeline-explorer.html](docs/pipeline-explorer.html) from a checkout, in a browser): change a setting and
+the map redraws, with every decision, exit and resume path.
 
 **Proven?** Live on GitHub and GitHub Actions with one .NET codebase on macOS, in November 2026: single
 tickets, a bug group's auto-merge, and demo videos with bug evidence. Every other host, tracker and CI system, and
@@ -82,9 +83,9 @@ Each outside service is reached through an adapter, chosen per repository in `.f
 
 | Kind | Built in |
 | --- | --- |
-| Code host | GitHub, GitLab, Azure DevOps (Azure Repos), Bitbucket Cloud |
+| Code host | GitHub, GitLab, Azure DevOps (Azure Repos), Bitbucket Cloud (alpha) |
 | Ticket board (tracker) | GitHub Issues and Projects, Jira, Azure Boards, GitLab Issues, Linear |
-| CI system | GitHub Actions, GitLab CI, Azure Pipelines, Jenkins, CircleCI, Bitbucket Pipelines |
+| CI system | GitHub Actions, GitLab CI, Azure Pipelines, Jenkins, CircleCI, Bitbucket Pipelines (alpha) |
 | Static analysis | the factory's packs (secrets, dependencies, SAST, workflow and IaC checks, a pack per language), plus a client's licensed scanner: Semgrep, CodeQL, Snyk, SonarQube, Checkmarx or Veracode ([commercial-scanners.md](docs/providers/commercial-scanners.md)) |
 | Agent CLIs | Claude Code (default), GitHub Copilot CLI, OpenAI Codex, or any command that reads a prompt on stdin; models are allowed per repository ([models.md](docs/ai-pipeline/models.md)) |
 | Observability sink | none (default), a directory, an HTTP collector, a command, or OpenTelemetry logs ([observability.md](docs/observability.md)) |

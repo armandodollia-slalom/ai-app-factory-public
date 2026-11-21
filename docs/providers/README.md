@@ -54,7 +54,7 @@ No test calls a real service. Every built-in passes the conformance suite (`scri
 | host | GitHub | live (read-only) and fakes: read-only `factory adapter check host` against the public test repository, 2026-11-17: 20 pass, 4 skipped (write checks); the v0.2.68 suites unchanged | [hosts/github.md](hosts/github.md) |
 | host | GitLab | fakes only | [hosts/gitlab.md](hosts/gitlab.md) |
 | host | Azure Repos | fakes only | [hosts/azure-repos.md](hosts/azure-repos.md) |
-| host | Bitbucket Cloud | fakes only | [hosts/bitbucket.md](hosts/bitbucket.md) |
+| host | Bitbucket Cloud (alpha) | fakes only | [hosts/bitbucket.md](hosts/bitbucket.md) |
 | tracker | GitHub Issues and Projects | live (read-only) and fakes: read-only `factory adapter check tracker` against the public test repository and its project, 2026-11-17: 20 pass, 16 skipped (write checks); the v0.2.68 suites unchanged | [trackers/github.md](trackers/github.md) |
 | tracker | Jira (Cloud and Data Center) | fakes only | [trackers/jira.md](trackers/jira.md) |
 | tracker | Azure Boards | fakes only | [trackers/azure-boards.md](trackers/azure-boards.md) |
@@ -65,7 +65,7 @@ No test calls a real service. Every built-in passes the conformance suite (`scri
 | ci | Azure Pipelines | fakes only | [ci/azure-pipelines.md](ci/azure-pipelines.md) |
 | ci | Jenkins | fakes only | [ci/jenkins.md](ci/jenkins.md) |
 | ci | CircleCI | fakes only | [ci/circleci.md](ci/circleci.md) |
-| ci | Bitbucket Pipelines | fakes only | [ci/bitbucket-pipelines.md](ci/bitbucket-pipelines.md) |
+| ci | Bitbucket Pipelines (alpha) | fakes only | [ci/bitbucket-pipelines.md](ci/bitbucket-pipelines.md) |
 | scanner | SonarQube (server mode) | fakes only | [commercial-scanners.md](commercial-scanners.md) |
 | scanner | GitHub code scanning (server mode) | fakes only: fakes; one live read-only call (2026-11-17) to the public test repository answered 404 "no analysis found" (read as pending) | [commercial-scanners.md](commercial-scanners.md) |
 | scanner | Semgrep (server mode) | fakes only | [commercial-scanners.md](commercial-scanners.md) |

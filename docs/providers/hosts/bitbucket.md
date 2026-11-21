@@ -2,6 +2,8 @@
 
 **Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
 
+**Alpha.** The Bitbucket adapters were written from the vendor's documentation and are covered by tests against fakes only: no delivery has run against a real Bitbucket workspace. Expect gaps ([what is missing](https://github.com/armandodollia-slalom/ai-app-factory-public/issues/13)).
+
 `host.type: "bitbucket"`, the default for a `bitbucket.org` remote. The adapter is `scripts/pipeline/lib/hosts/bitbucket.mjs` (REST API 2.0). A pull request's number is its id.
 
 ```json

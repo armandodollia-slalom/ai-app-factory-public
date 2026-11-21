@@ -1,7 +1,7 @@
 {
   "$comment": "Single source of truth for docs/pipeline-explorer.html and the Mermaid spine (scripts/docs/build-explorer.mjs). It models what the runner's rules say will happen for a configuration; it does not run anything. Settings name their real config path or CLI flag and say where the code keeps their default and allowed values (`checks`, verified by scripts/docs/test/pipeline-flow.test.mjs). Conditions are data: {\"eq\":[ref,value]}, {\"in\":[ref,[values]]}, {\"is\":ref}, {\"not\":c}, {\"all\":[c]}, {\"any\":[c]}, {\"gt\":[ref,n]}; a ref is a setting id or a fact id. A fact with \"walk\": true starts false and is set by the edges the walk takes ({\"set\":{fact:true}}); an outcome with cyclesLeft or cyclesUsed (a setting id) is offered only before, or once, that many visits of its step. Doc links are relative to docs/.",
   "version": 1,
-  "factoryVersion": "0.2.94",
+  "factoryVersion": "0.2.95",
   "kinds": {
     "agent": {
       "label": "Agent",
