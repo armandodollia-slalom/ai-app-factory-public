@@ -1,5 +1,7 @@
 # Jira (tracker)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `tracker.type: "jira"`, for Jira Cloud (REST v3, bodies in Atlassian Document Format) and Jira Data Center / Server (REST v2, wiki markup). `tracker.deployment` (`"cloud"` or `"datacenter"`) picks one. Without it the host name decides, and a self-hosted URL is checked with `/rest/api/2/serverInfo`. The adapter is `scripts/board/lib/trackers/jira.mjs`.
 
 ```json

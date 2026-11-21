@@ -1,5 +1,7 @@
 # Code intelligence for agents (LSP over MCP)
 
+**Who reads this:** B setting up language servers (the [`setup-lsp`](../skills/setup-lsp/SKILL.md) skill does it), D adding one to a pack.
+
 Agents get compiler-grade facts about the code (definitions, references, types, diagnostics, safe renames) from
 language servers, exposed as tools of one MCP server named **`lsp`**. It works the same in Claude Code (interactive
 and `claude -p`), GitHub Copilot CLI and Codex, and in every git worktree.

@@ -1,6 +1,6 @@
 # Code hosts, trackers and CI systems
 
-The factory works with any combination of a code host, a ticket tracker and a CI system that can build that host's repositories. For example: Azure DevOps for the code, Jira for the tickets and Azure Pipelines for CI; or Bitbucket Cloud, Jira and Jenkins. Each is chosen separately in `.factory/config.json`, or through the setup interview ([providers/setup.md](providers/setup.md)):
+**Who reads this:** B and C on a code host, tracker or CI system other than the GitHub defaults. The factory works with any combination of a code host, a ticket tracker and a CI system that can build that host's repositories. For example: Azure DevOps for the code, Jira for the tickets and Azure Pipelines for CI; or Bitbucket Cloud, Jira and Jenkins. Each is chosen separately in `.factory/config.json`, or through the setup interview ([providers/setup.md](providers/setup.md)):
 
 | Dimension | Key | Types | Default |
 | --- | --- | --- | --- |
@@ -8,59 +8,40 @@ The factory works with any combination of a code host, a ticket tracker and a CI
 | Ticket tracker: stories, epics, bugs, board lanes, fields, comments, attachments | `tracker.type` | `github` (issues and a GitHub Project), `jira`, `azure-boards`, `gitlab`, `linear`, `custom` | the legacy GitHub keys when set; otherwise the host's own: `github`, `gitlab`, `azure-boards`; Bitbucket has none, so name one |
 | CI system: the generated pipelines and the head's evidence | `ci.provider` | `github-actions`, `gitlab-ci`, `azure-pipelines`, `jenkins`, `circleci`, `bitbucket-pipelines`, `custom` | the host's own CI system |
 
-Each product has its own page under [providers/](providers/README.md): settings, tokens and scopes, what to create by hand, its capabilities (what the harness does where the product cannot), the vendor documentation it was written from, and whether it was verified live or only against fakes. The sections below are the detailed setup of the products first supported in 0.3.0 (GitHub, GitLab, Azure DevOps, Jira, Azure Boards). The newer ones are covered on their own pages: [Bitbucket Cloud](providers/hosts/bitbucket.md), [GitLab Issues](providers/trackers/gitlab.md), [Linear](providers/trackers/linear.md), [Jenkins](providers/ci/jenkins.md), [CircleCI](providers/ci/circleci.md), [Bitbucket Pipelines](providers/ci/bitbucket-pipelines.md).
+Each product has its own page under [providers/](providers/README.md): settings, tokens and scopes, what to create by hand, its capabilities (what the harness does where the product cannot), the vendor documentation it was written from, and whether it was verified live or only against fakes. The sections below add setup detail for GitHub, GitLab, Azure DevOps, Jira and Azure Boards; the other products are covered on their own pages: [Bitbucket Cloud](providers/hosts/bitbucket.md), [GitLab Issues](providers/trackers/gitlab.md), [Linear](providers/trackers/linear.md), [Jenkins](providers/ci/jenkins.md), [CircleCI](providers/ci/circleci.md), [Bitbucket Pipelines](providers/ci/bitbucket-pipelines.md).
 
 `factory doctor` checks every configured product: the token variable is set, the API answers, the token reaches the repository or project, and the default branch requires the `review-quorum` check. `factory adapter check <tracker|host|ci|scanner>` runs each operation of the configured adapter. A repository with a GitHub remote and none of these keys works exactly as before. The host layer, the tracker layer and `factory init`/`render`/`doctor` read the defaults from one module (`scripts/pipeline/lib/products.mjs`), so they always agree.
 
-Jenkins builds any of the hosts. CircleCI builds GitHub, GitLab and Bitbucket Cloud. Bitbucket Pipelines builds Bitbucket only. `factory doctor` refuses a combination whose CI system cannot build the host's repositories (`CI_SUPPORT` in `scripts/factory/lib/hosting.mjs`).
-
 ## What works in each combination
 
-The host and the CI system decide whether the pipelines can run at all; the tracker changes only how the tracker automations start. "Full" means pull request jobs (gate, lint, feature verification, review quorum, PR check, demo video) and scheduled jobs (retro, tracker automations, cache prune).
+The host and the CI system decide whether the pipelines can run; the tracker changes only how the tracker
+automations start (on issue events for GitHub issues on GitHub Actions, on a 15-minute schedule otherwise).
+"Full" means pull request jobs (gate, lint, feature verification, review quorum, PR check) and scheduled jobs
+(retro, tracker automations, cache prune). `factory doctor` refuses a combination marked "not possible"
+(`CI_SUPPORT` in `scripts/factory/lib/hosting.mjs`, the authority for this table).
 
-| Host | CI system | Tracker: GitHub issues | Tracker: Jira | Tracker: Azure Boards |
-| --- | --- | --- | --- | --- |
-| GitHub | GitHub Actions | Full; the tracker automations run on issue events | Full; automations on a 15-minute schedule (`factory-tracker-sweep.yml`) | Full; automations on a 15-minute schedule |
-| GitHub | Azure Pipelines | Full with limits (1); automations on a schedule | Full with limits (1) | Full with limits (1) |
-| GitHub | GitLab CI | Scheduled jobs only (2) | Scheduled jobs only (2) | Scheduled jobs only (2) |
-| GitLab | GitLab CI | Full with limits (3); automations on a schedule | Full with limits (3) | Full with limits (3) |
-| GitLab | GitHub Actions | Not possible: GitHub Actions only builds GitHub repositories | Not possible | Not possible |
-| GitLab | Azure Pipelines | Not possible: YAML pipelines cannot use a GitLab repository (mirror it to Azure Repos) | Not possible | Not possible |
-| Azure DevOps | Azure Pipelines | Full with limits (4); automations on a schedule | Full with limits (4) | Full with limits (4) |
-| Azure DevOps | GitHub Actions | Not possible: GitHub Actions only builds GitHub repositories | Not possible | Not possible |
-| Azure DevOps | GitLab CI | Scheduled jobs only (2) | Scheduled jobs only (2) | Scheduled jobs only (2) |
+| Host | GitHub Actions | GitLab CI | Azure Pipelines | Jenkins | CircleCI | Bitbucket Pipelines |
+| --- | --- | --- | --- | --- | --- | --- |
+| GitHub | full | scheduled jobs only (2) | full, with limits (1) | full | full | not possible |
+| GitLab | not possible | full, with limits (3) | not possible | full | full | not possible |
+| Azure DevOps | not possible | scheduled jobs only (2) | full, with limits (4) | with limits | not possible | not possible |
+| Bitbucket Cloud | not possible | not possible | full | full | full | full |
+
+A `custom` CI system is whatever the team runs. Every non-GitHub combination is verified against fakes only
+([status per adapter](providers/README.md#verified-live-or-only-against-fakes)); `npm test` runs the pipeline-level
+flow for each host and tracker pair against fake servers (`scripts/pipeline/test/combinations.test.mjs`) and checks
+each CI system's generated files.
 
 1. Azure Pipelines building a GitHub repository: the `ai-pr-check` label cannot be read (the label check uses the Azure Repos API), so run the PR check pipeline by hand with its `pr` parameter. The cache prune pipeline opens its pull request only on Azure Repos. The review quorum runs again only when the pull request changes or the build is re-queued.
 2. GitLab CI for an external repository (a GitHub repository connected through "CI/CD for external repositories", or a pull mirror of an Azure Repos repository) runs pipelines for pushes, not for pull requests. Only the retro, the tracker automations and the cache prune run, from pipeline schedules.
 3. GitLab starts no pipeline when a label is added or someone approves: the PR check starts on the merge request's next pipeline after the `ai-pr-check` label is added (push, or **Run pipeline**), and the review quorum must be re-run after an approval. A merge request's own `.gitlab-ci.yml` defines its pipeline, so a merge request could change the review-quorum job (the job counts approvals with the factory pinned on the target branch, but its definition is the merge request's). Protect against it with GitLab approval rules (Premium) or a protected `.gitlab-ci.yml` through CODEOWNERS and "Code owner approval".
 4. Azure DevOps starts no build when someone approves or a label is added: re-queue the review-quorum build after approving, or set "Minimum number of reviewers" for a fixed count; queue the PR check after adding the `ai-pr-check` label. Pipelines are created once by hand from the generated files (below).
 
-### What the factory's tests prove
-
-The table above says what is designed to work. This one says how far each of the 27 combinations is proven by the factory's own tests (`npm test`), none of which calls a real GitLab, Azure DevOps or Jira:
-
-- **Flow**: the host and tracker pair runs the pipeline-level flow end to end in `scripts/pipeline/test/combinations.test.mjs`: read the story from the tracker, open the pull request on the host, link it to the ticket, move the ticket to Pending Review, post and then upsert a marker comment on the pull request and on the ticket, read the diff, label the pull request `approvals:1`, read its reviews and run the review-quorum decision before and after an approval, set the `review-quorum` status, merge, and move the ticket to Done. GitHub runs against an in-memory `gh`, the others against fake REST servers built from the API documentation.
-- **Files**: the CI system's generated files are structure-checked (`scripts/factory/test/providers.test.mjs`: they parse, includes and templates resolve, every job has a trigger, a stage and a script, secrets are mapped, all three providers generate the same jobs), and `factory init`, `render`, `check` and `uninstall` succeed on GitLab and Azure DevOps clones with each tracker (`combinations.test.mjs`). The CI provider changes only these files, never the flow.
-- **Same as today**: GitHub, GitHub Actions and GitHub issues: the existing suite, and a byte-for-byte comparison of the generated workflows with those of the release before the adapters.
-
-| Host | CI system | Tracker: GitHub issues | Tracker: Jira | Tracker: Azure Boards |
-| --- | --- | --- | --- | --- |
-| GitHub | GitHub Actions | Same as today; Flow | Flow; Files | Flow; Files |
-| GitHub | Azure Pipelines | Flow; Files | Flow; Files | Flow; Files |
-| GitHub | GitLab CI | Flow; Files (scheduled jobs only) | Flow; Files (scheduled jobs only) | Flow; Files (scheduled jobs only) |
-| GitLab | GitLab CI | Flow; Files; init/check/uninstall | Flow; Files; init/check/uninstall | Flow; Files; init/check/uninstall |
-| GitLab | GitHub Actions or Azure Pipelines | Not possible (doctor refuses it) | Not possible | Not possible |
-| Azure DevOps | Azure Pipelines | Flow (1); Files; init/check/uninstall | Flow (1); Files; init/check/uninstall | Flow (1); Files; init/check/uninstall |
-| Azure DevOps | GitLab CI | Flow (1); Files (scheduled jobs only) | Flow (1); Files (scheduled jobs only) | Flow (1); Files (scheduled jobs only) |
-| Azure DevOps | GitHub Actions | Not possible (doctor refuses it) | Not possible | Not possible |
-
-1. Azure DevOps has no unified diff API: `host.pr.diff` throws `UnsupportedError` ("fetch the branches and run `git diff <base>...<head>` locally"), which the test expects; the pipeline's own review reads the diff from the local checkout, so nothing in the flow depends on it.
-
 Methods a product cannot support throw `UnsupportedError` (`scripts/pipeline/lib/hosts/errors.mjs`, shared by both layers) with the fallback in its message: Azure DevOps `pr.diff` (run `git diff` locally) and `repo.permissions` (doctor warns and checks that the repository is readable instead), Jira `tickets.history` (the local history folder is used). GitHub's optional `pr.uploadAttachment` is not implemented; videos go to the storage branch as before.
 
 ## Before you trust GitLab, Azure DevOps or Jira: verified only against fakes
 
-Nothing below has been run against a real GitLab, Azure DevOps or Jira; every request was built from the products' REST documentation and checked against fake servers written the same way. The flow above proves the factory's side is consistent; it cannot prove the products answer as the fakes do. Run `factory doctor` first: it calls each configured product with your token. Then try one story with `implement` on a test project before relying on the pipeline. These are the details most likely to differ:
+Nothing below has been run against a real GitLab, Azure DevOps or Jira; every request was built from the products' REST documentation and checked against fake servers written the same way. The combination tests prove the factory's side is consistent; it cannot prove the products answer as the fakes do. Run `factory doctor` first: it calls each configured product with your token. Then try one story with `implement` on a test project before relying on the pipeline. These are the details most likely to differ:
 
 ### GitLab (code host)
 
@@ -109,6 +90,8 @@ The jobs call `factory` commands; those reach the host and tracker through the a
 
 ## Code hosts
 
+A merge is bound to the head the gate assessed where the host can bind it (GitHub, GitLab, Azure DevOps). Bitbucket Cloud cannot: the harness re-reads the head just before merging and refuses if it moved, which leaves a short window between the read and the merge ([Bitbucket](providers/hosts/bitbucket.md)).
+
 ### GitHub
 
 Nothing new: the `gh` CLI, signed in, with the scopes `repo` and `project`; the [PR bot](ai-pipeline/setup.md#the-pipelines-pr-bot) for the pipeline's pull requests. GitHub Enterprise Server: set `host.url` to the server (`https://ghe.example.com`) and sign `gh` in to it (`gh auth login --hostname`).
@@ -141,7 +124,7 @@ Known limits: comments do not start pipelines (no comment-triggered PR check; us
 "host": { "type": "azure-devops", "url": "https://dev.azure.com", "repo": "organization/project/repository", "token": "${AZURE_DEVOPS_TOKEN}" }
 ```
 
-Token: on a developer machine, a **personal access token** with **Code (Read & write)**, **Code (Status)**, **Pull Request Threads (Read & write)** and, with Azure Boards, **Work Items (Read & write)**. In Azure Pipelines the generated pipelines map `AZURE_DEVOPS_TOKEN` to the job's `$(System.AccessToken)`: give **`<project> Build Service (<organization>)`** the repository permissions **Contribute**, **Contribute to pull requests** and **Create branch** (Project settings → Repositories → Security). Reading branch policies for `factory doctor` needs **Edit policies** or project administrator rights. PR identity: Azure DevOps lets an author's vote count unless the policy "Allow requestors to approve their own changes" is off; to approve the pipeline's pull requests yourself, open them with a separate identity (a service principal or a dedicated user's PAT in `host.token`): see the `setup-host` skill.
+Token: on a developer machine, a **personal access token** with **Code (Read & write)**, **Code (Status)**, **Pull Request Threads (Read & write)** and, with Azure Boards, **Work Items (Read & write)**. In Azure Pipelines the generated pipelines map `AZURE_DEVOPS_TOKEN` to the job's `$(System.AccessToken)`: give **`<project> Build Service (<organization>)`** the repository permissions **Contribute**, **Contribute to pull requests** and **Create branch** (Project settings → Repositories → Security). Reading branch policies for `factory doctor` needs **Edit policies** or project administrator rights. PR identity: Azure DevOps lets an author's vote count unless the policy "Allow requestors to approve their own changes" is off; to approve the pipeline's pull requests yourself, open them with a separate identity (a service principal or a dedicated user's PAT in `host.token`): see the [`setup-host`](../skills/setup-host/SKILL.md) skill.
 
 By hand, once:
 

@@ -183,6 +183,17 @@ export function ensureToolPath(toolPaths = [], env = process.env) {
   if (extra.length) env.PATH = [...extra, env.PATH].join(path.delimiter);
 }
 
+export const VIDEO_SCRIPT_SCOPES = ['headline', 'all', 'none'];
+
+export function videoScriptProblems(config) {
+  const scope = config?.video?.script?.scope;
+  if (scope === undefined) return [];
+  if (typeof scope !== 'string' || !VIDEO_SCRIPT_SCOPES.includes(scope)) {
+    return [`video.script.scope must be one of ${VIDEO_SCRIPT_SCOPES.join(', ')} (got ${JSON.stringify(scope)})`];
+  }
+  return [];
+}
+
 const cache = new Map();
 
 // Shared defaults come from scripts/pipeline/config.json; a stage's scripts/<stage>/config.json is merged
@@ -228,6 +239,8 @@ export function loadConfig(stage = null, root = repoRoot()) {
   // Static analysis (opt-in): a bad tool, parser, scope, slot or pin fails here, not halfway through a pair round.
   const analysis = configAnalysisProblems(config);
   if (analysis.length) throw new Error(`${OVERLAY_FILE}: ${analysis.join('; ')}`);
+  const videoScript = videoScriptProblems(config);
+  if (videoScript.length) throw new Error(`${OVERLAY_FILE}: ${videoScript.join('; ')}`);
   if (config.analysis) withAnalysisGate(config);
   cache.set(cacheKey, config);
   registerConfigSecrets(config);

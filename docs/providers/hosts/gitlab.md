@@ -1,5 +1,7 @@
 # GitLab (code host)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `host.type: "gitlab"`, for gitlab.com or a self-managed instance (set `host.url`, including its path when GitLab is served under one). The adapter is `scripts/pipeline/lib/hosts/gitlab.mjs` (REST API v4). A pull request is a merge request, and its number is the MR's iid.
 
 ```json

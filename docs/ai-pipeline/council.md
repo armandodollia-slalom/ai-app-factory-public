@@ -1,9 +1,11 @@
 # Council verifiers
 
-A verification stage can seat a **council**: several independent verifiers (members), each on its own agent CLI
-(Claude Code, Codex, GitHub Copilot or a custom command), model, reasoning effort and lens, instead of its single
-verifier. The harness runs the members in parallel and merges their results deterministically. The rules every member
-follows are the factory's `council` skill (`skills/council/SKILL.md`), which is injected into every member's prompt.
+**Who reads this:** B and C, when they want several models to verify a stage. A verification stage can seat a
+**council**: several independent verifiers (members), each on its own agent CLI (Claude Code, Codex, GitHub Copilot
+or a custom command), model, reasoning effort and lens, instead of its single verifier. The harness runs the members
+in parallel and merges their results deterministically. The rules every member follows are the factory's
+[`council` skill](../../skills/council/SKILL.md), which is injected into every member's prompt. Adjudication
+(below) is proven by fixture tests only ([proof](../../README.md#what-has-been-proven)).
 
 With no `council` section in `.factory/config.json` (the default), and for every stage the section does not list,
 nothing changes: each stage runs its single verifier with its own round limit.
@@ -41,7 +43,7 @@ The section is governance: it lives in `.factory/config.json`, never in `app.jso
 | --- | --- |
 | `name` | unique short name (letters, digits, `-`, `_`); the PR table and the logs use it |
 | `cli` | `claude`, `codex`, `copilot` or `custom` |
-| `model` | an alias from `agent.allowedModels`; it must have an id for the member's CLI in `agent.modelIds.<cli>` (Codex has none by default: add `agent.modelIds.codex`). Optional for `custom` |
+| `model` | an alias from `agent.allowedModels`; it must have an id for the member's CLI in `agent.modelIds.<cli>` (on Codex only `sol` has one by default). Optional for `custom` |
 | `effort` | `low`, `medium`, `high`, `xhigh` or `max`: Claude Code's `--effort`, Codex's `model_reasoning_effort` (`max` becomes `xhigh`). Copilot's CLI documents no effort option, so a Copilot member runs at its model's default; a custom command gets `PIPELINE_AGENT_EFFORT` |
 | `lens` | `correctness`, `acceptance`, `security`, `test-value`, `rewrite` or `ui` (the skill's table) |
 | `blocking` | default `true`; `false` makes the member's findings feedback (see below) |
@@ -191,16 +193,9 @@ dispute goes only to the members that raised the finding, in the stage's own dis
 raiser re-asserting with evidence keeps the finding; it is accepted when every raiser that ruled accepted it. A finding
 re-asserted twice can no longer be disputed, as before.
 
-## PR check: every member re-sits every round
+## Who sits again in a PR check round
 
-Without a council the PR check carries a lens over from the round before when the last fix cannot have changed what it
-judges (the design critic when no frontend file changed, the video critic when the frames are the same). A council does
-not: every member critiques every round. A member's lens (`correctness`, `security`, `test-value`, `rewrite`) is about
-the whole change, not a class of files, so no fix can be shown to leave its judgement untouched, and carrying an earlier
-10 would let it stand over code the member never saw; an acceptance-lens member rates every ticket line against the code
-the round ends on. The cost is one critic run per member per round: a council of three for six rounds is
-up to 18 critic runs (plus the acceptance critic when no member has that lens, the defender and the judge), where the
-stage's own five critics with carry-over often run three or four per round after the first.
+A member whose last score passed (`passScore`), with nothing it raised upheld, is carried to the next PR check round with its score when the fix touched nothing it judges. Its scope is test files for `test-value`, frontend files for `ui`, and production code for the other lenses. A member with the `acceptance` lens sits again. When every finding the last fix addressed was minor, a shorter rule replaces this one: every member that scored 10 with nothing upheld is carried, whatever the fix touched, except a member named `acceptance` (the test is the member's name, so an `acceptance`-lens member named otherwise is carried too). The record marks a carried member "carried over". A non-blocking member that answers after the last round is waited for up to `council.lateGraceSec` (120); its findings become follow-ups of the check instead of being lost.
 
 ## Cost and concurrency
 
@@ -243,7 +238,3 @@ leased stack slot and runs only in the pipeline.
 
 `factory doctor` checks every member a stage seats: its CLI installed, signed in (`claude auth status`,
 `codex login status`; for Copilot a token in the environment or its config folder), and its model resolving to an id.
-
-### Who sits again in a PR check round
-
-A member whose last score passed (`passScore`), with nothing it raised upheld, is carried to the next PR check round with its score when the fix touched nothing it judges. Its scope is test files for `test-value`, frontend files for `ui`, and production code for the other lenses. The record marks it "carried over". The `acceptance` lens always sits again. A non-blocking member that answers after the last round is waited for up to `council.lateGraceSec` (120); its findings become follow-ups of the check instead of being lost.

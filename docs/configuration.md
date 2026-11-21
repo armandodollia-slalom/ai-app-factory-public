@@ -1,6 +1,26 @@
 # Configuration
 
-Everything the factory knows about a codebase is in that repository's `.factory/` folder. The engine holds only language-neutral defaults.
+**Who reads this:** B and C, looking up a setting. Everything the factory knows about a codebase is in that repository's `.factory/` folder; the engine holds only language-neutral defaults. Each stage page explains its settings in context; this page lists them all, and the files the factory writes into a repository.
+
+## What ends up in the app repository
+
+| Where | What | Owner |
+| --- | --- | --- |
+| `.factory/config.json` | the project model and every setting (this page) | the team, through the skills |
+| `.factory/app.json` | the application's topology (services, ports, test roots) | the team and the agents that add services |
+| `.factory/factory.json` | the engine version this repository pins, the agent tools and features in use | the team |
+| `.factory/agents/`, `lessons/`, `policy/` | agent addenda, learned rules, architecture rules | the team and the retro |
+| `.factory/stack/`, `plans/` | compose file, scenarios, test plans | the pipeline's agents |
+| `.factory/metrics/` | the agents' records, one file per branch and stream | the pipeline |
+| `.factory/state/` | runs, logs, ticket cache, the main checkout's metrics spool (ignored by git) | the machine |
+| `.factory/bin/`, `githooks/`, `manifest.json` | the launcher that finds the engine, git hooks, the list of generated files | generated |
+| `.claude/`, `.codex/`, `.gemini/`, `.cursor/`, `.mcp.json`, the CI files (`.github/workflows/factory-*.yml`, `.gitlab/ci/factory-*.yml` with an include block in `.gitlab-ci.yml`, `.azure-pipelines/factory-*.yml`, or the factory's file for Jenkins, CircleCI or Bitbucket Pipelines with `.factory/ci/factory-ci.sh`), the e2e fixtures with the `demoVideo` feature, blocks in `AGENTS.md` and `.gitattributes` | what the agent tools and CI require at fixed paths | generated; only the factory's entries |
+
+Generated files are never edited by hand: `factory check` (run in CI) fails when one was, and `factory render`
+writes them again. `factory uninstall` removes everything in the manifest, which is how you prove the application
+does not depend on the factory. Pipeline agents are blocked from editing the factory's files (the
+[factory guard](#factory-guard-factoryguard)); only the retro may. Tests the pipeline writes live in the
+application's own test tree, tagged with their ticket, and belong to the team.
 
 ## Where settings come from
 
@@ -40,9 +60,19 @@ Three sections of the overlay (`lsp`, `stack`, `teststack`) belong to tools with
 
 After changing the pin or the overlay, run `factory render`. Every file it writes outside `.factory/` is listed in `.factory/manifest.json`; `factory uninstall` removes exactly those.
 
+### Upgrading from 0.2.92
+
+- A `video.script.scope` other than `headline`, `all` or `none` now stops every command that loads the pipeline config (it used to act as `none`).
+- `factory render` updates `e2e/fixtures.ts`; until then (or a hand merge, for an edited copy) a backend bug gets no request evidence.
+- On Bitbucket, `close-reopen` holds now use `draft`.
+- `implement run` reads the state of a ticket's PR whose last run did not end `done`, once, at plan time, as a fallback after the skip, resume and reopen routing, and treats a failed read as open (it holds the PR first). `--dry-run` makes no read and prints `PR state not checked`.
+- Three new outcomes stop a run ([escalations](ai-pipeline/escalations.md#outcomes)): `gate-assessment-failed` (with the review gate on, a bug fix whose rating fails opens no new PR), `hold-failed` and `release-unconfirmed` (a hold or release the host does not confirm).
+- A backend reproduction counts only when a Playwright `expect` fails inside the block after its first recorded response ([the rule](ai-pipeline/pr-demo-video.md#what-the-reproduction-check-proves)). With `video.bugPair.requireBefore` on and the demo video step enabled, a reproduction the step reports as missing stops the delivery (`demo-video-blocked`); a failed step does not.
+- The redaction boundary is unchanged: it has no card rule ([card data](ai-pipeline/pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
+
 ## Code host, tracker and CI
 
-Which products the repository uses, each chosen separately. [providers/](providers/README.md) has a page per product (settings, token scopes, capabilities, what to create by hand), the contracts, the `custom` adapter and the verification status. [hosts-and-trackers.md](hosts-and-trackers.md) covers the combinations. `factory init` asks for all of it ([providers/setup.md](providers/setup.md)):
+Which products the repository uses, each chosen separately. Only the GitHub adapters have run against the live service; every other one is verified against fakes only ([proof](../README.md#what-has-been-proven)). [providers/](providers/README.md) has a page per product (settings, token scopes, capabilities, what to create by hand), the contracts, the `custom` adapter and the verification status. [hosts-and-trackers.md](hosts-and-trackers.md) covers the combinations. `factory init` asks for all of it ([providers/setup.md](providers/setup.md)):
 
 ```json
 {
@@ -70,7 +100,7 @@ Which products the repository uses, each chosen separately. [providers/](provide
 | `host.token` | `${NAME}`: the environment variable holding the token, never the token. GitHub uses the `gh` login instead | none |
 | `tracker.type` | `github`, `jira`, `azure-boards`, `gitlab`, `linear` or `custom` | `github` when the legacy `tickets`/`board` repository keys are set and there is no `host` section; otherwise the host's own: `github` for GitHub, `azure-boards` for Azure DevOps, `gitlab` for GitLab; Bitbucket has none, so set it (the board and doctor stop with an error that says so) |
 | `tracker.url`, `tracker.project`, `tracker.auth` | the Jira site or server and project key; `https://dev.azure.com/<organization>` and the project; the GitLab server and project path; the Linear team key. Credentials as `${NAME}` references (Jira Cloud: `user` email and API `token`; the others: `token`) | |
-| `tracker.board`, `tracker.lanes`, `tracker.types`, `tracker.fields` | the board, the factory's lanes and ticket types mapped to the tracker's statuses or columns and types, and the factory's fields (severity, impact, ...) to custom field ids or names | the `setup-board` skill writes them |
+| `tracker.board`, `tracker.lanes`, `tracker.types`, `tracker.fields` | the board, the factory's lanes and ticket types mapped to the tracker's statuses or columns and types, and the factory's fields (severity, impact, ...) to custom field ids or names | the [`setup-board`](../skills/setup-board/SKILL.md) skill writes them |
 | `ci.provider` | `github-actions`, `gitlab-ci`, `azure-pipelines`, `jenkins`, `circleci`, `bitbucket-pipelines` or `custom`: which CI files `factory render` writes and which API the gate reads the head's runs from | the host's own CI system |
 | `ci.url`, `ci.job`, `ci.project`, `ci.user`, `ci.token` | the CI system's API: Jenkins `url`, Multibranch `job`, `user` and API `token`; CircleCI project slug and `token`; GitLab CI, Azure Pipelines and Bitbucket Pipelines use the host's token unless `ci.token` names another | |
 | `ci.expected`, `ci.ignore` | the pipelines a head must run, instead of the ones derived from the CI system; pipelines never waited for | derived |
@@ -116,15 +146,15 @@ Each stage page under [ai-pipeline/](ai-pipeline/README.md) documents its own se
 | `implement` | `prepareCmd` (run once in each new story or subtask worktree), `checks` (build and lint commands a subtask must pass), `unitTests.cmd` (`{project}` is a service's `unitTests` path), `uiStory` (how a UI story is recognised), `ui.teststackCmd` (how to start the app for UI verifiers), `roles.<role>.cli` and `roles.<role>.env` (a role's own CLI and its process variables, such as a second login's `CODEX_HOME`; never secrets, see [council.md](ai-pipeline/council.md)) |
 | `precheck` | `lint` and `fix` by file extension (`{files}`), `testRunners` (how written tests are run and discovered) |
 | `testRoots`, `testExtensions`, `implExclude` | what is a test file, and what is not implementation |
-| `implement.prCheck` | `mode` (`fix` or `report`), `fixUntil` (`major`), `bugFixUntil` (`minor`), `fixLenses`, `fixRounds` (3), and `returnToImplementation`: `enabled` (true), `maxReturns` (2), `minSeverity` (`major`), `implementationLenses`, `lightLenses`, `lightPaths` (governance; [implement.md](ai-pipeline/implement.md#findings-about-the-production-change-go-back-to-implementation)) |
-| `implement.preOpen` | how the PR opens finished (governance): `branches` (branch patterns whose pushes run CI before the PR; default from the branch prefixes), `afterOpen` (`draft`, `label` or `close-reopen`: how an open PR is held while agents work on it again), `wipLabel` (`work-in-progress`), `draftCycles` (1). Unknown keys are reported. The order itself is not a setting ([implement.md](ai-pipeline/implement.md#the-pr-opens-finished)) |
-| `implement.ciFixRounds`, `implement.ciWait` | CI fixing rounds a red head gets before a person decides (1; `PIPELINE_CI_FIX_ROUNDS` for one run), and whether the run waits for the PR's checks after the open |
-| `implement.delivery`, `implement.epic` | `delivery` (`epic` or `story`), and for epics `prSplit` (`epic`, `story` or `groups`), `maxStoriesPerGroup`, `grouping` (`auto`, `epic`, `ticket`), `branchPrefix`, `bugfixPrefix`, `featureVerification`, `prCheck` (`fix`, `report`, `off`) ([implement.md](ai-pipeline/implement.md#delivery-modes)) |
+| `implement.prCheck` | `mode` (`fix` or `report`), `fixUntil` (`major`), `bugFixUntil` (`minor`), `fixLenses`, `fixRounds` (3), and `returnToImplementation`: `enabled` (true), `maxReturns` (2), `minSeverity` (`major`), `implementationLenses`, `lightLenses`, `lightPaths` (governance; [pr-check.md](ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation)) |
+| `implement.preOpen` | how the PR opens finished (governance): `branches` (branch patterns whose pushes run CI before the PR; default from the branch prefixes), `afterOpen` (`draft`, `label` or `close-reopen`: how an open PR is held while agents work on it again; `close-reopen` becomes `draft` on a host that cannot reopen, such as Bitbucket, and `factory doctor` reports it), `wipLabel` (`work-in-progress`), `draftCycles` (1). Unknown keys are reported. The order itself is not a setting ([implement.md](ai-pipeline/implement.md#the-pr-opens-finished)) |
+| `implement.ciFixRounds`, `implement.ciWait` | `ciFixRounds` (1): `0` means no CI fixing round, any positive number one round per CI wait (`PIPELINE_CI_FIX_ROUNDS` for one run); `ciWait` (true): `false` skips both the CI proof before the open and the wait after it ([implement-reference.md](ai-pipeline/implement-reference.md#config)) |
+| `implement.delivery`, `implement.epic` | `delivery` (`epic` or `story`), and for epics `prSplit` (`epic`, `story` or `groups`; `story` and `groups` proven by fixture tests only), `maxStoriesPerGroup`, `grouping` (`auto`, `epic`, `ticket`), `branchPrefix`, `bugfixPrefix`, `featureVerification`, `prCheck` (`fix`, `report`, `off`) ([implement.md](ai-pipeline/implement.md#delivery-modes)) |
 | `implement.reviewGate`, `implement.autoMerge` | the review gate's severity floor, confidence and approvals per severity; auto-merge on or off, merge identity and method ([review-gate.md](ai-pipeline/review-gate.md)) |
 | `review` | `maxRounds`, `policy` (the architecture policy step) |
 | `prCheck` | `frontendPaths`, `conventions` (documents the style critic checks against) |
 | `prVideo` | `specPatterns` (which e2e specs record a demo), `videosDir`, `storageBranch`, `recordCmd`, `slotWaitSec`, `localTimeoutSec`, `testTimeoutSec`, `backendPaths`, `neutralPaths`, `api` |
-| `video` | narration (`enabled`, `voice`, `speed`, `lang`, `model`), `pacing`, `size`, `ffmpeg`, `licenceReview`, `critic`; `script` (narration by the `demo-narrator` agent: `scope` `headline`, `all` or `none`, `model`, `timeoutSec`, the length limits, `speakEvidence`); `bugPair` (`enabled`, `requireBefore`: a bug whose reproduction cannot be shown before the fix opens no PR); `apiEvidence` (a backend bug's requests before and after the fix: `enabled`, `headers`, `maxBodyBytes`, `maxPairs`) ([pr-demo-video.md](ai-pipeline/pr-demo-video.md#turning-it-on)) |
+| `video` | narration (`enabled`, `voice`, `speed`, `lang`, `model`), `pacing`, `size`, `ffmpeg`, `licenceReview`, `critic`; `script` (narration by the `demo-narrator` agent: `scope` `headline`, `all` or `none`, checked when the config loads, `model`, `timeoutSec`, the length limits, `speakEvidence`); `bugPair` (`enabled`, `requireBefore`: a bug whose reproduction cannot be shown before the fix opens no PR); `apiEvidence` (a backend bug's requests before and after the fix: `enabled`, `headers`, `maxBodyBytes`, `maxPairs`) ([pr-demo-video.md](ai-pipeline/pr-demo-video.md#turning-it-on)) |
 | `tickets`, `board` | the GitHub tracker: `repo`, `owner`, `projectNumber`. `repo` and `owner` default to the GitHub `origin`. Other trackers: [`tracker`](#code-host-tracker-and-ci) |
 | `agent` | `cli` (`claude`, `copilot`, `codex`), `models` per agent, `modelIds`, `claude.promptCacheTtl` (`5m` by default: a headless agent run is one short session, and the 1-hour cache Claude Code picks on a subscription is written at 1.6x the price), `claude.toolSearch` (`false` by default: MCP tools such as the language servers are listed to the agent directly, not deferred behind ToolSearch) |
 | `bot` | the PR bot ([setup](ai-pipeline/setup.md#the-pipelines-pr-bot)) |
@@ -140,7 +170,7 @@ Each stage page under [ai-pipeline/](ai-pipeline/README.md) documents its own se
 
 ## Metrics: `metrics.sink`
 
-Where agent run records go besides the local files in `.factory/metrics/`. Types: `none` (default), `directory`, `http`, `command`, `otlp`. Values of the form `${NAME}` are read from the environment, so secrets stay out of the file. See [observability.md](observability.md); the `setup-observability` skill writes this section for you.
+Where agent run records go besides the local files in `.factory/metrics/`. Types: `none` (default), `directory`, `http`, `command`, `otlp`. Values of the form `${NAME}` are read from the environment, so secrets stay out of the file. See [observability.md](observability.md); the [`setup-observability`](../skills/setup-observability/SKILL.md) skill writes this section for you.
 
 ### Where metrics are written
 
@@ -180,24 +210,7 @@ The guard checks file edit tools and shell commands that write a protected path 
 
 A sentence that places topology keys in `config.json` is also a problem, and so is a `.factory/` path that does not exist, in a sentence with a write cue.
 
-How it reads sentences:
-- write cues are matched by stem anywhere in the sentence, including -ing forms and imperative passives ("must be updated");
-- sentences are joined across wrapped lines;
-- a noun after an article ("a change") is not a cue;
-- a path is recognised with backslashes (`.factory\policy\profile.yaml`) or without its leading dot (`factory/policy/...`);
-- a clause after a semicolon continues the one before ("lives in `<path>`; keep it current" is an instruction to change it), unless that one was a prohibition;
-- "keep … current / up to date / in sync" is a write cue;
-- a read cue on the path with every write cue in a later clause (when, if, before, after, while, once) is harmless: "Follow the patterns in `<path>` when you add an endpoint".
-
-What it reads:
-- each agent's prompt: definition, addendum without its comments, lessons;
-- every string of the policy's rules, patterns and validator registry, as the engine renders them;
-- the root instruction files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.cursor/rules`), whole;
-- the repository's skills (`.claude/skills`, `.github/skills`, `.agents/skills`);
-- the `e2e/` tree and the Playwright configs;
-- the Markdown files in `tests/` (`tests/README.md` and the like);
-- the prose in `.factory/app.json` (`$comment` and any string with spaces);
-- the policy's profile, `policy.yaml` and exceptions (their justifications), and the YAML comments of every policy file.
+How it reads sentences, and which texts it reads: [internals.md](internals.md#instruction-check).
 
 The factory's own tests apply it to the base agents, templates and pack policy texts, and the topology check to the skills, engine messages and validator messages.
 

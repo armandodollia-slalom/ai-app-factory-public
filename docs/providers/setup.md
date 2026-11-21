@@ -1,5 +1,7 @@
 # Setting up the providers: the interview
 
+**Who reads this:** B, answering the setup interview.
+
 `factory init` asks about every stage the factory sets up: the code host, the ticket board (including how its lanes map to the board's statuses), the CI system, merging and reviews, the agents and their models, UI verification, observability, static analysis and a commercial scanner. What detection found (the `origin` remote, the agent CLIs installed, an existing config) is shown as the default to confirm. Nothing is assumed silently. The same questions run in three ways and give the same result for the same answers.
 
 **Nothing secret is asked.** A credential question takes the *name* of the environment variable (or CI secret) that will hold it. The config gets a `${NAME}` reference, and an answer that looks like a token is refused. `.factory/interview.json` records the last answers (variable names only), so a re-run starts from them.
@@ -11,7 +13,7 @@ factory init                 # in a terminal it interviews; Enter keeps the defa
 factory init --interview     # interview even when the config exists or stdin is not a terminal
 ```
 
-The `onboard-codebase` skill runs the same interview conversationally and explains each choice. The `setup-board` skill covers the board's own setup: lanes, fields, and what a person creates by hand on each tracker (`factory board guide` prints that tracker's steps).
+The [`onboard-codebase`](../../skills/onboard-codebase/SKILL.md) skill runs the same interview conversationally and explains each choice. The [`setup-board`](../../skills/setup-board/SKILL.md) skill covers the board's own setup: lanes, fields, and what a person creates by hand on each tracker (`factory board guide` prints that tracker's steps).
 
 ## Headless
 

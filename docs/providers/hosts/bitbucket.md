@@ -1,5 +1,7 @@
 # Bitbucket Cloud (code host)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `host.type: "bitbucket"`, the default for a `bitbucket.org` remote. The adapter is `scripts/pipeline/lib/hosts/bitbucket.mjs` (REST API 2.0). A pull request's number is its id.
 
 ```json
@@ -18,6 +20,7 @@
 - No merge bound to a head SHA. The gate re-reads the head right before merging and refuses if it moved. Host auto-merge is never used: `board sync` merges a cleared pull request itself when its head is green.
 - Required checks are partial: "Require passing builds" counts builds, and merge checks block only on the Premium plan (`enforce_merge_checks`). The gate refuses to merge until every expected pipeline of the head is green, whatever the branch settings say.
 - No uploads to a pull request. Demo videos stay on the storage branch and are linked.
+- No reopening a declined pull request. A PR is held as a draft, never closed: `implement.preOpen.afterOpen: "close-reopen"` uses `draft` here, and `factory doctor` flags the setting. A PR declined by a hold from 0.2.92 cannot be released; its run ends `release-unconfirmed`.
 
 **By hand:** the branch restrictions on the default branch (`factory review-gate enforce --dry-run` lists them), the merge check that resets approvals when the source branch changes (so that an approval of an earlier head does not count: Bitbucket records no commit per approval), and the repository variables for the pipelines.
 

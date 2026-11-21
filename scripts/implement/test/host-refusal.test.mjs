@@ -274,7 +274,8 @@ test('deliverFinished: a PR the host refuses even when shortest ends pr-refused 
   });
   assert.deepEqual(order.filter((x) => x !== 'sync'), ['analysis-gate', 'push', 'branch-ci', 'open']);
   assert.equal(out.outcome, 'pr-refused');
-  assert.match(out.reason, /`implement resume` opens the PR without running any agent/);
+  assert.match(out.reason, /`implement resume` retries opening the PR without re-running implementation or review \(delivery-stage agents may still run if needed\)/);
+  assert.doesNotMatch(out.reason, /without running any agent|no agent runs/i, 'D14: pr-refused reason must not falsely claim no agent runs on resume');
   const last = saved.at(-1);
   assert.equal(last.phase, 'pre-open');
   assert.ok(last.greenAt && last.openRefused?.head, 'the record keeps greenAt and the head');

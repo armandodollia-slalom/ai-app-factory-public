@@ -4,12 +4,15 @@
 // lines; the headline demos are chosen from the test plan; one step gets one line. A scripted agent stands in for the
 // model.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { automaticScript, bindScript, headlineCases, planCases, recordedEvents, sameLine, scriptVideos, SCRIPT_DEFAULTS, stepListForAgent, validateScript } from '../lib/script.mjs';
+import { loadConfig, videoScriptProblems } from '../../pipeline/lib/config.mjs';
 import { verifyBefore } from '../lib/bugpair.mjs';
 import { scriptedNarrator } from './narrator-stub.mjs';
 
@@ -152,4 +155,30 @@ test('a bug\'s before-the-fix run counts only when it failed at the check the af
   assert.match(validateScript({ segments: [...segs, good.segments[2]] }, ev, vid).join('\n'), new RegExp(`no segment narrates what went wrong \\(${fid}\\)`));
   assert.match(validateScript({ segments: [...segs, { role: 'walk', text: 'The catalog lists 10 products for Daybird, just as it should.', from: fid }, good.segments[2]] }, ev, vid).join('\n'), /says "10 products", which is what the screen should have shown/);
   assert.deepEqual(validateScript({ segments: [...segs, { role: 'walk', text: 'Instead of Daybird\'s range, the catalog shows 0 products, so the shopper is stuck.', from: fid }, good.segments[2]] }, ev, vid), []);
+});
+
+test('D16/ADV-26: video.script.scope has one validator in config.mjs, rejects unknown values in loadConfig, and factory doctor reports it as a failed row without aborting', (t) => {
+  for (const ok of [undefined, 'headline', 'all', 'none']) {
+    const cfg = ok === undefined ? {} : { video: { script: { scope: ok } } };
+    assert.deepEqual(videoScriptProblems(cfg), []);
+  }
+  for (const bad of ['summary', 'headlines', '', true, 1, null]) {
+    const cfg = { video: { script: { scope: bad } } };
+    assert.equal(videoScriptProblems(cfg).length, 1);
+  }
+
+  // loadConfig rejects invalid video.script.scope at config load time.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'video-scope-cfg-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  fs.mkdirSync(path.join(root, '.factory'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({ video: { script: { scope: 'bogus' } } }));
+  assert.throws(() => loadConfig(null, root), /video\.script\.scope must be one of headline, all, none/);
+
+  // factory doctor must report the bad video.script.scope as a failed row rather than crashing.
+  const factoryCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../factory/factory.mjs');
+  const doc = spawnSync(process.execPath, [factoryCli, 'doctor'], { cwd: root, encoding: 'utf8', timeout: 60_000 });
+  assert.match(doc.stdout, /MISSING\s+demo video script settings \(video\.script\.scope\)/);
+  assert.match(doc.stdout, /video\.script\.scope must be one of headline, all, none/);
+  assert.doesNotMatch(doc.stderr, /Error: \.factory\/config\.json: video\.script\.scope/);
 });

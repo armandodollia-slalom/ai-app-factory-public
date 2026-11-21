@@ -396,7 +396,8 @@ export const defaultDeps = (config, log) => ({
   // as a single ticket's do: the branch may not merge for days, and the retro reads the store.
   shipMetrics: (wt) => shipMetrics(wt),
   parityGate,
-  // OPEN, MERGED or CLOSED, for a PR of this repository; null when it cannot be read.
+  // OPEN, MERGED or CLOSED, for a PR of this repository; null for a PR of another repository; UNKNOWN when the host
+  // could not be read (a unit's open-PR check treats it as open: fail closed).
   prState: (pr) => {
     try {
       const host = hostFor(config).sync;
@@ -404,7 +405,7 @@ export const defaultDeps = (config, log) => ({
       const state = host.pr.get(pr)?.state;
       return state ? state.toUpperCase() : null;
     } catch {
-      return null;
+      return 'UNKNOWN';
     }
   },
 });
@@ -627,6 +628,11 @@ async function epicFlow(env) {
     return only ? { key: s.key, outcome: 'skipped', reason: 'not part of this run' } : { key: s.key, outcome: 'undelivered', reason: 'its group never ran' };
   }).filter((r) => !only || only.includes(r.key));
   if (only) {
+    const failedHold = [...unitResults.values()].find((r) => r.outcome === 'hold-failed');
+    if (failedHold) {
+      log(`FAILED: ${failedHold.reason}`);
+      return { results, epic: { key: epic.key, outcome: 'hold-failed', reason: failedHold.reason } };
+    }
     log(`joined ${only.join(', ')} finished; the epic run (or \`implement resume\`) finishes the epic.`);
     return { results, epic: { key: epic.key, outcome: 'joined' } };
   }
@@ -714,10 +720,22 @@ async function deliverUnit(env, unit, units, epicWt) {
   }
   // A unit whose PR is open (a reopened ticket joins it, or an earlier run delivered it and this one works on it again):
   // the PR is put on hold before any agent runs, and marked ready again only by the delivery, once CI is green.
-  const openNow = env.pr && !prsDisabled() ? openPr ?? (prior.pr && prior.status !== 'done' && deps.prState?.(prior.pr) === 'OPEN' ? prior.pr : null) : null;
-  if (openNow && !prior.delivery?.holds?.some((h) => !h.to)) {
+  // An unreadable PR state counts as open (fail closed): the hold either confirms or the unit stops with hold-failed. A kept
+  // hold is trusted only when its release was never attempted; one whose release is unconfirmed is held and confirmed again.
+  const openNow = env.pr && !prsDisabled() ? openPr ?? (prior.pr && prior.status !== 'done' && ['OPEN', 'UNKNOWN'].includes(deps.prState?.(prior.pr)) ? prior.pr : null) : null;
+  if (openNow && !prior.delivery?.holds?.some((h) => !h.to && h.ok !== false && h.releaseConfirmed !== false)) {
     const hold = holdOpenPr(wtConfig, openNow, only ? `${only.join(', ')} joins it again` : 'its tickets are worked on again', { io });
-    shared.save({ pr: openNow, preOpen: true, holds: [...(prior.delivery?.holds ?? []), hold] });
+    const holds = [...(prior.delivery?.holds ?? []), hold];
+    if (!hold.ok) {
+      const reason = `could not confirm putting ${openNow} on hold (${hold.mode}) before working on ${only ? only.join(', ') : unit.id}; no agent ran (the PR may already be in draft or held on the host — check its state before resuming)`;
+      shared.save({ pr: openNow, preOpen: true, holds, holdFailed: reason });
+      saveUnit(config, epic.key, unit.id, { status: 'failed', outcome: 'hold-failed', reason, holdFailed: reason });
+      const results = (only ? uenv.stories.map((s) => s.key) : unit.keys).map((k) => ({ key: k, outcome: 'hold-failed', reason, pr: openNow }));
+      log(reason);
+      await deps.shipMetrics?.(wtConfig);
+      return { outcome: 'hold-failed', results, pr: openNow, reason };
+    }
+    shared.save({ pr: openNow, preOpen: true, holds });
   }
   saveUnit(config, epic.key, unit.id, { status: 'running', base: unitBase });
 

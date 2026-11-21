@@ -1,5 +1,7 @@
 # GitLab Issues (tracker)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `tracker.type: "gitlab"`, the default with a GitLab host. Tickets are issues of `tracker.project`, the ticket id is the issue's iid, types and lanes are labels (a board list is a label), and `done` also closes the issue. The adapter is `scripts/board/lib/trackers/gitlab.mjs` (REST API v4).
 
 ```json

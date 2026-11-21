@@ -1,22 +1,33 @@
 # Feature verification stage
 
-Part of the [AI development pipeline](README.md). Agents turn each user story into a verified test plan, and, once the implementation of a story is architecture-approved by the [review stage](review.md), into verified automated tests. Every artifact an agent produces is checked by a separate verifier agent that starts with a clean context and loops until it scores at least the required score (9/10, `loops.requiredScore`). Every denial is logged, and recurring denials become lessons that the agents read on their next run (the [retro](retro.md)).
+**Who reads this:** C (operators); B before writing stories. How test plans and automated tests are written and verified.
+
+Agents turn each user story into a verified test plan, and, once the implementation of a story is architecture-approved by the [review stage](review.md), into verified automated tests. Every artifact an agent produces is checked by a separate verifier agent that starts with a clean context and loops until it scores at least the required score (9/10, `loops.requiredScore`). Every denial is logged, and recurring denials become lessons that the agents read on their next run (the [retro](retro.md)).
 
 The stage is run as `factory fv <command>` (`factory feature-verification` is the same command). Its defaults are in the engine's `scripts/feature-verification/config.json`; a repository overrides any of them in its `.factory/config.json` ([configuration](../configuration.md)).
 
-## Workflow 1: story to test plan
-
 ```mermaid
 flowchart LR
-  S["fv plan KEY<br/>or implement run"] --> P["test-planner agent<br/>writes or updates the plan"]
+  S["fv plan KEY<br/>or implement run"] --> P["test-planner<br/>writes or updates the plan"]
   RQ["Required cases<br/>PR check or review test gaps"] --> P
-  P --> C{"Structural<br/>precheck"}
+  P --> C{"Structural precheck"}
   C -->|"fails"| P
-  C -->|"passes"| V["test-plan-verifier, fresh and read-only,<br/>or a council"]
-  V -->|"score below 9, gaps logged"| P
-  V -->|"9/10 or 10/10,<br/>every required case met"| OK["Plan stamped verified<br/>story-sha + plan-sha"]
-  P -.->|"round limit below 9/10"| E["Escalation for a human"]
+  C -->|"passes"| V["test-plan-verifier<br/>or a council"]
+  V -->|"below 9, gaps"| P
+  V -->|"9 or 10, required cases met"| PV["Plan verified"]
+  R["review approves<br/>the implementation"] --> A["test-automation<br/>scenario and tests"]
+  PV --> A
+  A --> T{"Deterministic checks<br/>ids, tags, scenario,<br/>tests pass, analysis"}
+  T -->|"fails"| A
+  T -->|"passes"| AV["test-automation-verifier<br/>or a council"]
+  AV -->|"test gaps"| A
+  AV -->|"case gaps"| P
+  AV -->|"gap that needs code"| PB["product bug:<br/>back to the implementer"]
+  AV -->|"9 or 10, required cases met"| OK["Tests verified"]
+  V & AV -.->|"round limit"| E["Escalation for a person"]
 ```
+
+## Workflow 1: story to test plan
 
 - Output: `.factory/plans/<story-slug>/_index.md` (`plansDir`; the slug is kept in the ticket's metadata) plus one `TC-<KEY>-NN-<slug>.md` per case, covering every happy and sad path. Each case has front matter (`id`, `type` happy or sad, `sad-path` for sad cases, `covers`, `layer`: `unit`, `functional` or `e2e`), a `# <id>: <title>` heading that holds its title, and the sections `Why`, `Preconditions`, `Steps` and `Expected result`. The title is not in the front matter: Markdown linters count a front-matter `title` as a second top-level heading (markdownlint MD025), and the structural check refuses it.
 - The runner owns the index front matter. `story-sha` records the story text the plan was written for and `story-issue` links the story's issue. When the story changes on the board, the plan becomes stale and the agent gets the story diff and updates the affected cases in place, keeping the ids of the others stable. The diff comes from the ticket cache, which keeps every version it fetched, or else from the issue's edit history.
@@ -25,23 +36,10 @@ flowchart LR
 
 ## Workflow 2: implementation to automated tests
 
-```mermaid
-flowchart LR
-  R["review stage approves<br/>the implementation"] -->|"same Stop hook"| A["test-automation agent<br/>background: scenario + tests"]
-  A --> T{"Deterministic checks<br/>ids, story tags, scenario, tests pass,<br/>static analysis"}
-  T -->|"fails"| A
-  T -->|"passes"| V["test-automation-verifier, fresh and read-only,<br/>or a council"]
-  V -->|"test gaps"| A
-  V -->|"case gaps, root_stage plan"| P["Workflow 1 plan loop"]
-  P --> A
-  V -->|"gap that needs code"| PB["product bug: back to the implementer"]
-  V -->|"9/10 or 10/10,<br/>every required case met"| OK["Tests stamped verified"]
-```
-
 1. The implementation agent runs `factory start <KEY>` and, when the line of work is complete, `factory done`.
 2. When its turn ends, the dispatcher runs the review stage first. The feature verification stage runs only once the review has approved the current implementation (`review.approvedHash` matches), then starts the automation loop in the background and lets the agent finish. If the implementation changes again, the next approval runs automation again in update mode, so the tests follow the corrected code.
 3. The automation loop writes the story's scenario (`.factory/stack/scenarios/<key>/scenario.yaml`: `scenariosDir`, `precheck.scenarioFile`) and tests in the application's own test tree whose names carry their case ids, runs them (when the plan has functional or e2e cases and a test runner runs on the stack, at least one of the story's tests must run on the test stack and load the scenario; `precheck.requireStack: false` turns that off; every UI case must record a `highlight:` or `absent:` keyframe of the state it asserts, from the `demo` fixture, else the precheck sends it back, `precheck.requireUiEvidence: false` turns that off; the automation verifier reports per UI case which keyframe it opened and what it shows, and a case it skipped or whose frame does not show the state caps the score below the pass mark; after the story's own tests pass, each test project they live in runs whole, unfiltered, as CI runs it (a runner's `runAll`), and so does every other test project that covers a service the change touches (the service's `unitTests` and `testProjects` in the project model, or a test project whose manifest references the service's folder), built first; a failure goes back to the automation agent, each run is recorded in `full-project-runs.jsonl` and listed in the PR body, and `precheck.runFullProjects: false` turns it off; the whole projects run once, after the verifier approves the tests, not in every round, unless `precheck.fullProjectsEveryRound` is true; under `implement run` the pass holds one stack slot that the agent and every precheck round share, rebuilding only the services changed since its last build, and takes it down once when the pass ends), and loops with the automation verifier until it scores at least 9/10. If the tests show that the implementation contradicts the plan, the run stops with a `product-bug` escalation instead of weakening the tests.
-4. A test runner marked `evidence: true` (the Playwright runner of `packs/playwright`) also gives the agents what the browser showed. Its run writes a manifest (`evidence.manifest`, default `artifacts/e2e-videos/manifest.json`) that lists every test with its status, errors, video and labeled keyframes (see the `feature-demo-video` skill). When the run fails, the feedback to the automation agent includes each failed test's error and keyframe paths. When the tests pass, the verifier gets every test's keyframes and checks that the screen matches each case (`visual-mismatch`). Only a manifest written by that run is used.
+4. A test runner marked `evidence: true` (the Playwright runner of `packs/playwright`) also gives the agents what the browser showed. Its run writes a manifest (`evidence.manifest`, default `artifacts/e2e-videos/manifest.json`) that lists every test with its status, errors, video and labeled keyframes (see the [`feature-demo-video`](../../skills/feature-demo-video/SKILL.md) skill). When the run fails, the feedback to the automation agent includes each failed test's error and keyframe paths. When the tests pass, the verifier gets every test's keyframes and checks that the screen matches each case (`visual-mismatch`). Only a manifest written by that run is used.
 
 ### Test runners
 
@@ -76,7 +74,7 @@ With an `analysis` section, the automation precheck also runs the `featureVerifi
 
 ## Where it hooks in
 
-The [dispatcher](README.md#lifecycle-events) calls the feature verification stage on these events:
+The [dispatcher](../internals.md#hooks-and-lifecycle-events) calls the feature verification stage on these events:
 
 | Event | What the feature verification stage does |
 | --- | --- |
@@ -143,7 +141,7 @@ Results are appended to `.factory/metrics/*.jsonl`, which are committed with the
 | `bug-triage` | `auto-merge`, `wait`, `review` | the [review gate](review-gate.md)'s assessment of a published bug-fix PR: its severity with the explanation, and what triggered review | each ticket: the three ratings, severity, confidence, reopens, systems |
 | `automation` | `product-bug` | the automation agent's summary of why the implementation, not the test, is wrong | each bug: case, expected, actual, location |
 
-Plan decisions are logged each round that passes the structural check, so each pairs with that round's verifier decision. Calibration audits are not logged here (they go to `calibration.jsonl`). The implement stage adds its orchestrator's plans and pair verdicts ([implement](implement.md#decision-log)).
+Plan decisions are logged each round that passes the structural check, so each pairs with that round's verifier decision. Calibration audits are not logged here (they go to `calibration.jsonl`). The implement stage adds its orchestrator's plans and pair verdicts ([implement](implement-reference.md#decision-log)).
 
 ## Auto-improvement
 
@@ -192,7 +190,7 @@ How slots, ports and scenarios work is in [test-stack.md](../test-stack.md).
 
 ## Models
 
-Models are named by alias. `agent.allowedModels` lists the allowed ones (default `opus`, `sonnet` and `sol`). Any other value in `agent.models` fails when the config loads. `agent.modelIds` maps each alias to each agent CLI's own model id. With `agent.strictModels` (on), a run without a model uses `agent.models.default` (`sonnet`), and a CLI with no id for an alias is refused rather than falling back to its own default model; the default `modelIds` has entries for `claude` and `copilot` only, so Codex needs its ids added before it can run. `PIPELINE_MODEL_OVERRIDE=<alias>` forces one allowed model for every agent, for experiments. To allow another model, add its alias to `allowedModels` and its id for each CLI to `modelIds`, in `.factory/config.json`. See [models](models.md) for the per-CLI view, discovery and `factory models check`.
+Models are named by alias. `agent.allowedModels` lists the allowed ones (default `opus`, `sonnet` and `sol`). Any other value in `agent.models` fails when the config loads. `agent.modelIds` maps each alias to each agent CLI's own model id. With `agent.strictModels` (on), a run without a model uses `agent.models.default` (`sonnet`), and a CLI with no id for an alias is refused rather than falling back to its own default model; on Codex only `sol` has an id by default, so a Codex run must ask for `sol`. `PIPELINE_MODEL_OVERRIDE=<alias>` forces one allowed model for every agent, for experiments. To allow another model, add its alias to `allowedModels` and its id for each CLI to `modelIds`, in `.factory/config.json`. See [models](models.md) for the per-CLI view, discovery and `factory models check`.
 
 ## Commands
 

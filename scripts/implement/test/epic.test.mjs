@@ -14,7 +14,7 @@ import { loadTicket, resetTicketMemo } from '../../pipeline/lib/tickets.mjs';
 import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { recordOutage } from '../../pipeline/lib/outage.mjs';
 import { ticketDir } from '../../board/lib/source.mjs';
-import { epicToJoin, loadEpicRun, runEpic } from '../lib/epic.mjs';
+import { defaultDeps, epicToJoin, loadEpicRun, runEpic, saveEpicRun } from '../lib/epic.mjs';
 import { deliveryShape, featureGroupTitle, epicDeps, epicPrBody, groupDeps, journeyGroup, nextStories, ownsConflict, singleGroups, validateGroups, validateNote } from '../lib/epic-plan.mjs';
 import { groupRow, labelDecisions } from '../lib/decisions.mjs';
 import { failedResults } from '../lib/board-events.mjs';
@@ -798,6 +798,41 @@ test('epic join: a reopened ticket of a group whose PR is open puts the PR on ho
   assert.ok(f2.board.some((b) => b[0] === 'BUG-1' && b[1] === 'review' && b.includes('https://github.com/example/repo/pull/101')));
 });
 
+test('ADV-1 (D3) epic join: an unconfirmed hold stops before any agent runs, and an earlier failed hold does not count as held on retry', async () => {
+  const env = makeRepo({ bugs: true });
+  const origin = path.join(env.tmp, 'origin.git');
+  git(env.tmp, 'init', '-q', '--bare', origin);
+  git(env.repo, 'remote', 'add', 'origin', origin);
+  const note = { summary: 'one area', stories: [], prGroups: [{ id: 'cart', title: 'Cart', tickets: ['BUG-1', 'BUG-2', 'BUG-3'], reason: 'same area', risk: 'low' }] };
+  const onPush = (o) => (git(o.worktree, 'push', '-q', 'origin', `HEAD:refs/heads/${o.branch}`), { pushed: true });
+  const f = fakeDeps(note, { startWorker: fakeWorker().startWorker, onPush });
+  await epicRun(env, f);
+  const bug1 = env.tickets.find((t) => t.key === 'BUG-1');
+  git(env.repo, 'worktree', 'remove', '--force', path.join(env.tmp, 'shop-worktrees', 'bug-1'));
+  git(env.repo, 'branch', '-D', 'feat/bug-1');
+
+  // Attempt 1: host fails to confirm hold -> must stop with hold-failed before any agent runs.
+  const order1 = [];
+  const fFail = fakeDeps(note, { startWorker: (c, s) => (order1.push(['agent', s.key]), fakeWorker().startWorker(c, s)), onPush });
+  fFail.deps.deliveryIo.hold = (pr, o) => (order1.push(['hold-failed', pr]), { mode: o.mode, ok: false, from: new Date().toISOString(), why: o.why });
+  const jFail = await runEpic(env.config, { epic: env.epic, tickets: [bug1], inputs: [env.inputs[env.tickets.indexOf(bug1)]], base: 'main', only: ['BUG-1'], force: true, pr: true, deps: fFail.deps, log: () => {} });
+  assert.equal(jFail.epic.outcome, 'hold-failed');
+  assert.equal(jFail.results[0].outcome, 'hold-failed');
+  assert.deepEqual(order1.map((o) => o[0]), ['hold-failed'], 'no agent may run when hold is not confirmed');
+  assert.equal(unitState(env, 'cart').outcome, 'hold-failed');
+  assert.equal(unitState(env, 'cart').delivery.holds.at(-1).ok, false);
+
+  // Attempt 2: prior failed hold (no `to`, `ok: false`) must NOT count as already on hold -> retries hold, then runs.
+  const order2 = [];
+  const again = fakeWorker({ files: { 'BUG-1': 'src/BUG-1-reopen-fix.cs' } });
+  const fOk = fakeDeps(note, { startWorker: (c, s) => (order2.push(['agent', s.key]), again.startWorker(c, s)), onPush });
+  const realHold = fOk.deps.deliveryIo.hold;
+  fOk.deps.deliveryIo.hold = (pr, o) => (order2.push(['hold', pr]), realHold(pr, o));
+  const jOk = await runEpic(env.config, { epic: env.epic, tickets: [bug1], inputs: [env.inputs[env.tickets.indexOf(bug1)]], base: 'main', only: ['BUG-1'], force: true, pr: true, deps: fOk.deps, log: () => {} });
+  assert.equal(jOk.epic.outcome, 'joined');
+  assert.deepEqual(order2.map((o) => o[0]), ['hold', 'agent'], 'must re-attempt hold after prior failed hold before running agent');
+});
+
 test('epic re-delivery: a group whose PR stayed on hold after a failed fix is delivered again on that PR, never opened twice', async () => {
   const env = makeRepo({ bugs: true });
   const red = ({ kind, pr }) => (kind === 'pr' && pr.endsWith('/101') ? { state: 'failure', failing: ['pr-only'], pending: [] } : null);
@@ -819,6 +854,53 @@ test('epic re-delivery: a group whose PR stayed on hold after a failed fix is de
   const cart = steps(f2, 'bugfix/shop/cart');
   assert.ok(!cart.includes('open') && cart.includes('update-body') && cart.includes('ready'), cart.join(','));
   assert.ok(unitState(env, 'cart').delivery.holds.every((h) => h.to), 'released once green');
+});
+
+// The epic counterparts of ADV-30 and ADV-33: a unit's kept hold whose release was attempted but never confirmed is not
+// trusted (the PR may already be ready on the host), and an unreadable PR state counts as open (fail closed).
+const redCartThenClean = async (env) => {
+  const red = ({ kind, pr }) => (kind === 'pr' && pr.endsWith('/101') ? { state: 'failure', failing: ['pr-only'], pending: [] } : null);
+  await epicRun(env, fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, ci: red }));
+  for (const k of ['bug-1', 'bug-2', 'bug-3']) {
+    git(env.repo, 'worktree', 'remove', '--force', path.join(env.tmp, 'shop-worktrees', k));
+    git(env.repo, 'branch', '-D', `feat/${k}`);
+  }
+};
+const patchCartHolds = (env, fn) => saveEpicRun(env.config, env.epic.key, (cur) => ({ ...cur, units: { ...cur.units, cart: { ...cur.units.cart, delivery: { ...cur.units.cart.delivery, holds: cur.units.cart.delivery.holds.map(fn) } } } }));
+const tracked = (order, extra = {}) => {
+  const again = fakeWorker({ files: { 'BUG-1': 'src/BUG-1-again.cs', 'BUG-2': 'src/BUG-2-again.cs', 'BUG-3': 'src/BUG-3-again.cs' } });
+  const f = fakeDeps(twoGroups(), { startWorker: (config, s) => (order.push(['agent', s.key]), again.startWorker(config, s)), ...extra });
+  const realHold = f.deps.deliveryIo.hold;
+  f.deps.deliveryIo.hold = (pr, o) => (order.push(['hold', pr]), extra.hold ? extra.hold(pr, o) : realHold(pr, o));
+  return f;
+};
+const cartPr = 'https://github.com/example/repo/pull/101';
+
+test('epic unit: a kept hold whose release is unconfirmed is held and confirmed again before any agent runs', async () => {
+  const env = makeRepo({ bugs: true });
+  await redCartThenClean(env);
+  patchCartHolds(env, (h) => (h.to ? h : { ...h, releaseConfirmed: false, releaseFailedAt: new Date().toISOString() }));
+  assert.ok(unitState(env, 'cart').delivery.holds.some((h) => !h.to && h.releaseConfirmed === false));
+  const order = [];
+  const r = await epicRun(env, tracked(order, { prState: () => 'OPEN' }), { force: true });
+  assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
+  const hold = order.findIndex((o) => o[0] === 'hold' && o[1] === cartPr);
+  const agent = order.findIndex((o) => o[0] === 'agent' && ['BUG-1', 'BUG-2'].includes(o[1]));
+  assert.ok(hold >= 0 && hold < agent, `the PR is held again before the agents: ${JSON.stringify(order)}`);
+});
+
+test('epic unit: an unreadable PR state counts as open; a hold that cannot be confirmed stops the unit with hold-failed and no agent', async () => {
+  const env = makeRepo({ bugs: true });
+  await redCartThenClean(env);
+  patchCartHolds(env, (h) => (h.to ? h : { ...h, to: new Date().toISOString(), releaseConfirmed: true }));
+  const order = [];
+  const f = tracked(order, { prState: () => 'UNKNOWN', hold: (pr, o) => ({ mode: o.mode, ok: false, from: new Date().toISOString(), why: o.why }) });
+  await epicRun(env, f, { force: true });
+  assert.ok(order.some((o) => o[0] === 'hold' && o[1] === cartPr), `the unreadable PR is held first: ${JSON.stringify(order)}`);
+  assert.ok(!order.some((o) => o[0] === 'agent' && ['BUG-1', 'BUG-2'].includes(o[1])), `no agent on the cart unit: ${JSON.stringify(order)}`);
+  assert.equal(unitState(env, 'cart').outcome, 'hold-failed');
+  // The real read: a host that cannot be read is UNKNOWN, never "not open".
+  assert.equal(defaultDeps({ ...env.config, host: { type: 'no-such-host' } }, () => {}).prState(cartPr), 'UNKNOWN');
 });
 
 test('epic delivery: the ready audit covers the unit\'s tickets; an agent run of one of them after ready is reported', async () => {

@@ -1,6 +1,6 @@
 # Setting up the pipeline
 
-Part of the [AI development pipeline](README.md). What a machine needs to run the factory against a codebase, locally or on a CI runner. The factory is installed once, outside the application repository; each repository gets a `.factory/` folder and a few generated files.
+**Who reads this:** B (adopters). The one install recipe: what a machine needs, how to install the factory, how to add it to a repository and run a first ticket. The factory is installed once, outside the application repository; each repository gets a `.factory/` folder and a few generated files. You are done when your first ticket's pull request is open and its card is in Pending Review.
 
 ## Prerequisites
 
@@ -10,11 +10,11 @@ Part of the [AI development pipeline](README.md). What a machine needs to run th
 | Node.js 20 or later | every stage and the hooks | the git hooks skip silently when `node` is missing |
 | An agent CLI, signed in | every agent the pipeline starts | Claude Code (`claude`, default), GitHub Copilot CLI (`copilot`) or OpenAI Codex (`codex`) |
 | Python 3 (`factory python setup` adds `pyyaml` and `jsonschema` in a virtualenv inside the install) | the architecture policy step of the review | doctor, `factory policy` and the review use the same interpreter (`$FACTORY_PYTHON`, the install's `.venv`, then `python3`/`python` on PATH, the first with the modules). With a policy configured and no such interpreter, the review blocks with a finding that says so |
-| `gh`, signed in | GitHub as the code host or the tracker: the story board, opening PRs, the PR check | the pipeline's PRs are opened by your [PR bot](#the-pipelines-pr-bot) once it is set up |
-| A token for each other product | GitLab, Azure DevOps, Jira or Azure Boards as the code host or tracker | an environment variable the config names (`"token": "${GITLAB_TOKEN}"`); scopes per product in [hosts-and-trackers.md](../hosts-and-trackers.md). No other CLI is needed: the factory calls their REST APIs |
+| `gh`, signed in | GitHub as the code host or the tracker: the ticket board, opening PRs, the PR check | the pipeline's PRs are opened by your [PR bot](#the-pipelines-pr-bot) once it is set up |
+| A token for each other product | GitLab, Azure DevOps, Bitbucket, Jira, Azure Boards or Linear as the code host or tracker | an environment variable the config names (`"token": "${GITLAB_TOKEN}"`); scopes per product on its [provider page](../providers/README.md#pages). No other CLI is needed: the factory calls their REST APIs. These adapters are verified against fakes only ([proof](../../README.md#what-has-been-proven)) |
 | Docker | the test stack (feature verification, UI verifiers) | only when the repository configures a `stack` |
 | The codebase's own toolchain | building and testing the code | whatever its CI installs: a JDK, `cargo`, the .NET SDK, ... The language packs name the language servers and test runners they expect |
-| graphify | optional: agents' code lookups | feature `graphify` in `.factory/factory.json`; see [copilot-setup.md](../copilot-setup.md#3-enable-graphify-for-copilot) |
+| graphify | optional: agents' code lookups | feature `graphify` in `.factory/factory.json`; [below](#graphify) |
 | Playwright, `ffmpeg` | optional: e2e tests, demo videos, frame extraction in the PR check | feature `demoVideo` |
 
 `factory doctor`, run in the repository, checks each of these and says what is missing.
@@ -29,7 +29,7 @@ export FACTORY_HOME=~/ai-app-factory   # in your shell profile: where repositori
 factory python setup                   # a virtualenv in the install with the policy engine's modules
 ```
 
-**The engine a repository runs is the version it pins** (`.factory/factory.json`). The repository's `.factory/bin/factory.mjs` looks for it in this order: `$FACTORY_HOME`, a dev dependency, `~/.ai-app-factory/versions/<pin>` (`factory upgrade <version> --install` clones that tag, installs all of its packages, the language servers included, sets up the policy engine's Python and checks code intelligence), then an `npm link`ed `factory` on `PATH`. If the engine it finds is at another version than the pin:
+**The engine a repository runs is the version it pins** (`.factory/factory.json`). The repository's `.factory/bin/factory.mjs` looks for it in this order: `$FACTORY_HOME`, a dev dependency, `~/.ai-app-factory/versions/<pin>` (`factory upgrade <version> --install` clones that tag, installs all of its packages, the language servers included, sets up the policy engine's Python and checks code intelligence; [what changed](../configuration.md#upgrading-from-0292)), then an `npm link`ed `factory` on `PATH`. If the engine it finds is at another version than the pin:
 - an explicit `FACTORY_HOME` is used, with a warning;
 - an implicit one (a dev dependency or a link) is refused for commands, with the install command in the message (`FACTORY_ALLOW_UNPINNED=1` runs it anyway);
 - hooks still run, with a warning.
@@ -47,23 +47,38 @@ factory init        # writes .factory/ (a draft config.json, the pin, addendum s
 factory doctor
 ```
 
-`factory init` drafts `.factory/config.json` from file names and the language packs. In a terminal (or with `--interview`, `--answers <file>` or `--set id=value`) it then asks about every stage: the code host, ticket board and CI system (any combination: [../providers/](../providers/README.md)), merging, agents and models, UI verification, observability, static analysis and a commercial scanner. What detection found is offered as the default ([../providers/setup.md](../providers/setup.md)). Run it again later to change an answer: it edits the config, never overwrites it. Review it, or let an agent do the reading for you with the skills in `skills/` (start with `onboard-codebase`; it calls the others: `setup-lsp`, `setup-teststack`, `author-architecture-policy`, `write-agent-addenda`, `setup-host`, `setup-board`, `setup-observability`, `setup-retro`). [configuration.md](../configuration.md) lists the settings.
+`factory init` drafts `.factory/config.json` from file names and the language packs. In a terminal (or with `--interview`, `--answers <file>` or `--set id=value`) it then asks about every stage: the code host, ticket board and CI system (any combination: [../providers/](../providers/README.md)), merging, agents and models, UI verification, observability, static analysis and a commercial scanner. What detection found is offered as the default ([../providers/setup.md](../providers/setup.md)). Run it again later to change an answer: it edits the config, never overwrites it. Review it, or let an agent do the reading for you: in an agent session in the repository, ask it to run the [`onboard-codebase`](../../skills/onboard-codebase/SKILL.md) skill (the factory is also a Claude Code plugin, so Claude Code lists its skills; other tools read the `SKILL.md` file when asked). It corrects the draft against the real build and calls the others: [`setup-lsp`](../../skills/setup-lsp/SKILL.md), [`setup-teststack`](../../skills/setup-teststack/SKILL.md), [`author-architecture-policy`](../../skills/author-architecture-policy/SKILL.md), [`write-agent-addenda`](../../skills/write-agent-addenda/SKILL.md), [`setup-host`](../../skills/setup-host/SKILL.md), [`setup-board`](../../skills/setup-board/SKILL.md), [`setup-observability`](../../skills/setup-observability/SKILL.md), [`setup-retro`](../../skills/setup-retro/SKILL.md). [configuration.md](../configuration.md) lists the settings.
 
 After any change to `.factory/config.json`, `.factory/factory.json` or `.factory/agents/`, run `factory render`. `factory check` (also a CI job) fails when generated files are out of step. `factory uninstall` removes everything the factory wrote outside `.factory/`.
 
 Then:
 
 1. Turn on the git hooks: `git config core.hooksPath .factory/githooks` (`factory init` does this unless the repository already has a hooks path; then call `.factory/bin/factory git-hook <event>` from your own hooks).
-2. Trust the repository's hooks in your interactive agent tool, so `factory done` triggers the stages. See [Agent tool coverage](README.md#agent-tool-coverage) for each tool's trust step (for Copilot CLI: add the repository to `trustedFolders` in `~/.copilot/config.json`).
+2. Trust the repository's hooks in your interactive agent tool, so `factory done` triggers the stages. See [Agent tool coverage](../internals.md#agent-tool-coverage) for each tool's trust step (for Copilot CLI: add the repository to `trustedFolders` in `~/.copilot/config.json`).
 3. Choose the agent CLI: `export PIPELINE_AGENT_CLI=copilot` (or `claude`, the default, or `codex`), or set `agent.cli` in `.factory/config.json`. `PIPELINE_AGENT_CMD` runs any other command, with the prompt on stdin; it runs with `sh -c`, so on Windows Git's `usr\bin` folder must be on `PATH`.
-4. Check the pipeline without any LLM calls:
+4. Check the pipeline without any AI calls:
 
    ```bash
    factory stages
    factory implement run <KEY> --dry-run
    ```
 
+5. Run a first ticket. Write it as [writing-stories.md](writing-stories.md) says (`factory board new`), move its card
+   to Ready, and run `factory implement run <KEY> --pr`. `factory implement status` shows where it is. You are done
+   when the run ends `done` and its pull request is ready for review (or merged), with the card in Pending Review
+   or Done; if the ticket stops instead, its outcome and the next step are in [escalations.md](escalations.md#outcomes).
+
 A teammate who clones the repository only needs the factory on their machine. The committed launcher `.factory/bin/factory` looks for it in `$FACTORY_HOME`, then `node_modules/ai-app-factory` (a dev dependency), then `~/.ai-app-factory/versions/<pinned version>`, and prints the install command when it finds none. Hooks never fail because the engine is missing.
+
+## Graphify
+
+With the `graphify` feature on in `.factory/factory.json`, agents look code up in a
+[graphify](https://github.com/safishamsi/graphify) knowledge graph in `graphify-out/` before reading source files.
+Install the pinned version and put `graphify` on `PATH` (`pipx install "graphifyy==0.9.105"`, or
+`pip install --user` on Windows), then build the graph with `factory graphify-build` (no API key: a code pass plus
+the shared extraction of docs and images committed in `graphify-out/cache/semantic/`). For GitHub Copilot, also
+run `graphify install --platform copilot` once. After changing docs or images, `factory graphify-build --extract`
+(needs the `claude` CLI) refreshes the shared cache; commit only the new files under `graphify-out/cache/semantic/`.
 
 ## The pipeline's PR bot
 
@@ -90,7 +105,7 @@ Then check it at any time (exit code 0 when it is configured, installed and can 
 factory bot status
 ```
 
-Until the bot is set up, every PR the pipeline opens logs a warning naming `pipeline bot setup` and uses your own `gh` login, as before. The same happens, with a warning, when the bot cannot get a token (for example it is not installed on the repository).
+Until the bot is set up, every PR the pipeline opens logs a warning naming `factory bot setup` and uses your own `gh` login. The same happens, with a warning, when the bot cannot get a token (for example it is not installed on the repository).
 
 Notes:
 
@@ -122,7 +137,7 @@ Outside the repository, in `bot.credentialsDir` (`~/.config/ai-app-factory`; `%U
 
 | Setting | Effect |
 | --- | --- |
-| `git config fv.autoPlan true` | write test plans in the background for stories added or changed by a commit or merge |
+| `git config fv.autoPlan true` | write test plans in the background for tickets `factory board fetch` brings in new or changed |
 | `git config retro.auto true` | run the retro after merges |
 | `PIPELINE_BASE_REF` | base branch for diffs and new stories (default `origin/main`) |
 | `PIPELINE_DISABLE=1` | turn off every hook, including the story guard |
@@ -139,7 +154,7 @@ Per-stage limits, timeouts and models: the defaults are in the factory's `script
 
 ## Review gate for bug-fix PRs
 
-The [review gate](review-gate.md) needs nothing extra to assess PRs and request reviews (the pipeline machine's `gh` login with the `project` scope; run `board setup` once to create its board fields). Repository settings it relies on are the owner's call, and the gate never changes them:
+The [review gate](review-gate.md) needs nothing extra to assess PRs and request reviews (on GitHub, the pipeline machine's `gh` login with the `project` scope; run `factory board setup` once to create its board fields). Repository settings it relies on are the owner's call, and the gate never changes them. On GitHub (other hosts: their [provider page](../providers/README.md#pages)):
 
 | Setting | Where | Why |
 | --- | --- | --- |
@@ -161,6 +176,6 @@ With the `ci` feature on, `factory render` writes the jobs for `ci.provider` (th
 | OpenAI Codex | `PIPELINE_AGENT_CLI` = `codex` | `OPENAI_API_KEY` |
 | Any other CLI | `PIPELINE_AGENT_CMD` = the command, which reads the prompt on stdin; optionally `PIPELINE_AGENT_INSTALL` = a shell command that installs it | `PIPELINE_AGENT_API_KEY`, available to the command as `$PIPELINE_AGENT_API_KEY` |
 
-On GitLab CI these are CI/CD variables; on Azure Pipelines, pipeline variables (secrets marked secret). When the chosen provider's secret is missing, the workflow logs a notice and skips instead of failing. Per-role PR check models have defaults for `claude` and `copilot`; other providers use their CLI's default model unless you add a `prCheck.models.<cli>` entry.
+On GitLab CI these are CI/CD variables; on Azure Pipelines, pipeline variables (secrets marked secret). When the chosen provider's secret is missing, the workflow logs a notice and skips instead of failing. Per-role PR check models have defaults for `claude` and `copilot`; another CLI needs a `prCheck.models.<cli>` entry naming aliases it has ids for (on Codex, `sol`), or its runs are refused by the [model policy](models.md).
 
 To run `implement run` from a scheduled job, the runner needs everything above, including a signed-in agent CLI.

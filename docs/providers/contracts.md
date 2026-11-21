@@ -1,5 +1,7 @@
 # Provider contracts
 
+**Who reads this:** D, writing or changing an adapter.
+
 Every adapter implements the contract of its kind. The contracts were derived from the factory's own call sites: each operation below is something the engine actually does. They live in `scripts/pipeline/lib/providers/contracts.mjs`, and the tables on this page are generated from that file, so they always match the code.
 
 Rules every adapter follows:
@@ -8,7 +10,7 @@ Rules every adapter follows:
 - **Normalised values.** Pull requests, tickets, runs and findings have the shapes listed under *Returns*, whatever the product calls them.
 - **`UnsupportedError` for a missing capability.** An operation the product cannot do throws `UnsupportedError` with the fallback in its message. The harness then degrades as the capability table says; it never guesses.
 - **Errors without secrets.** A message names the operation and the HTTP status, never a token, and a URL never carries one.
-- **A refused text is its own error.** A call that sends text (a pull request, a ticket, a comment) and is refused for that text (a content filter: a 4xx naming spam or content, or a 403 with no reason) throws an error with code `refused` (`HostRefusedError` for a host, `TrackerError('refused')` for a tracker), never the permission (`auth`) or rate-limit error. The engine then sends the same call again with a shorter body in a fixed order, with no agent ([implement.md](../ai-pipeline/implement.md), "A code host that refuses the PR's text"); a custom adapter that throws an error whose message carries such a 403 is classed the same way.
+- **A refused text is its own error.** A call that sends text (a pull request, a ticket, a comment) and is refused for that text (a content filter: a 4xx naming spam or content, or a 403 with no reason) throws an error with code `refused` (`HostRefusedError` for a host, `TrackerError('refused')` for a tracker), never the permission (`auth`) or rate-limit error. The engine then sends the same call again with a shorter body in a fixed order, with no agent ([a host that refuses the PR's text](../ai-pipeline/implement-reference.md#a-host-that-refuses-the-prs-text)); a custom adapter that throws an error whose message carries such a 403 is classed the same way.
 - **No product names in the engine.** Engine code reaches products only through these contracts. `scripts/pipeline/test/providers-audit.test.mjs` fails when engine code calls `gh` directly or names a provider outside the adapters, packs and templates.
 
 The mode column says what an operation does: `read` changes nothing, `write` changes one item the pipeline owns, and `admin` changes a board's or repository's settings (run by a person, with a dry run first). `factory adapter check` runs only `read` operations unless you pass `--write`.
@@ -164,6 +166,8 @@ Capabilities of a scanner adapter (`safety`: the harness keeps the safety proper
 | `sarif` | no | SARIF output | the vendor JSON is mapped by the definition's parser |
 | `shaBound` | yes | a result names the commit it is of | the scanner's check on the head binds the result to the head (analysis.commercial.check, required); without a check name the head is never green |
 <!-- /generated:contracts -->
+
+**Holding a PR.** The harness re-reads a PR with `pr.get` to confirm every hold and release, and reads its `state` at plan time to find an open PR before any agent runs (a failed read counts as open). A host adapter must return `draft`, `labels` and `state` (`open` or `closed`), or every hold ends `hold-failed`. An adapter that cannot reopen a closed PR sets `reopenPr: false` beside its capabilities (not yet a contract capability; Bitbucket does) and throws `UnsupportedError` from `pr.update` on `state: 'open'`. Its PRs are held as drafts, else with a label, never closed; a host that can do none of the three cannot hold a PR, and every hold ends `hold-failed`.
 
 ## Adding a product
 

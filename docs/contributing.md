@@ -1,10 +1,22 @@
 # Contributing to the factory
 
+**Who reads this:** D (contributors to the generator). How to run the tests, where things live, the rules every
+change follows, and where the deeper material is. The factory was extracted from the pipeline built in the eShop
+sample application; `examples/eshop/` keeps that application's settings as a worked example.
+
+Read next, as needed:
+
+- [internals.md](internals.md): the dispatcher, hooks, guards, agent definitions, shared state, adding a stage.
+- [providers/contracts.md](providers/contracts.md) and [providers/custom.md](providers/custom.md): the adapter contracts.
+- [ai-pipeline/ci-parity.md](ai-pipeline/ci-parity.md): every CI job needs a pre-PR equivalent.
+- [ai-pipeline/agents.md](ai-pipeline/agents.md#changing-an-agent) and [ai-pipeline/models.md](ai-pipeline/models.md#changing-the-list): changing an agent or the model list.
+- [code-intelligence.md](code-intelligence.md) and [ai-pipeline/analysis.md](ai-pipeline/analysis.md): adding a language server or an analysis tool to a pack.
+
 ## Run the tests
 
 ```bash
 npm ci
-npm test                                                  # every stage and tool, with a fake agent (no LLM calls)
+npm test                                                  # every stage and tool, with a fake agent (no AI calls)
 node --test packs/*/*/test/*.test.mjs                     # helper modules of the language packs
 python3 -m unittest discover architecture-policy/tests    # the policy engine
 ```
@@ -62,7 +74,8 @@ Verified by running: the LSP entries of `dotnet`, `typescript`, `python` and `go
 - After editing `agents/*.agent.md`, run the tests: prompt versions are hashes and some tests pin structure, not text.
 - After editing `templates/`, run `factory render` in a test repository and `factory check`.
 - The retro stage of repositories that use the factory pushes proposal branches that change `agents/`, `docs/`, `templates/` and `skills/` here; a person opens the pull request. Review them like any other change: they quote the evidence from the repository that proposed them.
-- After changing a page with a Mermaid diagram, check that it still renders (GitHub's preview, or the Mermaid live editor); keep node text short and quote labels that contain punctuation.
+- After changing a page with a Mermaid diagram, check that it still renders (GitHub's preview, or the Mermaid live editor); keep node text short and quote labels that contain punctuation. The pipeline map in [ai-pipeline/README.md](ai-pipeline/README.md#the-pipeline-map) uses one id per node; keep its table in step.
+- Docs describe the current release only: no round names, release history or dates of internal work. Behaviour that falls short of the design goes, once, under [Known limits](ai-pipeline/README.md#known-limits).
 - After changing `templates/e2e/`, add the new file's hash to `templates/e2e/history.json` (a test checks it).
 
 ## Releases

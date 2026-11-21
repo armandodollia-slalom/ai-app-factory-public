@@ -25,6 +25,7 @@ import { appendJsonl, nowIso, readJson, writeJson } from '../../pipeline/lib/uti
 import { git } from '../../pipeline/lib/git.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { ciFor } from '../../pipeline/lib/ci/index.mjs';
+import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 import { branchFlaky, branchLabel, branchWait, ciFixRounds, ciGate, ciLine, deliveryDecision } from './ci-wait.mjs';
 import { headSha } from './gitops.mjs';
 
@@ -43,7 +44,7 @@ export function preOpenSettings(config) {
   return s;
 }
 
-export function preOpenProblems(config) {
+export function preOpenProblems(config, { host = null } = {}) {
   const raw = config.implement?.preOpen;
   if (raw === undefined) return [];
   const p = [];
@@ -51,6 +52,19 @@ export function preOpenProblems(config) {
   for (const k of Object.keys(raw ?? {})) if (REMOVED[k]) p.push(REMOVED[k]);
   for (const k of Object.keys(raw ?? {})) if (!known.includes(k) && !REMOVED[k]) p.push(`implement.preOpen.${k} is not a setting (${known.join(', ')})`);
   if (raw?.afterOpen !== undefined && !AFTER_OPEN.includes(raw.afterOpen)) p.push(`implement.preOpen.afterOpen must be one of ${AFTER_OPEN.join(', ')}`);
+  if (raw?.afterOpen === 'close-reopen') {
+    let h = host;
+    if (!h && config?.host) {
+      try {
+        h = hostFor(config).sync;
+      } catch {
+        h = null;
+      }
+    }
+    if (h?.reopenPr === false || h?.capabilities?.reopenPr === false) {
+      p.push(`implement.preOpen.afterOpen "close-reopen" is not supported on ${h.label ?? h.type} (cannot reopen a closed pull request); "draft" is used instead`);
+    }
+  }
   if (raw?.branches !== undefined && raw.branches !== null && !(Array.isArray(raw.branches) && raw.branches.every((b) => typeof b === 'string' && b))) p.push('implement.preOpen.branches must be a list of branch patterns');
   if (raw?.draftCycles !== undefined && !(Number.isInteger(raw.draftCycles) && raw.draftCycles >= 0)) p.push('implement.preOpen.draftCycles must be a whole number');
   return p;
@@ -103,14 +117,47 @@ export function headActivities(config, pr, head) {
 
 export function holdMode(host, wanted = 'draft') {
   const cap = host?.capabilities ?? {};
+  const canCloseReopen = host?.reopenPr !== false && cap.reopenPr !== false;
   if (wanted === 'draft' && cap.drafts) return 'draft';
-  if ((wanted === 'draft' || wanted === 'label') && cap.labels) return 'label';
-  return 'close-reopen';
+  if (wanted === 'label' && cap.labels) return 'label';
+  if (wanted === 'close-reopen' && canCloseReopen) return 'close-reopen';
+  if (cap.drafts) return 'draft';
+  if (cap.labels) return 'label';
+  return canCloseReopen ? 'close-reopen' : 'draft';
+}
+
+const syncSleep = (ms) => {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+export function confirmPrState(host, pr, { mode, label, held, attempts = 3, delayMs = 1000, sleep = syncSleep } = {}) {
+  if (typeof host?.pr?.get !== 'function') return false;
+  const max = Math.max(1, Number(attempts) || 1);
+  for (let i = 0; i < max; i++) {
+    if (i > 0) sleep(delayMs);
+    let view;
+    try {
+      view = host.pr.get(pr);
+    } catch {
+      continue;
+    }
+    if (!view || typeof view !== 'object') continue;
+    const isDraft = Boolean(view.draft ?? view.isDraft);
+    const labels = Array.isArray(view.labels) ? view.labels.map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean) : [];
+    const state = String(view.state ?? '').toLowerCase();
+    const ok = mode === 'draft'
+      ? (held ? isDraft : !isDraft && (state === '' || state === 'open'))
+      : mode === 'label'
+        ? (held ? labels.includes(label) : !labels.includes(label))
+        : (held ? state === 'closed' : state === 'open');
+    if (ok) return true;
+  }
+  return false;
 }
 
 // Takes an open PR out of the ready state before any agent works on it again; returns the hold to record. Auto-merge is
-// disarmed first (where the host can), so a PR on hold never merges.
-export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', why, at = nowIso() } = {}) {
+// disarmed first (where the host can), so a PR on hold never merges. Confirms by re-reading the PR from the host.
+export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', why, at = nowIso(), attempts = 3, delayMs = 1000, sleep = syncSleep } = {}) {
   const m = holdMode(host, mode);
   if (host.capabilities?.cancelAutoMerge) {
     try {
@@ -119,7 +166,7 @@ export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', w
       // nothing armed
     }
   }
-  let ok = true;
+  let ok;
   try {
     if (m === 'draft') host.pr.update(pr, { draft: true });
     else if (m === 'label') {
@@ -130,25 +177,28 @@ export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', w
       }
       host.pr.update(pr, { labels: { add: [label] } });
     } else host.pr.update(pr, { state: 'closed' });
+    ok = confirmPrState(host, pr, { mode: m, label, held: true, attempts, delayMs, sleep });
   } catch {
-    ok = false;
+    ok = confirmPrState(host, pr, { mode: m, label, held: true, attempts: 1, delayMs: 0, sleep });
   }
-  try {
-    host.pr.comment(pr, `**On hold: the pipeline is working on this PR again** (${m === 'draft' ? 'converted to draft' : m === 'label' ? `labelled \`${label}\`` : 'closed until it is complete'}).\n\nWhy: ${why}\n\nIt is marked ready again only when the change has passed the whole stack again (static analysis, council, architecture review, feature verification, PR check, CI on the head).`, { marker: '<!-- factory:hold -->' });
-  } catch {
-    // the record keeps the hold
+  if (ok) {
+    try {
+      host.pr.comment(pr, `**On hold: the pipeline is working on this PR again** (${m === 'draft' ? 'converted to draft' : m === 'label' ? `labelled \`${label}\`` : 'closed until it is complete'}).\n\nWhy: ${why}\n\nIt is marked ready again only when the change has passed the whole stack again (static analysis, council, architecture review, feature verification, PR check, CI on the head).`, { marker: '<!-- factory:hold -->' });
+    } catch {
+      // the record keeps the hold
+    }
   }
   return { mode: m, label, ok, from: at, why };
 }
 
-export function releasePr(host, pr, { mode = 'draft', label = 'work-in-progress' } = {}) {
+export function releasePr(host, pr, { mode = 'draft', label = 'work-in-progress', attempts = 3, delayMs = 1000, sleep = syncSleep } = {}) {
   try {
     if (mode === 'draft') host.pr.update(pr, { draft: false });
     else if (mode === 'label') host.pr.update(pr, { labels: { remove: [label] } });
     else host.pr.update(pr, { state: 'open' });
-    return true;
+    return confirmPrState(host, pr, { mode, label, held: false, attempts, delayMs, sleep });
   } catch {
-    return false;
+    return confirmPrState(host, pr, { mode, label, held: false, attempts: 1, delayMs: 0, sleep });
   }
 }
 
@@ -160,7 +210,7 @@ export function releasePr(host, pr, { mode = 'draft', label = 'work-in-progress'
 export function agentRunsAfterReady(rows, { key, keys = [key], readyAt, holds = [] }) {
   const ready = Date.parse(readyAt ?? '');
   if (!ready) return [];
-  const inHold = (t) => holds.some((h) => t >= Date.parse(h.from) && (!h.to || t <= Date.parse(h.to)));
+  const inHold = (t) => holds.some((h) => h.ok !== false && t >= Date.parse(h.from) && (!h.to || t <= Date.parse(h.to)));
   const seen = new Set();
   const out = [];
   for (const r of rows ?? []) {

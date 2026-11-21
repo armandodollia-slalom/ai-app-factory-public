@@ -1,5 +1,7 @@
 # Azure Repos (code host)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `host.type: "azure-devops"`, for Azure DevOps Services or Server. The adapter is `scripts/pipeline/lib/hosts/azure-devops.mjs` (Git REST API 7.1). A pull request's number is its `pullRequestId`. Labels are PR labels (tags), approvals are reviewer votes, auto-merge is autoComplete, and checks are the PR's statuses plus its policy evaluations.
 
 ```json

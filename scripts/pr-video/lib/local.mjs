@@ -2,7 +2,7 @@
 // CI). The harness runs it after every agent stage and the CI proof, right before the PR opens; the PR's body is then
 // written once with the section (implement.mjs preOpenMedia reads it back by head).
 //
-//   1. the changed e2e specs and the change's scope (frontend: a video; backend only: the API summary)
+//   1. the changed e2e specs and the change's scope (frontend: a video; backend: the API summary)
 //   2. the test stack (the slot this process holds, TESTSTACK_SLOT), the specs run in demo mode: slow pacing, the drawn
 //      cursor, captions, the step log, secrets covered (e2e/demo.ts), with the factory's redaction boundary as detector
 //   3. per video: narration, holds, mask boxes, subtitles (.vtt), and the fail-closed secret gate (render.mjs)
@@ -22,7 +22,7 @@ import { renderVideo } from './render.mjs';
 import { appendJsonl } from '../../pipeline/lib/util.mjs';
 import { trackerFor } from '../../board/lib/trackers/index.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
-import { apiEvidenceSettings, apiTestOfCase, backendBugs, cleanExchange, evidenceSection, issueNumberOf, reproductionComment, REPRO_MARKER, scanHits, verifyApiBefore, writeProse } from './api-evidence.mjs';
+import { apiEvidenceSettings, apiTestOfCase, backendBugs, cleanExchange, commentNote, evidenceSection, issueNumberOf, reproductionComment, REPRO_MARKER, scanHits, verifyApiBefore, writeProse } from './api-evidence.mjs';
 import { baseCheckout, bugPairSettings, testOfCase, uiBugs, verifyBefore } from './bugpair.mjs';
 import { automaticScript, caseIdOf, headlineCases, planCases, recordedEvents, scriptSettings, scriptVideos, ticketFor } from './script.mjs';
 import { resolveTools } from './tools.mjs';
@@ -185,7 +185,7 @@ function backendEvidence({ root, config, key, backend, before, afterManifest, se
     const verdicts = [];
     let chosen = null;
     for (const id of b.caseIds) {
-      const v = before.error ? { ok: false, why: `the before run could not be made: ${before.error}` } : verifyApiBefore({ before: apiTestOfCase(before.manifest, id), after: apiTestOfCase(afterManifest, id), healthy: before.healthy });
+      const v = before.error ? { ok: false, why: `the before run could not be made: ${before.error}` } : verifyApiBefore({ before: apiTestOfCase(before.manifest, id), after: apiTestOfCase(afterManifest, id), healthy: before.healthy, beforeFailed: before.exitCode != null && before.exitCode !== 0 && !before.manifest });
       verdicts.push([id, v.why]);
       if (v.ok) {
         chosen = { id, v };
@@ -209,24 +209,31 @@ function backendEvidence({ root, config, key, backend, before, afterManifest, se
     i.prose = prose[i.key];
     const body = reproductionComment(i.key, i.ev, i.prose);
     writeText(path.join(renderDir, `${i.key}.reproduction.md`), `${body}\n`);
-    writeText(path.join(renderDir, `${i.key}.api-evidence.json`), `${JSON.stringify({ key: i.key, case: i.caseId, base: i.ev.base, pairs: i.ev.pairs, prose: i.prose }, null, 2)}\n`);
-    try {
-      appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: new Date().toISOString(), story: key, kind: 'api-reproduction', ticket: i.key, case: i.caseId, base: i.ev.base, pairs: i.ev.pairs.map((p) => ({ request: `${p.before.method} ${p.before.path}`, before: p.before.status, after: p.after.status })) }]);
-    } catch {
-      // never stops the evidence
-    }
     const hits = scanHits(body, { env });
     if (hits.length) {
       i.comment = { posted: false, why: `the scan gate flagged ${hits.join(', ')}` };
-      continue;
+    } else {
+      const issue = issueNumberOf(root, i.key, stateDir);
+      try {
+        i.comment = issue ? { posted: true, ...postComment(issue, body, { marker: REPRO_MARKER(i.key) }) } : { posted: false, why: 'the ticket has no issue in the ticket cache' };
+      } catch (error) {
+        i.comment = { posted: false, why: redactText(String(error?.message ?? error).split('\n')[0], { env }).text };
+      }
     }
-    const issue = issueNumberOf(root, i.key, stateDir);
+    if (!i.comment.posted) {
+      log(`${i.key}: the reproduction comment was not posted: ${i.comment.why}`);
+      findings.push({ id: `API-REPRO-COMMENT-${i.key}`, severity: 'minor', title: `The reproduction comment for ${i.key} was not posted on the ticket`, detail: i.comment.why });
+    } else if (i.comment.reduced) {
+      const dropped = (i.comment.reduced.dropped ?? []).join(', ') || 'sections';
+      log(`${i.key}: the reproduction comment was shortened by the tracker's refusal fallback (dropped: ${dropped})`);
+      findings.push({ id: `API-REPRO-COMMENT-REDUCED-${i.key}`, severity: 'minor', title: `The reproduction comment for ${i.key} was shortened on the ticket`, detail: `dropped: ${dropped}` });
+    }
+    writeText(path.join(renderDir, `${i.key}.api-evidence.json`), `${JSON.stringify({ key: i.key, case: i.caseId, base: i.ev.base, pairs: i.ev.pairs, prose: i.prose, comment: i.comment }, null, 2)}\n`);
     try {
-      i.comment = issue ? { posted: true, ...postComment(issue, body, { marker: REPRO_MARKER(i.key) }) } : { posted: false, why: 'the ticket has no issue in the ticket cache' };
-    } catch (error) {
-      i.comment = { posted: false, why: redactText(String(error?.message ?? error).split('\n')[0], { env }).text };
+      appendJsonl(metricsFile({ root, metricsDir: '.factory/metrics', ...config }, 'run-conditions.jsonl'), [{ ts: new Date().toISOString(), story: key, kind: 'api-reproduction', ticket: i.key, case: i.caseId, base: i.ev.base, commentPosted: Boolean(i.comment.posted), ...(i.comment.posted ? {} : { commentWhy: i.comment.why }), ...(i.comment.reduced ? { commentReduced: true, commentDropped: i.comment.reduced.dropped ?? [] } : {}), pairs: i.ev.pairs.map((p) => ({ request: `${p.before.method} ${p.before.path}`, before: p.before.status, after: p.after.status })) }]);
+    } catch {
+      // never stops the evidence
     }
-    if (!i.comment.posted) log(`${i.key}: the reproduction comment was not posted: ${i.comment.why}`);
   }
   return { items, findings, runs };
 }
@@ -281,7 +288,7 @@ export async function produceLocal({ root, config, base, key, headSha, host, dep
     };
     // Bugs first: the reproduction against the application built from the merge base (its own checkout and image tags),
     // on the same slot, then the stack goes down and the fixed branch's comes up.
-    const before = { manifest: null, healthy: null, base: null, error: null };
+    const before = { manifest: null, healthy: null, base: null, error: null, exitCode: null };
     fs.rmSync(beforeDir, { recursive: true, force: true });
     const reproSpecs = [...new Set([...bugs, ...backend].flatMap((b) => b.specs))];
     const reproCases = [...new Set([...bugs, ...backend].flatMap((b) => b.caseIds))];
@@ -291,7 +298,7 @@ export async function produceLocal({ root, config, base, key, headSha, host, dep
         before.base = (deps.baseCheckout ?? baseCheckout)(root, base, stateDir);
         const up = deps.stackUp ? await deps.stackUp(before.base.dir) : 0;
         if (up !== 0) throw new Error(`the test stack built from the base ${before.base.sha.slice(0, 7)} did not start (exit ${up})`);
-        await record(reproSpecs, reproCases.join('|'), before.base.dir);
+        before.exitCode = await record(reproSpecs, reproCases.join('|'), before.base.dir);
         before.healthy = deps.stackHealthy ? deps.stackHealthy(before.base.dir) : true;
       } catch (error) {
         before.error = String(error?.message ?? error);
@@ -322,11 +329,15 @@ export async function produceLocal({ root, config, base, key, headSha, host, dep
       ...entries.filter((e) => e.pair?.side === 'before' && e.missing).map((e) => ({ id: `DEMO-NO-REPRO-${e.pair.key}`, severity: 'minor', title: `The bug ${e.pair.key} could not be shown before the fix`, detail: e.missing })),
       ...api.findings,
     ];
-    const block = pairSettings.requireBefore && findings.length ? `${findings.map((f) => f.title).join('; ')} (${findings.map((f) => f.detail).join('; ')}), and video.bugPair.requireBefore is on` : null;
+    const noRepro = findings.filter((f) => /^(?:DEMO|API)-NO-REPRO-/.test(f.id));
+    const block = pairSettings.requireBefore && noRepro.length ? `${noRepro.map((f) => f.title).join('; ')} (${noRepro.map((f) => f.detail).join('; ')}), and video.bugPair.requireBefore is on` : null;
     const note = scope.video ? (entries.length ? null : 'The changed e2e specs recorded no video (API-only tests have no browser, or the run failed before any test started).') : 'No demo video: this change has no browser-visible part (backend only).';
     const evidence = api.items.length ? evidenceSection(api.items, apiSettings) : '';
     const hits = scanHits(evidence, { env });
-    const evidenceText = hits.length ? '## Before the fix / After the fix\n\nNot shown: the scan gate flagged the recorded exchanges (' + hits.join(', ') + ').' : evidence;
+    const commentNotes = api.items.map((i) => commentNote(i.key, i.comment, { env })).filter(Boolean);
+    const evidenceText = hits.length
+      ? ['## Before the fix / After the fix', '', `Not shown: the scan gate flagged the recorded exchanges (${hits.join(', ')}).`, ...(commentNotes.length ? ['', ...commentNotes] : [])].join('\n')
+      : evidence;
     section([renderSection({ repo: String(host.repo), fileUrl, branch: settings.storageBranch, headSha, specs, videos: entries, note, folder, footer: LOCAL_FOOTER }), evidenceText].filter(Boolean).join('\n\n'));
     publish({ branch: settings.storageBranch, folder, stageDir: stage, message: `Demo videos of ${key}${headSha ? ` at ${headSha.slice(0, 7)}` : ''}` });
     log(`${key}: ${entries.filter((e) => !e.blocked).length} demo video(s) published to ${settings.storageBranch}/${folder}${entries.some((e) => e.blocked) ? `; ${entries.filter((e) => e.blocked).length} held back by the secret gate` : ''}${api.items.length ? `; request evidence for ${api.items.map((i) => i.key).join(', ')}` : ''}`);

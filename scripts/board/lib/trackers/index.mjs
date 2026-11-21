@@ -89,11 +89,14 @@ export function withRefusalFallback(tracker) {
   }
   if (comment) {
     t.comment = (id, body, opts) => {
+      let sent;
       try {
-        return sendWithReduction((x) => comment(id, x.body, opts), '', body ?? '', GENERIC).result;
+        sent = sendWithReduction((x) => comment(id, x.body, opts), '', body ?? '', GENERIC);
       } catch (error) {
         throw error.code === 'refused' && !(error instanceof TrackerError) ? Object.assign(refused(error), { attempts: error.attempts }) : error;
       }
+      if (sent.step.step === 0 || !sent.result || typeof sent.result !== 'object') return sent.result;
+      return { ...sent.result, reduced: { dropped: sent.step.dropped, attempts: sent.attempts } };
     };
   }
   Object.defineProperty(t, '__refusalFallback', { value: true, enumerable: false });

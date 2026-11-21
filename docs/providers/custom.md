@@ -1,5 +1,7 @@
 # The custom adapter
 
+**Who reads this:** B and D, connecting an in-house tracker, host, CI system or scanner.
+
 A client with an in-house tracker, a code host the factory has no built-in for (Bitbucket Data Center, Gerrit, an internal forge), its own CI system, or its own scanner service writes one small script. The factory itself does not change. The script speaks the contract of its kind ([contracts.md](contracts.md)) over a simple protocol: one JSON request on stdin, one JSON answer on stdout. The adapter is `scripts/pipeline/lib/providers/custom.mjs`.
 
 ## Configuration

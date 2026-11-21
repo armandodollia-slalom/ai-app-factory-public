@@ -1,10 +1,12 @@
 # Writing stories for the pipeline
 
-Part of the [AI development pipeline](README.md). The pipeline only knows what the story says: the implementer builds from it, the test planner and the test-automation agent plan and test against it, and the PR check holds the pull request to it. This page is the contract between a story author and the agents.
+**Who reads this:** B (adopters) and anyone writing tickets for the pipeline.
+
+The pipeline only knows what the story says: the implementer builds from it, the test planner and the test-automation agent plan and test against it, and the PR check holds the pull request to it. This page is the contract between a story author and the agents.
 
 ## Where stories live
 
-- Every story is an issue on the [story board](board.md); the issue body holds the whole story in Markdown, between the `board-ticket:source` markers. Create one from a Markdown file (or stdin) with the board, not by adding a file to the repository:
+- Every story is a ticket on the [ticket board](board.md); the issue body holds the whole story in Markdown, between the `board-ticket:source` markers. Create one from a Markdown file (or stdin) with the board, not by adding a file to the repository:
 
   ```bash
   factory board new SHOP-10.md --epic epic-checkout-redesign [--mockups path/to/SHOP-10-cart] [--dry-run]
@@ -21,7 +23,7 @@ Part of the [AI development pipeline](README.md). The pipeline only knows what t
 | Section | Required | Who uses it | Write it so that |
 | --- | --- | --- | --- |
 | `# <title>` | yes | everyone | it names the feature; add `[FE]` for UI work |
-| `**Blocked by:**` line | when it has blockers | `factory implement run` (ordering, stacked branches), implementer | it lists story keys, for example `* **Blocked by:** [SHOP-1](SHOP-1-....md), SHOP-2`. Leave it out, or write `None`, when there are none |
+| `**Blocked by:**` line | when it has blockers | `factory implement run` (ordering, stacked branches), implementer | it lists story keys, for example `* **Blocked by:** SHOP-1, SHOP-2`. Leave it out, or write `None`, when there are none |
 | User Story | yes | implementer, critics | the role, need and value are clear |
 | Inputs | when there is an API or form | implementer, `test-planner`, acceptance critic | every field has its type, required or optional, limits and format |
 | Outputs | yes | implementer, `test-planner`, acceptance and design critics | exact fields, status codes, copy and formats; the design critic uses it when there is no mockup |
@@ -36,7 +38,7 @@ Part of the [AI development pipeline](README.md). The pipeline only knows what t
 
 - **Make every rule testable.** `test-planner` writes a case for every requirement, field constraint, output field, status code and algorithm step, and a sad path only where the story states or implies the outcome. Anything left undefined (exact error bodies, concurrency, outages) becomes an open question instead of a test.
 - **Answer design questions before you start.** If an Open Question changes the API shape, auth or data model, the implementer stops and the story ends `blocked`. Minor ones it decides conservatively and records under Implementation Notes.
-- **Keep the story self-contained.** The [story guard](README.md#story-guard) denies agents every other ticket and its mockups unless you hand it to `factory implement run` (the story keys, or `--epic`, which also hands over the epic itself). Copy the parts of an epic or another story the story depends on into the story.
+- **Keep the story self-contained.** The [story guard](../internals.md#guards) denies agents every other ticket and its mockups unless you hand it to `factory implement run` (the story keys, or `--epic`, which also hands over the epic itself). Copy the parts of an epic or another story the story depends on into the story.
 - **List blockers.** A story blocked by another in the same batch runs after it and stacks on its branch. A blocker outside the batch must already be merged, or the implementer reports the story `blocked`.
 - **Name exact copy.** Labels, messages and formats in Outputs are checked word for word by the acceptance and design critics.
 - **Stay in scope.** The implementer builds exactly the acceptance criteria and lists nice-to-haves in its report instead.

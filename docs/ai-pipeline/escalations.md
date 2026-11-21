@@ -1,6 +1,6 @@
 # Handling escalations and failed stories
 
-Part of the [AI development pipeline](README.md). Every agent loop has a limit. When a loop can't converge, the pipeline stops, writes an escalation for a human and lets the agent finish its turn. This page is what you do next.
+**Who reads this:** C (operators). Every agent loop has a limit; when a ticket stops, this page says what its outcome means and what to do next. Start with the [outcome](#outcomes) the run printed or the card shows.
 
 ## Where to look
 
@@ -16,48 +16,46 @@ Part of the [AI development pipeline](README.md). Every agent loop has a limit. 
 
 Escalations are written by the review (`review`), by feature verification (`plan`, `automation`), by the PR check (`pr-check`) and by the retro (`lessons-retro.md`, when a lessons run keeps crashing: see [retro](retro.md#crash-recovery)). The next agent session in that checkout is told about them at start-up. Each one is deleted automatically when its stage later passes (review approval, a verified plan or test suite, a passing PR check, a finished retro run); you can also delete the file once you have dealt with it.
 
-## Decision guide
+## Outcomes
 
-```mermaid
-flowchart TD
-  O["Outcome or escalation"] --> B{"Which one?"}
-  B -->|"blocked"| B1["Answer the open question in the story,<br/>merge the blocker, or remove the held secret"]
-  B -->|"no-changes"| N1["Check the log: already implemented,<br/>or the story is too vague"]
-  B -->|"review-escalated, unresolved"| R1["Read the findings, fix by hand<br/>or decide the architecture question"]
-  B -->|"fv-product-bug"| P1{"Is the test right?"}
-  P1 -->|"yes, code is wrong"| P2["Fix the code, the review and the tests re-run"]
-  P1 -->|"no, story or plan is wrong"| P3["Fix the story, re-plan"]
-  B -->|"fv-escalated, fv-blocked-on-plan"| Q1["Read the gaps, usually an ambiguous story"]
-  B -->|"fv-crashed, fv-timed-out, error"| C1["Read the log, re-run the step"]
-  B -->|"pr-check-escalated, pr-check-incomplete"| PC1["Read the report, fix, or accept<br/>the finding as out of scope"]
-  B -->|"needs-decision"| D1["Answer the questions on the ticket"]
-  B -->|"CI red or flaky on the branch or PR"| CI1["Read the failing checks,<br/>fix on the branch"]
-  B -->|"pr-refused"| PR1["implement resume opens the PR,<br/>no agent runs"]
-  B1 --> RR["Re-run the story"]
-  N1 --> RR
-  R1 --> RR
-  P2 --> RR
-  P3 --> RR
-  Q1 --> RR
-  C1 --> RR
-  PC1 --> RR
-  D1 --> RR
-  CI1 --> RR
-```
+`implement run` prints an outcome per ticket and exits 0 only when every ticket is `done` (or skipped as already
+implemented). A run outcome is how the run ended; the card's board lane is separate: `done` means delivered, and the
+card then waits in Pending Review for the merge. Every other outcome carries a `reason` and its `findings` in
+`.factory/state/implement/<KEY>.json`, and the card goes to Failed with them ([questions](#questions-and-the-resolve-checkbox)),
+except where the table says otherwise. Limits and their settings are in [implement-reference.md](implement-reference.md#limits).
 
 | Outcome | What happened | What to do |
 | --- | --- | --- |
-| `blocked` | The implementer stopped on a design-changing Open Question or an unimplemented blocker, or the blockers' branches conflict | Answer the question in the story (commit it), merge the blocker, or resolve the conflict in the worktree. Re-run the story |
-| `no-changes` | The implementer changed no implementation files | Check the runner log. If the feature already exists, add `## Implementation Notes` to the story by hand; if the story is too vague, sharpen it |
-| `review-escalated` | No approval within `review.maxRounds` (5) | Read `<KEY>-review.md`. Either fix the code yourself in the worktree, or settle the disagreement (a story change, or an exception in the repository's architecture policy, `.factory/policy/exceptions/`, see [architecture policy](../architecture-policy.md)). Then re-run |
-| `unresolved` | Still not approved after `implement.maxImplementerRuns` (8) implementer runs | Same as `review-escalated` |
-| `fv-product-bug` | The tests contradict the code after `implement.maxBugFixCycles` (2) fix cycles | Read `<KEY>-automation.md`. If the test matches the story, the code is wrong: fix it and finish again. If the story was ambiguous, fix the story and re-plan |
-| `fv-escalated` | The plan or the tests didn't reach the required score (`loops.requiredScore`, 9 of 10) within `loops.planMaxRounds` or `loops.automationMaxRounds` (5) rounds | Read `<KEY>-plan.md` or `<KEY>-automation.md`. Gaps that repeat usually point to an ambiguous story |
-| `fv-blocked-on-plan` | The plan could not be verified, so no tests were written | Same as a `plan` escalation |
-| `fv-crashed`, `fv-timed-out`, `error` | A process died or ran past its timeout (`implement.fvTimeoutSec`, `implement.implementerTimeoutSec`) | Read the log, fix the cause (agent CLI not signed in, Docker not running, a hung test), then re-run |
-| PR check escalated | `prCheck.hook.maxRuns` (3) failing checks, or the loop stalled | Read the report. Fix the upheld findings, or record why a finding is out of scope in the PR description |
-| `skipped` | Already implemented (its issue is closed, or this checkout's run record delivered it; a heading in the ticket never counts), or a blocker didn't finish | Fix the blocker; dependents run when you re-run the batch. `--force` runs an implemented story again |
-| `plan-rejected`, `pair-exhausted`, `limit-*` and the rest | The orchestrator's plan, a verifier pair or a run limit stopped the story | See [implement outcomes](implement.md#outcomes) |
+| `done` | Delivered: the PR opened (or, without `--pr`, everything verified and committed) | nothing; the PR waits for the [review gate](review-gate.md) or a person |
+| `blocked` | The orchestrator reported the ticket unimplementable (an open question that changes the design, a missing blocker), the blockers' branches conflict, or CI's analysis jobs still fail before the push, or a held secret is still in the worktree (nothing pushed) | Answer the question in the ticket on the board, merge the blocker, resolve the conflict, or remove the secret; then re-run |
+| `plan-rejected` | The plan broke the rules twice, or needed more than `maxSubtasks` subtasks | Split the ticket, or make it clearer; re-run |
+| `pair-exhausted` | A subtask was not approved after its rounds and one rewrite or takeover | Read the verifier findings on the card; sharpen the ticket or fix by hand in the worktree |
+| `merge-conflict` | The orchestrator could not resolve a conflict merging a subtask, or a ticket into its epic or group branch | Resolve it in the worktree; re-run |
+| `model-policy` | A model the plan needs, or a role's CLI, is not allowed ([models.md](models.md)) | Allow the model, or change the role's CLI |
+| `limit-agent-runs`, `limit-wall-clock` | The ticket hit `maxAgentRunsPerStory` or `storyWallClockSec` (at its ceiling) | Read the log for the loop that used the budget; raise the limit only if the ticket is just large |
+| `no-changes` | The implementer changed no implementation files | Check the log: if the feature already exists, close the issue; if the ticket is too vague, sharpen it |
+| `review-escalated` | No approval within `review.maxRounds` (5); see `<KEY>-review.md` | Fix the code in the worktree, or settle the disagreement (a ticket change, or an exception in the [architecture policy](../architecture-policy.md)); re-run |
+| `unresolved` | Still not approved after `maxImplementerRuns` (8), or the PR check still upholds findings after its returns, or a returned finding came back with nothing addressed | Same as `review-escalated`; for the PR check, read its report |
+| `fv-product-bug` | The tests contradict the code after `maxBugFixCycles` (2) fix cycles; see `<KEY>-automation.md` | If the test matches the ticket, fix the code; if the ticket was ambiguous, fix it and re-plan |
+| `fv-escalated`, `fv-blocked-on-plan` | The plan or the tests did not reach the required score (`loops.requiredScore`, 9) in their rounds; see `<KEY>-plan.md` or `-automation.md` | Gaps that repeat usually point to an ambiguous ticket |
+| `fv-crashed`, `fv-timed-out`, `fv-not-started`, `error` | A process died or ran past its ceiling | Read the log, fix the cause (agent CLI not signed in, Docker not running, a hung test); `implement resume` |
+| `fv-reverify-failed` | An epic unit's stale tests did not verify again before the push | Read the automation escalation of that ticket |
+| `needs-decision` | The PR check raised a question only the ticket's owner can answer; the branch is pushed, no PR | Answer the questions on the ticket |
+| `pr-check-incomplete` | The PR check did not finish (crashed, never started, past its ceiling); branch pushed, no PR | Read its log; re-run |
+| `pr-check-escalated` | An epic unit's fix-mode PR check ended escalated or still upheld findings at `fixUntil` or worse; no PR | Read the report; fix the findings or record why one is out of scope |
+| `ci-red`, `ci-flaky`, `ci-conflict`, `ci-unverified`, `ci-escalated` | CI was still red, passed only with retries, had a merge conflict, could not be verified, or its fixing round escalated: before the open (no PR) or after it (the PR on hold) | Read the failing checks; fix on the branch; re-run, or resolve the questions |
+| `demo-video-blocked` | `video.bugPair.requireBefore` is on and a bug's reproduction could not be shown before the fix; no PR | Read the reason on the card; fix the reproduction case, or turn the setting off |
+| `not-delivered` | The push or the open failed for a reason other than a refusal of the text, or another ticket's re-verified tests failed | Read the reason; re-run |
+| `pr-refused` | Every stage passed and CI proved the head, but the code host refused the PR's text even with the shortest body | `implement resume` opens it later ([what a resume re-runs](implement.md#resume-and-interrupted-runs)) |
+| `gate-assessment-failed` | The review gate is on and could not rate the bug fix before the open; no new PR opened. The branch is pushed (CI-proven unless the proof was bypassed: draft-first or `ciWait: false`); a re-delivered PR stays open on hold | Fix the gate's CLI or the triage agent (or turn the gate off). A PR that never opened: the next run, or `implement resume`, replays the delivery from the analysis jobs and push, rates again and opens. A re-delivery runs again on hold and updates the same PR |
+| `hold-failed` | The open PR could not be confirmed on hold, so no agent ran; it may already be in draft or labelled | Check the PR on the host, then tick Resolved: after the open the run resumes at the CI wait; a reopened ticket is held again first |
+| `release-unconfirmed` | Checks were green but the host did not confirm the PR's release from hold; no ready time recorded | Tick Resolved and the run retries the release at the CI wait, or mark the PR ready by hand |
+| `agent-unavailable` | The agent provider stopped serving (quota, usage limit); no card moves to Failed | `implement resume` once the provider is back |
+| `stopped` | `implement stop` ended the run | `implement run <KEY> --force` to start it again |
+| `skipped` | Already implemented (issue closed, or delivered by this checkout's run), or a blocker did not finish | Fix the blocker; `--force` runs an implemented ticket again |
+
+An epic run adds its own summary: `stories-failed` (a ticket failed, its unit got no PR), `undelivered`,
+`waiting` (a ticket waits for a person) or `joined` (a ticket joined a running epic).
 
 ## Questions and the Resolve checkbox
 
@@ -89,8 +87,8 @@ sequenceDiagram
 2. **The failure comment.** A one-line summary, the questions as task lists (one `- [ ] **A.** ...` line per option, then `- [ ] **Other**`, answered by a `Q1: ...` reply), the escalation notes, findings, branch and log collapsed under **Details**, then `- [ ] **Resolved**: I've answered the questions; re-queue this ticket`. A hidden marker (`<!-- pipeline-escalation:{"key","round","questions":[{"id","options"}]} -->`) lets automation read it.
    A ticket that did not run because a blocker failed (outcome `skipped`, "blocker X ended ...") gets no questions: its comment names the blocker, which holds the decision. Resolve the blocker first. The runner records such a ticket's outcome when the batch ends, so a later run that skips it for the same reason replays the failure instead of posting a new comment.
 3. **You answer.** Tick exactly one box per question. For **Other**, reply in a new comment whose line starts with `Q2: ...` (one comment may answer several, one `Qn:` per line). Then tick **Resolved**: only that edit starts the check (a reply on its own does not), so if you reply after ticking it, untick and tick **Resolved** again.
-4. **The Action checks** (`.github/workflows/factory-board-escalation-resolve.yml`, `board resolve-check`, `github.token` with `issues: write` only). It acts only on the latest failure comment. A question with no box or several boxes ticked, or **Other** without a later `Qn:` reply by a human (bot comments and pipeline comments never count), unticks **Resolved** and replies with the list. Otherwise it removes `needs-human`, adds `escalation-resolved`, writes the answers to the issue body under `## Decisions` (round, question, answer, who, when; a round is replaced, never duplicated) and replies `Resolved by @you. Decisions recorded: ...`. Adding the `escalation-resolved` label by hand does the same (it records whatever is ticked, and notes what is unanswered).
-5. **Re-queue.** `board sync` moves Failed cards labeled `escalation-resolved` without `needs-human` to Ready. It runs at the start of every `implement run`, by hand, or from [`implement requeue`](#requeue-on-a-timer). Actions never need a project token.
+4. **The tracker automation checks** (`factory board resolve-check`; on GitHub the `factory-board-escalation-resolve.yml` workflow with `issues: write` only, on other trackers the scheduled tracker sweep, [hosts-and-trackers.md](../hosts-and-trackers.md#what-works-in-each-combination)). It acts only on the latest failure comment. A question with no box or several boxes ticked, or **Other** without a later `Qn:` reply by a human (bot comments and pipeline comments never count), unticks **Resolved** and replies with the list. Otherwise it removes `needs-human`, adds `escalation-resolved`, writes the answers to the issue body under `## Decisions` (round, question, answer, who, when; a round is replaced, never duplicated) and replies `Resolved by @you. Decisions recorded: ...`. Adding the `escalation-resolved` label by hand does the same (it records whatever is ticked, and notes what is unanswered).
+5. **Re-queue.** `board sync` moves Failed cards labeled `escalation-resolved` without `needs-human` to Ready. It runs at the start of every `implement run`, by hand, or from [`implement requeue`](#requeue-on-a-timer).
 6. **Re-run with the answers.** `implement run`/`resume` treat `escalation-resolved` as permission to run the ticket again, fresh (like `--force` for that ticket's earlier run, including a standing review, plan or automation escalation). `board fetch` writes the `## Decisions` next to the cached story (`decisions.md`), and the implementer, the orchestrator's plan and integration, the pair implementers and verifiers, the architecture reviewer, the test planner, the test automation agent and their verifiers get them as **Human decisions (binding requirements)**: reviewers and verifiers flag code that contradicts a decision instead of reopening it. When the re-run claims the card, it removes `escalation-resolved` and deletes the ticket's old escalation notes.
 7. **Round 2.** If the ticket fails again, a new comment asks again (round 2), and the earlier rounds stay under `## Decisions` as context. `board publish` keeps the section when it rewrites the issue body.
 
@@ -131,7 +129,7 @@ The task runs as you, so it uses your `PATH` and sign-ins; set `PIPELINE_AGENT_C
 ## Re-running
 
 - **After answering the questions:** tick **Resolved** on the issue; the next `implement run` or `implement requeue` runs it with your answers ([above](#questions-and-the-resolve-checkbox)).
-- **A whole story:** `factory implement run <KEY>`. It reuses the existing worktree and branch, starts the story again (which resets the review rounds and PR check runs) and continues from the code already on the branch. Add `--force` if the story already has `## Implementation Notes` or its issue is closed.
+- **A whole ticket:** `factory implement run <KEY>`. It reuses the existing worktree and branch, starts the ticket again (which resets the review rounds and PR check runs) and continues from the code already on the branch. Add `--force` if its issue is closed or this checkout's run record shows it delivered.
 - **Only the tests:** from the worktree, `factory fv plan KEY` and `factory fv automate KEY` (add `--background` to detach).
 - **Only the review:** `factory review run KEY` runs one round and prints it.
 - **Interactively:** open an agent session in the worktree, run `factory start KEY`, make the fix, then `factory done`. The Stop hook runs the review, feature verification and the PR check again.

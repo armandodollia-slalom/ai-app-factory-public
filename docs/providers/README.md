@@ -1,6 +1,6 @@
 # Providers: ticket boards, code hosts, CI systems and scanners
 
-The factory talks to four kinds of outside service, each through an adapter behind a written contract:
+**Who reads this:** B and C choosing or checking an outside service, D writing an adapter. The factory talks to four kinds of outside service, each through an adapter behind a written contract:
 
 | Kind | What the factory needs from it | Config key | Built-ins |
 | --- | --- | --- | --- |
@@ -23,11 +23,11 @@ Any other combination works as long as the CI system can build the host's reposi
 ## Pages
 
 - [contracts.md](contracts.md): every operation of each kind, its arguments and results, and each capability with what the harness does without it.
-- One page per built-in: [hosts/](hosts/), [trackers/](trackers/), [ci/](ci/). Each has the settings, the token and its scopes, what a person creates by hand, the capability table and the vendor documentation the adapter was written from.
+- One page per built-in, linked from the [table below](#verified-live-or-only-against-fakes). Each has the settings, the token and its scopes, what a person creates by hand, the capability table and the vendor documentation the adapter was written from.
 - [custom.md](custom.md): the `custom` adapter for an in-house tracker, host, CI system or scanner, with two worked examples.
 - [commercial-scanners.md](commercial-scanners.md): a client's licensed scanner as part of static analysis.
 - [setup.md](setup.md): the setup interview (`factory init`), headless answers and re-runs.
-- [migration.md](migration.md): what changes for a repository set up with v0.2.68.
+- [migration.md](migration.md): for a repository set up before the adapters existed (v0.2.68).
 - [../configuration.md](../configuration.md#code-host-tracker-and-ci): the configuration keys.
 
 ## Credentials
@@ -46,7 +46,7 @@ Products differ. Bitbucket Cloud has no labels on pull requests and cannot bind 
 
 ## Verified live or only against fakes
 
-No test calls a real service. Every built-in passes the conformance suite (`scripts/pipeline/lib/providers/conformance.mjs`) against an in-memory fake. Each fake was built from the vendor's current API documentation, which the adapter's header names along with the date it was read. Live checks were possible only where a login already existed on the build machine: `gh`, read-only, against the public test repository. So the GitHub adapters are the only ones checked against the real service. Treat every other adapter as unverified until `factory adapter check <kind>` passes against your service, first read-only, then with `--write` on a test project.
+No test calls a real service. Every built-in passes the conformance suite (`scripts/pipeline/lib/providers/conformance.mjs`) against an in-memory fake. Each fake was built from the vendor's current API documentation, which the adapter's header names along with the date it was read. Live checks were possible only where a login already existed on the build machine: `gh`, read-only, against the public test repository. So the GitHub adapters are the only ones checked against the real service, and those checks were read-only (write checks skipped); the pipeline's own live runs on GitHub did write (pushes, PRs, cards, merges). Treat every other adapter as unverified until `factory adapter check <kind>` passes against your service, first read-only, then with `--write` on a test project.
 
 <!-- generated:builtins -->
 | Kind | Service | Verified | Page |

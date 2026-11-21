@@ -72,7 +72,9 @@ test('a PR is marked ready only by afterOpen, once its checks are green', () => 
   assert.deepEqual(callers(/draft:\s*false/), ['scripts/implement/lib/pre-open.mjs:releasePr']);
   const src = fs.readFileSync(path.join(root, 'scripts/implement/lib/implement.mjs'), 'utf8');
   const fn = src.slice(src.indexOf('export async function afterOpen('));
-  assert.match(fn, /if \(ci\.state === 'success' && held\(\)\) \{\n\s*release\(\);/, 'released only on green');
+  // ADV-31: on green every hold not yet released is released (a failed or unconfirmed one included).
+  assert.match(fn, /if \(ci\.state === 'success' && holds\.some\(\(h\) => !h\.to\)\) \{\n\s*releaseAll\(\);/, 'released only on green');
+  assert.equal((fn.match(/\brelease\(h\)/g) ?? []).length, 1, 'release() is called only from releaseAll');
 });
 
 test('no setting brings back an open before the work and CI are done', async () => {

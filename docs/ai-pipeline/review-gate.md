@@ -1,10 +1,10 @@
 # Review gate for bug-fix PRs
 
-Part of the [AI development pipeline](README.md). The gate rates **bug fixes**: a single-ticket bug PR (`implement run FIX-7 --pr`) or a bug-epic group PR ([PR groups](implement.md#bug-epics-pr-groups)). Its triage agent runs once the branch's CI is green, before the PR exists ([Assessed before the PR opens](#assessed-before-the-pr-opens)); at the open the rating is published with no model call, and the merge decision follows the PR's checks. Implementation, verifier pairs, architecture review, feature verification, the PR check and the grouping of bugs run exactly as before; feature stories and feature epics are never gated. Merges go through the code host's adapter ([providers](../providers/README.md)), so the same gate works on every supported host.
+**Who reads this:** C (operators), reviewers and repository owners. The gate rates **bug fixes**: a single-ticket bug PR (`implement run FIX-7 --pr`) or a bug-epic group PR ([PR groups](implement.md#how-an-epic-is-split-into-prs)). Its triage agent runs once the branch's CI is green, before the PR exists; at the open the saved rating is published with no model call, and the merge decision follows the PR's checks. Implementation, verifier pairs, architecture review, feature verification, the PR check and the grouping of bugs run exactly as before; feature stories and feature epics are never gated. Merges go through the code host's adapter ([providers](../providers/README.md)), so the same gate works on every supported host.
 
 A group PR is gated once, by the run that delivers it, with **every ticket merged into the group**, including tickets an earlier run merged (a group can finish across restarts). A later run that re-delivers the group with its existing PR does not gate it again; a reopened ticket joining the open PR re-gates it with all the group's tickets.
 
-The code is in `scripts/review-gate/`; its settings are `implement.reviewGate` and `implement.autoMerge` in `scripts/implement/config.json`, and the board field names are `board.fields` in `scripts/board/config.json`.
+The code is in `scripts/review-gate/`; its settings are `implement.reviewGate` and `implement.autoMerge` (engine defaults in `scripts/implement/config.json`, overridden in `.factory/config.json`), and the board field names are `board.fields`.
 
 ```mermaid
 flowchart LR
@@ -21,7 +21,7 @@ flowchart LR
 
 ## Assessment
 
-Right after the runner opens the PR, it runs `factory review-gate publish --pr <url> --tickets K1,K2 --base <ref>` from the PR's worktree (`scripts/implement/lib/post-publish.mjs`). Like the board events, it is a separate process: a failure is logged and never changes a ticket's outcome.
+Before the PR exists, once CI is green on the branch head, the delivery runs `factory review-gate assess --tickets K1,K2 --base <ref> --out <file>`: the triage agent rates the change on the branch against the base, and the harness computes the rest. That is the gate's only model call. When the PR opens, `factory review-gate publish --assessment <file>` binds the saved assessment to the PR and its head and applies the decision with no model call. A delivery with no saved assessment (a resume included) assesses before the open; if the gate cannot, no PR opens (outcome `gate-assessment-failed`, [escalations](escalations.md#outcomes)). The pipeline publishes with `--no-agent`: without a readable assessment it publishes "not assessed" (review, `needs-human`, the approvals a Severe PR needs: 1 by default) and never starts an agent on the open PR. Publishing is a separate process: a failure is logged and never changes a ticket's outcome.
 
 1. **Triage agent.** `bug-triage` (`agents/bug-triage.agent.md`) is a fresh, read-only run, not the implementer. It gets every ticket's text, the systems the PR touches and the PR's actual diff, and rates each ticket on three separate fields, each **Low / Medium / High / Severe**, with a reason: **Impact** (what the bug does to users or data), **Complexity** (the size and entanglement of the fix) and **Fix risk** (the chance the fix breaks something else). It also names floor categories the fix touches (`auth`, `payments`, `migration`, `security`), its own confidence (0-100) and a one-line summary. An invalid result goes back once with the errors; a ticket that is still not rated counts as not assessed (and its PR can never auto-merge). Model: `agent.models.bugTriage` (`opus`: the ratings decide whether a PR merges without a person, and it runs once per PR).
 2. **Systems touched.** Every changed file maps to its system: `reviewGate.systems` when it is set, otherwise one system per `project.services` entry. A `library` that exactly one service uses (through `dependsOn`, also via other libraries, or `partOf`) is part of that service's system: a service's own domain and infrastructure projects are not shared. A library several services use (or whose users are unknown) and a `host` (an orchestrator such as an Aspire AppHost) are **shared**. `reviewGate.sharedPaths` adds shared systems by name (the root build files; `factory init` drafts them from the language pack) and `reviewGate.contractPaths` contract systems (integration-event folders, which `init` finds in the code). The project's test roots and `reviewGate.ignore` (docs, metrics) touch no system; anything else is **Other**. In a group PR each ticket's files are the diff of its own `<KEY>: Merge into <group branch>` commit. `factory review-gate explain <file>...` shows the systems, floors and severity for a change, without an agent.
@@ -51,9 +51,9 @@ A bug-fix PR's body also shows the bug itself: for a bug visible in the browser,
 
 | Decision | When | What happens |
 | --- | --- | --- |
-| **auto-merge** | the PR severity is **Low**, every ticket has **high confidence**, no ticket has a **human reopen**, the PR's **checks pass**, and `implement.autoMerge.enabled` | see [Auto-merge](#auto-merge) |
+| **auto-merge** | the PR severity is **Low**, every ticket is assessed with **high confidence** and has no **human reopen** and no owner question, the delivery waits for no person, the PR's **checks pass** and the retry check has run on its head, nobody pushed since the assessment, and `implement.autoMerge.enabled` | see [Auto-merge](#auto-merge) |
 | **wait** | everything qualifies but the checks are still running (or none reported yet) | the label `approvals:0` and the notice; `board sync` evaluates the PR again ([Re-evaluation](#re-evaluation)) |
-| **review** | anything else: Medium, High or Severe, low confidence, a human reopen, failing checks, a ticket that was not assessed, auto-merge switched off | **1 required approval** (the [approvals policy](#approvals-policy) table; never fewer than 1), the labels `approvals:N` and `needs-human`, review requests, and the notice. The card stays in Pending Review |
+| **review** | anything else: Medium, High or Severe, low confidence, a human reopen, an owner question, a delivery waiting for a person, failing checks, a push after the assessment, a ticket that was not assessed, auto-merge switched off | **1 required approval** (the [approvals policy](#approvals-policy) table; never fewer than 1), the labels `approvals:N` and `needs-human`, review requests, and the notice. The card stays in Pending Review |
 
 Reviewers are requested from each ticket's **assignees**, or, for a ticket without one, the **CODEOWNERS** of the files it touches (`.github/CODEOWNERS` as on the PR's base branch, as GitHub reads it, so a fix branch cut before the file existed still gets owners); never the PR's author. The pipeline's PRs are authored by the developer's [PR bot](setup.md#the-pipelines-pr-bot) `dev-bot-<login>`, so the developer who ran the pipeline is not the author and can be requested like anyone else. CODEOWNERS stay optional reviewers on every PR, and the team can bring in more reviewers themselves: the gate only sets the **number** of required approvals.
 
@@ -63,7 +63,7 @@ A PR that needed people stays that way: later evaluations never auto-merge it, e
 
 ### Enforcement: the review-quorum check
 
-GitHub rulesets set one approval count per branch, not per PR, so `.github/workflows/review-quorum.yml` enforces the count per PR. It runs on `pull_request` (opened, pushed, labeled, ...) and `pull_request_review` (submitted, edited, dismissed), and passes when approvals from **distinct people**, not the author, given on the **latest push** (an approval from before it is stale), reach the PR's `approvals:N` label. The author of a pipeline PR is the [PR bot](setup.md#the-pipelines-pr-bot) `dev-bot-<login>`, so the developer who ran the pipeline approves it with GitHub's normal review flow and that approval counts. (A PR opened before the bot was set up keeps the developer as its author, and GitHub will not let them approve it.) Each reviewer's latest approving or "changes requested" review counts; a comment does not change a verdict. A PR without the label, or with `approvals:0`, passes. The check runs `factory review-quorum` with the factory version pinned on the **base branch**, so a PR cannot change how its own approvals are counted; changes to `.github/workflows/`, `CODEOWNERS` and the factory's settings are governance floor paths for the same reason.
+GitHub rulesets set one approval count per branch, not per PR, so the `review-quorum` job (`.github/workflows/factory-review-quorum.yml` on GitHub Actions) enforces the count per PR. It runs on `pull_request` (opened, pushed, labeled, ...) and `pull_request_review` (submitted, edited, dismissed), and passes when approvals from **distinct people**, not the author, given on the **latest push** (an approval from before it is stale), reach the PR's `approvals:N` label. The author of a pipeline PR is the [PR bot](setup.md#the-pipelines-pr-bot) `dev-bot-<login>`, so the developer who ran the pipeline approves it with GitHub's normal review flow and that approval counts. (A PR opened before the bot was set up keeps the developer as its author, and GitHub will not let them approve it.) Each reviewer's latest approving or "changes requested" review counts; a comment does not change a verdict. A PR without the label, or with `approvals:0`, passes. The check runs `factory review-quorum` with the factory version pinned on the **base branch**, so a PR cannot change how its own approvals are counted; changes to `.github/workflows/`, `CODEOWNERS` and the factory's settings are governance floor paths for the same reason.
 
 **Making it required is a repository setting**, the repository owner's call: `factory review-gate enforce` creates the ruleset (`--dry-run` shows it first). By hand: Settings → Rules → Rulesets → the ruleset for `main` → "Require status checks to pass" → add `review-quorum`, and under "Require a pull request before merging" turn on "Require review from Code Owners" (the factory writes a `CODEOWNERS` block for `.factory/` and its generated files from the pin's `owners`). Until then both are visible but advisory; `factory doctor` warns, naming which one is missing, or that GitHub cannot require them on this repository. Rulesets and branch protection need a public repository or a paid plan for a private one. The gate itself never changes a repository setting; only `enforce`, run by a person, does. On GitLab `enforce` turns on "Pipelines must succeed" (the review-quorum job runs in the merge request pipeline) and code owner approval on the protected default branch (Premium); on Azure DevOps it adds a blocking Status policy for `factory/review-quorum` and lists the Required reviewers policy a person adds ([hosts-and-trackers.md](../hosts-and-trackers.md)). `factory doctor` reads rulesets and classic branch protection on GitHub, the protected branch and merge checks on GitLab, and the branch policies on Azure DevOps.
 
@@ -73,7 +73,7 @@ With analysis CI jobs ([analysis.md](analysis.md#ci)), the rendered `factory-ana
 
 ## Auto-merge
 
-A PR the gate clears is merged with `gh pr merge --squash --match-head-commit <the assessed head>` (`implement.autoMerge.method`), labeled `auto-merged` (and `approvals:0`), and its notice says so. Its issues close through `Closes #N`, and the cards reach Done through the existing `closed` event of `board sync`. Every merge goes through **one function**, `mergePr` in `lib/github.mjs`, with the identity in `implement.autoMerge.identity`:
+A PR the gate clears is merged through the code host's adapter, bound to the assessed head (on GitHub `gh pr merge --squash --match-head-commit <head>`; a host that cannot bind a merge to a commit, such as Bitbucket Cloud, re-reads the head just before merging and refuses if it moved). It uses `implement.autoMerge.method`, is labeled `auto-merged` (and `approvals:0`), and its notice says so. Its issues close through `Closes #N`, and the cards reach Done through the existing `closed` event of `board sync`. Every merge goes through **one function**, `mergePr` in `lib/github.mjs`, with the identity in `implement.autoMerge.identity`:
 
 | Identity | Who merges | When |
 | --- | --- | --- |
@@ -81,12 +81,12 @@ A PR the gate clears is merged with `gh pr merge --squash --match-head-commit <t
 | `app` | a GitHub App with a ruleset bypass, its installation token in the variable named by `appTokenEnv` (`REVIEW_GATE_APP_TOKEN`) becomes `GH_TOKEN` for the merge | once `main` requires approvals from people, a PR that needs none can only merge through a bypass |
 | `bot` | the developer's [PR bot](setup.md#the-pipelines-pr-bot) `dev-bot-<login>`, with an installation token it mints itself; a merge is refused (and the PR reviewed) when the bot is not set up | the bot is on the ruleset's bypass list |
 
-`implement.autoMerge.enabled` is the **kill switch**, **on** (`true`). Set it to `false` in `scripts/implement/config.json` to stop all auto-merges: every PR that would auto-merge is then reviewed instead, and its notice says "auto-merge is switched off; it would have auto-merged".
+`implement.autoMerge.enabled` is the **kill switch**, **on** (`true`). Set it to `false` in `.factory/config.json` to stop all auto-merges: every PR that would auto-merge is then reviewed instead, and its notice says "auto-merge is switched off; it would have auto-merged".
 
-How the merge happens (`mergePr`, `scripts/review-gate/lib/github.mjs`):
+How the merge happens on GitHub (`mergePr`, `scripts/review-gate/lib/github.mjs`; other hosts report the same states through their adapter):
 
 - GitHub reports nothing pending (`CLEAN`, `HAS_HOOKS`, `UNSTABLE`): the gate merges at once (`gh pr merge --squash`).
-- Something is pending (checks restarted after the base moved, `BLOCKED`, `BEHIND`, a mergeability GitHub is still computing): the PR **waits** (`approvals:0`, notice "waiting for GitHub to clear the merge"), and the next `board sync` checks the head again and merges it. GitHub's own auto-merge (`gh pr merge --auto`) is **not** used by default: once armed, GitHub merges whatever head the branch has when the ruleset's required checks pass, including a head pushed after the gate's decision whose CI has not run `implement.autoMerge.native: true` turns it back on; the gate then disarms it (`--disable-auto`) every time it evaluates a head it does not clear to merge.
+- Something is pending (checks restarted after the base moved, `BLOCKED`, `BEHIND`, a mergeability GitHub is still computing): the PR **waits** (`approvals:0`, notice "waiting for GitHub to clear the merge"), and the next `board sync` checks the head again and merges it. GitHub's own auto-merge (`gh pr merge --auto`) is **not** used by default: once armed, GitHub merges whatever head the branch has when the ruleset's required checks pass, including a head pushed after the gate's decision whose CI has not run. `implement.autoMerge.native: true` turns it back on; the gate then disarms it (`--disable-auto`) every time it evaluates a head it does not clear to merge.
 
 ### What "the checks pass" means
 
@@ -135,7 +135,7 @@ What happens next depends on the PR:
 - **Before the PR merges:** the PR's auto-merge is turned off (`gh pr merge --disable-auto`), its gate goes back to **review** (`approvals:N`, `needs-human`, the notice names the reopen), and the ticket re-runs **on its PR's branch**: a single-ticket PR's branch (fetched from origin when this machine has none, fast-forwarded to a person's commits on it), or its bug-epic **PR group's branch** (it joins the delivered group while the group PR is open). The push updates the PR, the ticket goes back to Pending Review with it, and the gate assesses the PR again.
 - **After it merged:** the fix runs as a **follow-up** on a new branch from the base (`<branch>-r<n>`), and its new PR goes through the same gate; the ticket's reopens keep it from auto-merging.
 
-The re-runs start from [`implement requeue`](escalations.md#requeue-on-a-timer) (by hand or on its timer): `board sync --json` lists the reopened tickets (`reopened`), and requeue runs them with `--force`, apart from the tickets a human resolved. The run removes the `reopened` label when it starts (`board clear-reopened`); the reopen itself stays on the ticket.
+The re-runs start from [`implement requeue`](escalations.md#requeue-on-a-timer) (by hand or on its timer): `board sync --json` lists the reopened tickets (`reopened`), and requeue runs them with `--force`, apart from the tickets a human resolved. The run removes the `reopened` label (`board clear-reopened`) once the open PR's hold is confirmed, or when it starts if it has no open PR to hold (a follow-up, or a run without `--pr`); the reopen itself stays on the ticket.
 
 ## Review data for the retro
 
@@ -178,17 +178,14 @@ From them it **proposes** changes to the approvals policy table, computed in cod
 ## Commands
 
 ```bash
-factory review-gate publish --pr <url> --tickets FIX-1,FIX-2 --base origin/main   # run by implement run
+factory review-gate publish --pr <url> --tickets FIX-1,FIX-2 --base origin/main [--assessment <file>] [--no-agent]
+                           # implement run passes both; by hand without them, it runs the triage agent
 factory review-gate status [--pr <url>]
 factory review-quorum <pr number> --repo owner/name    # what the review-quorum check runs
 factory board setup        # creates the triage fields on the board
 factory board sync         # reopens, gated PRs evaluated again
 factory implement requeue   # re-runs reopened bug fixes (and resolved tickets)
 ```
-
-## Assessed before the PR opens
-
-The bug-triage agent rates a bug fix before its PR exists (`review-gate assess --tickets K --base B --out file`, run by `implement`, [implement.md](implement.md#the-pr-opens-finished)): the change on the branch against the base, the same assessment as before. When the PR opens, `review-gate publish --assessment file` binds it to the PR and its head and applies the decision with no model call. After the open the gate is deterministic: the merge decision, required checks, auto-merge, labels, notices.
 
 ## Which checks a head owes
 

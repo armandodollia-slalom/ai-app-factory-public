@@ -1,6 +1,6 @@
 # Observability: where the agents' data goes
 
-Every stage records what its agents did and why, as JSON lines under `.factory/metrics/` in the app
+**Who reads this:** B setting up a metrics sink, C reading the records. Every stage records what its agents did and why, as JSON lines under `.factory/metrics/` in the app
 repository. Each stream is one file per branch, `<stream>.jsonl.d/<branch>.jsonl`, so two open pipeline
 branches never conflict on a metrics file; readers take the stream's own `<stream>.jsonl` (older records),
 every branch file and, on the main checkout, the spool together. The main streams:
@@ -32,7 +32,7 @@ review gate's notice.
 ## The sink
 
 `metrics.sink` in `.factory/config.json` names the service the records are shipped to. The
-`setup-observability` skill chooses and configures it with you.
+[`setup-observability`](../skills/setup-observability/SKILL.md) skill chooses and configures it with you.
 
 | Type | Service | Push | Read back |
 | --- | --- | --- | --- |
@@ -60,11 +60,11 @@ in; `factory sink status` and `factory retro status` both say so.
 
 ## Redaction
 
-Everything the harness and the agents write or publish passes the redaction boundary
+Everything the harness writes or publishes, agents' results included, passes the redaction boundary
 (`scripts/pipeline/lib/redact.mjs`): metrics, run records, decisions, usage rows, logs, lessons, PR bodies and
 comments, ticket text, board evidence and every export to the sink. It replaces what the secret scanner's
 rules detect, the values of token environment variables, and any value detected earlier in the run, with
-`[redacted:<rule>]`. Values with the factory's placeholder marker are test data and stay. A guard test fails
+`[redacted:<rule>]`; redaction itself never blocks a write. Values with the factory's placeholder marker are test data and stay. A guard test fails
 when a writer or poster goes around the boundary.
 
 Records that leave the machine are checked again by a scan gate: staged records are redacted in place and
@@ -76,7 +76,7 @@ commit, push or export (`SecretGateError`). `redact-seen.jsonl` (hashes of seen 
 
 `.factory/metrics/` is committed by default, one file per branch and stream, with a union merge
 (`.gitattributes`) for the older shared files, so records travel with their branch and the review gate reads
-them in any checkout. `pipeline experiment` compares
+them in any checkout. `factory experiment` compares
 its arms by reading each branch's committed metrics, so experiments rely on this default.
 
 ## Reports

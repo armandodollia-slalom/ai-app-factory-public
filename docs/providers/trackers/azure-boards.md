@@ -1,5 +1,7 @@
 # Azure Boards (tracker)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `tracker.type: "azure-boards"`, the default with an Azure DevOps host. Tickets are work items, epics are parents (Hierarchy links), lanes are `System.State` values, fields are field reference names, labels are tags, and pull requests are Hyperlinks. The adapter is `scripts/board/lib/trackers/azure-boards.mjs`.
 
 ```json

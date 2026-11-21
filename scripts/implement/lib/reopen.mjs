@@ -23,12 +23,12 @@ export function openPrFor(config, branch, env, publisher = null) {
   }
 }
 
-// Whether a PR (by URL) is open.
+// Whether a PR (by URL) is open: true, false, or 'unknown' when the host could not be read (callers treat it as open).
 export function prIsOpen(config, url) {
   try {
-    return hostFor(config).sync.pr.get(url)?.state === 'open';
+    return String(hostFor(config).sync.pr.get(url)?.state ?? '').toLowerCase() === 'open';
   } catch {
-    return false;
+    return 'unknown';
   }
 }
 

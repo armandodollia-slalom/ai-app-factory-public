@@ -103,7 +103,9 @@ export function assessTicket({ ticket, rating, files, added = [], systemsSetting
 }
 
 // Assesses a published PR from its worktree. deps: { gh, runAgent, log }.
-export function assessPr(config, { pr, keys, cwd = config.root, base }, deps) {
+// `skipTriage`: build a deterministic unassessed assessment without starting any agent (pipeline delivery when no saved
+// pre-open assessment exists; decideGate then forces `review` / `needs-human`).
+export function assessPr(config, { pr, keys, cwd = config.root, base, skipTriage = false, skipReason = null }, deps) {
   // Systems come from implement.reviewGate.systems, else from the project model's services.
   const s = gateSystemsSettings(config);
   const repo = config.board.repo;
@@ -113,7 +115,9 @@ export function assessPr(config, { pr, keys, cwd = config.root, base }, deps) {
   const systems = systemsTouched(files, s);
   const tickets = keys.map((k) => loadTicket(config, k));
   const perTicket = ticketFilesLocal(cwd, base, keys, files);
-  const triage = runTriage(config, { pr, tickets, systems, files, diff: prDiffLocal(cwd, base, s.maxDiffChars ?? 120_000), cwd }, deps);
+  const triage = skipTriage
+    ? { ratings: new Map(), errors: [skipReason ?? 'no saved pre-open assessment (no agent may run after the PR opens)'] }
+    : runTriage(config, { pr, tickets, systems, files, diff: prDiffLocal(cwd, base, s.maxDiffChars ?? 120_000), cwd }, deps);
   const ci = pr ? safe(() => checksState(ciTarget(config, repo, deps.gh), repo, pr, { head: git(cwd, ['rev-parse', 'HEAD']).stdout.trim() || null, ciSettings: config.implement?.reviewGate?.ci ?? {}, activities: (h) => headActivities(config, pr, h) }), null) : null;
   const metrics = readMetrics(config);
   const assessed = tickets.map((t) => {

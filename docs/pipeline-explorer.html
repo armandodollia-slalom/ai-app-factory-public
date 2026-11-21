@@ -1,0 +1,1201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline explorer</title>
+<meta name="description" content="The generated pipeline of ai-app-factory as an interactive flow: change configuration values and see what the rules say will happen.">
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --fg: #1b1b1b; --muted: #5a5a57; --line: #d6d6d1; --soft: #efefec;
+  --agent-fill: #dbe8fb; --agent-stroke: #2f5fb3;
+  --harness-fill: #ececec; --harness-stroke: #5f5f5f;
+  --ext-fill: #fdebd3; --ext-stroke: #a35f00;
+  --rec-fill: #dff2df; --rec-stroke: #2e7d32;
+  --exit-fill: #fbe0e0; --exit-stroke: #b71c1c;
+  --person-fill: #f1e4f5; --person-stroke: #7b1fa2;
+  --edge: #8b8b86; --edge-dead: #c9c9c4; --path: #c25e00; --path-soft: #fff1e0; --focus: #0b57d0; --node-text: #151515;
+  --off-opacity: 0.38;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141414; --panel: #1d1d1d; --fg: #ececea; --muted: #a8a8a3; --line: #3a3a37; --soft: #262624;
+    --agent-fill: #1d3150; --agent-stroke: #7fa8ea;
+    --harness-fill: #2a2a2a; --harness-stroke: #a0a0a0;
+    --ext-fill: #42301a; --ext-stroke: #f0a64b;
+    --rec-fill: #1d3a1f; --rec-stroke: #7cc47f;
+    --exit-fill: #4a1f1f; --exit-stroke: #f08a8a;
+    --person-fill: #3a2540; --person-stroke: #d39be6;
+    --edge: #8f8f8a; --edge-dead: #4a4a47; --path: #ffa24a; --path-soft: #3a2a17; --focus: #8ab4ff; --node-text: #f2f2f0;
+    --off-opacity: 0.4;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141414; --panel: #1d1d1d; --fg: #ececea; --muted: #a8a8a3; --line: #3a3a37; --soft: #262624;
+  --agent-fill: #1d3150; --agent-stroke: #7fa8ea;
+  --harness-fill: #2a2a2a; --harness-stroke: #a0a0a0;
+  --ext-fill: #42301a; --ext-stroke: #f0a64b;
+  --rec-fill: #1d3a1f; --rec-stroke: #7cc47f;
+  --exit-fill: #4a1f1f; --exit-stroke: #f08a8a;
+  --person-fill: #3a2540; --person-stroke: #d39be6;
+  --edge: #8f8f8a; --edge-dead: #4a4a47; --path: #ffa24a; --path-soft: #3a2a17; --focus: #8ab4ff; --node-text: #f2f2f0;
+  --off-opacity: 0.4;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow-x: hidden; }
+a { color: var(--focus); }
+code { font: 0.86em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--soft); padding: 0 0.25em; border-radius: 3px; overflow-wrap: anywhere; }
+button, select, input { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.3em 0.7em; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+select, input[type="number"] { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 0.2em 0.35em; max-width: 100%; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+header { padding: 16px 16px 8px; max-width: 1500px; margin: 0 auto; }
+h1 { font-size: 1.45rem; margin: 0 0 0.3em; }
+.lead { margin: 0 0 0.3em; max-width: 70em; }
+.caveat { margin: 0; color: var(--muted); font-size: 0.92em; max-width: 70em; }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr) 340px; gap: 14px; padding: 8px 16px 32px; max-width: 1500px; margin: 0 auto; align-items: start; }
+aside, .detail, .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+aside { padding: 10px 12px; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; }
+.detail { padding: 12px 14px; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; }
+main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.card { padding: 10px 12px; }
+.panel-toggle { display: none; }
+fieldset { border: 0; padding: 0; margin: 0; }
+details.group { border-top: 1px solid var(--line); padding: 6px 0; }
+details.group > summary { font-weight: 600; cursor: pointer; padding: 2px 0; }
+.ctl { display: grid; gap: 2px; margin: 8px 0; }
+.ctl label { font-weight: 500; }
+.ctl .path { color: var(--muted); font-size: 0.8em; }
+.ctl.check { grid-template-columns: auto 1fr; align-items: start; column-gap: 8px; }
+.ctl.check .path { grid-column: 2; }
+.ctl[data-disabled="true"] { opacity: 0.55; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.presets button[aria-pressed="true"] { border-color: var(--path); background: var(--path-soft); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; }
+.seg button[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.toolbar .label { color: var(--muted); font-size: 0.9em; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.88em; margin-top: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { flex: none; }
+.scroller { overflow: auto; max-width: 100%; max-height: 78vh; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); -webkit-overflow-scrolling: touch; }
+svg.flow { display: block; }
+svg.flow text { fill: var(--node-text); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.node { cursor: pointer; }
+.node:focus { outline: none; }
+.node:focus .shape, .node:focus-visible .shape { stroke: var(--focus); stroke-width: 4; }
+.node.off { opacity: var(--off-opacity); }
+.node.off .shape { stroke-dasharray: 3 3; }
+.node.onpath .shape { stroke: var(--path); stroke-width: 3; }
+.node.selected .shape { stroke-width: 4; }
+.node .kind { font-size: 10px; letter-spacing: 0.04em; fill: var(--muted); }
+.node .title { font-size: 13px; font-weight: 600; }
+.node .sub { font-size: 10.5px; fill: var(--muted); }
+.edge { fill: none; stroke: var(--edge); stroke-width: 1.4; }
+.edge.dead { stroke: var(--edge-dead); stroke-dasharray: 4 4; }
+.edge.uses { stroke-dasharray: 2 4; }
+.edge.loop { stroke-dasharray: 7 3; }
+.edge.onpath { stroke: var(--path); stroke-width: 3; }
+.elabel rect { fill: var(--panel); opacity: 0.92; }
+.elabel text { font-size: 10.5px; fill: var(--muted); }
+.elabel.onpath text { fill: var(--path); font-weight: 600; }
+.status { display: grid; gap: 4px; }
+.status .end { font-weight: 600; }
+.summary { margin: 0; padding-left: 1.1em; }
+.summary li { margin: 2px 0; }
+.notes { color: var(--muted); font-size: 0.9em; margin: 4px 0 0; padding-left: 1.1em; }
+ol.path { margin: 0; padding-left: 1.6em; }
+ol.path li { margin: 4px 0; }
+ol.path li.skipped { color: var(--muted); font-size: 0.9em; }
+ol.path .lane { color: var(--muted); font-size: 0.88em; }
+ol.path button.link, .detail button.link { border: 0; padding: 0; background: none; color: var(--focus); text-decoration: underline; cursor: pointer; }
+ol.path select { margin-left: 4px; }
+.chosen { color: var(--path); font-weight: 600; }
+.detail h2 { font-size: 1.1rem; margin: 0 0 4px; }
+.detail h3 { font-size: 0.95rem; margin: 12px 0 4px; }
+.detail dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+.detail dt { color: var(--muted); }
+.detail dd { margin: 0; overflow-wrap: anywhere; }
+.chip { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; font-size: 0.82em; margin-right: 4px; }
+.state-active { color: inherit; }
+.state-skipped, .state-off { color: var(--muted); }
+.detail ul.settings { margin: 0; padding-left: 1.1em; font-size: 0.92em; }
+.detail ul.settings li { margin: 0 0 5px; }
+pre.cfg { margin: 4px 0 8px; padding: 8px; background: var(--soft); border-radius: 6px; overflow-x: auto; font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+.muted { color: var(--muted); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 1250px) {
+  .layout { grid-template-columns: 290px minmax(0, 1fr); }
+  .detail { grid-column: 2; position: static; max-height: none; }
+}
+@media (max-width: 820px) {
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 8px 16px 24px; }
+  aside { position: static; max-height: none; display: none; }
+  aside.open { display: block; }
+  .detail { grid-column: 1; }
+  .panel-toggle { display: inline-block; }
+  .scroller { max-height: 70vh; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pipeline explorer</h1>
+  <p class="lead">This page shows the whole pipeline that <strong>ai-app-factory</strong> installs in a repository, from a ticket on the board to a merged pull request: change a setting on the left and the flow redraws, pick an outcome at a decision and the path through to its end is highlighted, with the board lane at each step.</p>
+  <p class="caveat">It shows what the rules say will happen for one configuration (modelled in <a href="pipeline-flow.json">pipeline-flow.json</a>, checked against the code by tests); it does not run the pipeline. Release 0.2.92. Overview in prose: <a href="ai-pipeline/README.md#the-pipeline-map">the pipeline map</a>.</p>
+</header>
+<div class="layout">
+  <aside id="panel" aria-label="Configuration">
+    <div class="toolbar">
+      <strong>Configuration</strong>
+      <button type="button" id="reset">Defaults</button>
+    </div>
+    <p class="muted" style="margin:6px 0 0;font-size:0.9em">Presets</p>
+    <div class="presets" id="presets" role="group" aria-label="Presets"></div>
+    <form id="controls" onsubmit="return false"></form>
+    <div id="cfg"></div>
+  </aside>
+  <main>
+    <div class="card">
+      <div class="toolbar">
+        <button type="button" class="panel-toggle" id="panel-toggle" aria-controls="panel" aria-expanded="false">Settings</button>
+        <span class="label" id="view-label">Steps that do not run</span>
+        <span class="seg" role="group" aria-labelledby="view-label">
+          <button type="button" id="view-grey" aria-pressed="true">Greyed</button>
+          <button type="button" id="view-remove" aria-pressed="false">Removed</button>
+        </span>
+        <span class="label" id="zoom-label">Zoom</span>
+        <span class="seg" role="group" aria-labelledby="zoom-label">
+          <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+          <button type="button" id="zoom-fit">Fit</button>
+          <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+        </span>
+        <button type="button" id="clear-walk">Reset outcomes</button>
+      </div>
+      <div class="legend" id="legend" aria-label="Legend"></div>
+    </div>
+    <div class="card status" id="status" aria-live="polite"></div>
+    <div class="scroller" id="scroller" tabindex="-1" aria-label="Flow diagram: every node is a button; Tab moves between them, Enter opens its details">
+      <svg class="flow" id="svg" role="group" aria-label="Pipeline flow"></svg>
+    </div>
+    <div class="card">
+      <h2 style="font-size:1.05rem;margin:0 0 6px">Path for this configuration</h2>
+      <p class="muted" style="margin:0 0 6px;font-size:0.9em">Ids are the ones the pipeline index uses. Pick an outcome at any decision; a choice applies on its first visit, and a loop is taken once. Skipped steps are listed in grey.</p>
+      <ol class="path" id="path"></ol>
+    </div>
+  </main>
+  <section class="detail" id="detail" aria-labelledby="detail-title" tabindex="-1"></section>
+</div>
+<!-- flow-data:start -->
+<script id="flow-data" type="application/json">{"$comment":"Single source of truth for docs/pipeline-explorer.html and the Mermaid spine (scripts/docs/build-explorer.mjs). It models what the runner's rules say will happen for a configuration; it does not run anything. Settings name their real config path or CLI flag and say where the code keeps their default and allowed values (`checks`, verified by scripts/docs/test/pipeline-flow.test.mjs). Conditions are data: {\"eq\":[ref,value]}, {\"in\":[ref,[values]]}, {\"is\":ref}, {\"not\":c}, {\"all\":[c]}, {\"any\":[c]}, {\"gt\":[ref,n]}; a ref is a setting id or a fact id. A fact with \"walk\": true starts false and is set by the edges the walk takes ({\"set\":{fact:true}}); an outcome with cyclesLeft or cyclesUsed (a setting id) is offered only before, or once, that many visits of its step. Doc links are relative to docs/.","version":1,"factoryVersion":"0.2.94","kinds":{"agent":{"label":"Agent","help":"A fresh headless agent process (a model call)."},"harness":{"label":"Harness","help":"Deterministic runner code: no agent, no model call (unless it says it calls one)."},"service":{"label":"Outside service","help":"Reached through a pluggable adapter (code host, tracker, CI system)."},"record":{"label":"Record","help":"What the run writes and reports."},"exit":{"label":"Exit","help":"The run stops here for this ticket; a person decides what happens next."},"person":{"label":"Person","help":"A person acts."}},"lanes":["Backlog","Ready","In Progress","Testing","Pending Review","Done","Failed"],"groups":[{"id":"scenario","label":"Scenario"},{"id":"delivery","label":"Delivery"},{"id":"council","label":"Council (per stage)"},{"id":"evidence","label":"Static analysis and evidence"},{"id":"loops","label":"Loops and budgets"},{"id":"gate","label":"Review gate"},{"id":"products","label":"Code host, tracker and CI"}],"settings":[{"id":"entry","group":"scenario","label":"Entry","kind":"scenario","type":"enum","values":["single","feature-epic","bug-epic","resume"],"default":"single","valueLabels":{"single":"Single ticket","feature-epic":"Feature epic","bug-epic":"Bug epic","resume":"Resume after a stop"},"cli":{"single":"factory implement run \u003cKEY>","feature-epic":"factory implement run --epic \u003cEPIC>","bug-epic":"factory implement run --epic \u003cEPIC>","resume":"factory implement resume"},"help":"How the run starts. A bug epic is an epic whose tickets are strictly more than half bugs.","doc":"ai-pipeline/implement.md#delivery-modes","checks":[{"usage":"scripts/implement/implement.mjs","includes":"run \u003cKEY...> | --epic \u003cEPIC>"},{"usage":"scripts/implement/implement.mjs","includes":"resume [KEY]"},{"code":"scripts/implement/lib/epic-plan.mjs","includes":"bugs * 2 > tickets.length"}]},{"id":"ticket","group":"scenario","label":"Ticket kind","kind":"scenario","type":"enum","values":["feature","ui-bug","backend-bug"],"default":"feature","valueLabels":{"feature":"Feature (story)","ui-bug":"UI bug","backend-bug":"Backend bug"},"help":"A bug is a ticket of type bug (or a BUG-n key). A UI bug's verified plan has a browser case a changed spec runs; a backend bug's reproduction case drives the service through its public interface.","doc":"ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix","checks":[{"module":"scripts/implement/lib/epic-plan.mjs","export":"isBugTicket","call":[{"type":"bug"}],"expect":true}]},{"id":"changes","group":"scenario","label":"The change touches","kind":"scenario","type":"enum","values":["frontend","backend","both"],"default":"both","valueLabels":{"frontend":"Frontend only","backend":"Backend only","both":"Frontend and backend"},"help":"Decided by the project model (project.frontendPaths, service kinds, prVideo.backendPaths). Frontend gets the demo video; any backend change gets the API changes section, mixed changes included.","doc":"ai-pipeline/pr-demo-video.md#which-prs-get-what","checks":[{"module":"scripts/pr-video/lib/api-summary.mjs","export":"classifyFiles","exists":true}]},{"id":"pr","group":"scenario","label":"--pr (open a PR)","kind":"cli","flag":"--pr","type":"boolean","default":false,"help":"Without --pr a run stops after the tests are verified: no push, no PR. The presets turn it on because the generated pipeline is run with it.","doc":"ai-pipeline/implement-reference.md#command-options","checks":[{"usage":"scripts/implement/implement.mjs","includes":"[--pr]"}]},{"id":"severity","group":"scenario","label":"Triage severity (bug PR)","kind":"scenario","type":"enum","values":["Low","Medium","High","Severe"],"default":"Low","help":"What the harness computes from the bug-triage agent's ratings and the floor rules. Only bug-fix PRs are rated.","doc":"ai-pipeline/review-gate.md#assessment","checks":[{"json":"scripts/implement/config.json","path":"implement.reviewGate.approvals","keysInclude":true}]},{"id":"confidence","group":"scenario","label":"Triage confidence","kind":"scenario","type":"enum","values":["high","low"],"default":"high","help":"High when every ticket's confidence is at least implement.reviewGate.confidence.highMin (85) with no owner question.","doc":"ai-pipeline/review-gate.md#assessment","checks":[{"json":"scripts/implement/config.json","path":"implement.reviewGate.confidence.highMin","exists":true}]},{"id":"delivery","group":"delivery","label":"Delivery","kind":"config","config":"implement.delivery","flag":"--delivery","type":"enum","values":["epic","story"],"default":"epic","help":"story: every ticket of an epic gets its own branch and PR, with no epic plan.","doc":"ai-pipeline/implement.md#delivery-modes","checks":[{"json":"scripts/implement/config.json","path":"implement.delivery"},{"usage":"scripts/implement/implement.mjs","flagValues":"--delivery"},{"code":"scripts/implement/implement.mjs","includes":"['epic', 'story'].includes(delivery)"}]},{"id":"grouping","group":"delivery","label":"Grouping","kind":"config","config":"implement.epic.grouping","flag":"--grouping","type":"enum","values":["auto","epic","ticket"],"default":"auto","help":"Precedence: an explicit grouping wins (epic: one PR; ticket: one PR per ticket, no planner), then a strict bug majority (bug groups), then the PR split.","doc":"ai-pipeline/implement.md#how-an-epic-is-split-into-prs","checks":[{"json":"scripts/implement/config.json","path":"implement.epic.grouping"},{"module":"scripts/implement/lib/epic-plan.mjs","export":"GROUPINGS","values":true},{"usage":"scripts/implement/implement.mjs","flagValues":"--grouping"}]},{"id":"prSplit","group":"delivery","label":"PR split (feature epic)","kind":"config","config":"implement.epic.prSplit","flag":"--pr-split","type":"enum","values":["epic","story","groups"],"default":"epic","help":"epic: one PR; story: one PR per story; groups: PRs of stories the orchestrator groups. Applies only when the epic is not mostly bugs and grouping is auto.","doc":"ai-pipeline/implement.md#how-an-epic-is-split-into-prs","checks":[{"json":"scripts/implement/config.json","path":"implement.epic.prSplit","absent":true},{"code":"scripts/implement/implement.mjs","includes":"config.implement.epic?.prSplit ?? 'epic'"},{"module":"scripts/implement/lib/epic-plan.mjs","export":"PR_SPLITS","values":true},{"usage":"scripts/implement/implement.mjs","flagValues":"--pr-split"}]},{"id":"epicFeatureVerification","group":"delivery","label":"Unit feature verification","kind":"config","config":"implement.epic.featureVerification","type":"boolean","default":true,"help":"The cross-story journeys of an epic unit are planned, automated and verified once on the unit.","doc":"ai-pipeline/implement.md#epic-delivery","checks":[{"json":"scripts/implement/config.json","path":"implement.epic.featureVerification"}]},{"id":"epicPrCheck","group":"delivery","label":"Unit PR check","kind":"config","config":"implement.epic.prCheck","type":"enum","values":["fix","report","off"],"default":"fix","help":"The PR check of every ticket of a unit against the unit's diff, in one run.","doc":"ai-pipeline/implement.md#epic-delivery","checks":[{"json":"scripts/implement/config.json","path":"implement.epic.prCheck"},{"code":"scripts/implement/lib/epic.mjs","literals":true}]},{"id":"council.pairVerify","group":"council","label":"pairVerify","kind":"config","config":"council.stages.pairVerify","type":"boolean","default":false,"seat":"pairVerify","help":"Seat a council instead of the single pair-verifier.","doc":"ai-pipeline/council.md#stages","checks":[{"module":"scripts/pipeline/lib/council-config.mjs","export":"COUNCIL_STAGES","hasKey":"pairVerify"},{"json":"scripts/pipeline/config.json","path":"council","absent":true}]},{"id":"council.pairUiVerify","group":"council","label":"pairUiVerify","kind":"config","config":"council.stages.pairUiVerify","type":"boolean","default":false,"seat":"pairUiVerify","help":"Seat a council instead of the single pair-ui-verifier (UI subtasks).","doc":"ai-pipeline/council.md#stages","checks":[{"module":"scripts/pipeline/lib/council-config.mjs","export":"COUNCIL_STAGES","hasKey":"pairUiVerify"},{"json":"scripts/pipeline/config.json","path":"council","absent":true}]},{"id":"council.review","group":"council","label":"review","kind":"config","config":"council.stages.review","type":"boolean","default":false,"seat":"review","help":"Seat a council instead of the single architecture-reviewer.","doc":"ai-pipeline/council.md#stages","checks":[{"module":"scripts/pipeline/lib/council-config.mjs","export":"COUNCIL_STAGES","hasKey":"review"},{"json":"scripts/pipeline/config.json","path":"council","absent":true}]},{"id":"council.testPlan","group":"council","label":"testPlan","kind":"config","config":"council.stages.testPlan","type":"boolean","default":false,"seat":"testPlan","help":"Seat a council instead of the single test-plan-verifier.","doc":"ai-pipeline/council.md#stages","checks":[{"module":"scripts/pipeline/lib/council-config.mjs","export":"COUNCIL_STAGES","hasKey":"testPlan"},{"json":"scripts/pipeline/config.json","path":"council","absent":true}]},{"id":"council.testAutomation","group":"council","label":"testAutomation","kind":"config","config":"council.stages.testAutomation","type":"boolean","default":false,"seat":"testAutomation","help":"Seat a council instead of the single test-automation-verifier.","doc":"ai-pipeline/council.md#stages","checks":[{"module":"scripts/pipeline/lib/council-config.mjs","export":"COUNCIL_STAGES","hasKey":"testAutomation"},{"json":"scripts/pipeline/config.json","path":"council","absent":true}]},{"id":"council.prCheck","group":"council","label":"prCheck","kind":"config","config":"council.stages.prCheck","type":"boolean","default":false,"seat":"prCheck","help":"Seat council members instead of the PR check critics.","doc":"ai-pipeline/council.md#stages","checks":[{"module":"scripts/pipeline/lib/council-config.mjs","export":"COUNCIL_STAGES","hasKey":"prCheck"},{"json":"scripts/pipeline/config.json","path":"council","absent":true}]},{"id":"analysis","group":"evidence","label":"Static analysis","kind":"config","config":"analysis","type":"boolean","default":false,"section":true,"help":"On when .factory/config.json has an analysis section. Off: no local analysis slots, and no analysis jobs are rendered for CI, so the pre-push analysis gate has nothing to run.","doc":"ai-pipeline/analysis.md#where-it-runs","checks":[{"json":"scripts/pipeline/config.json","path":"analysis","absent":true},{"module":"scripts/pipeline/lib/analysis/config.mjs","export":"analysisOn","call":[{}]}]},{"id":"analysisBounces","group":"loops","label":"Analysis fix loop","kind":"config","config":"analysis.fixLoop.bounces","type":"integer","min":0,"max":10,"default":2,"help":"Blocking analysis findings go back to the implementer this many times, without spending a review round.","doc":"ai-pipeline/analysis.md#configuration","checks":[{"module":"scripts/pipeline/lib/analysis/config.mjs","export":"FIX_BOUNCES_DEFAULT"}]},{"id":"demoVideo","group":"evidence","label":"Demo video (features.demoVideo)","kind":"config","file":".factory/factory.json","config":"features.demoVideo","type":"boolean","default":false,"help":"Demo videos, bug before/after evidence and the API changes section, produced on the pipeline machine before the PR opens.","doc":"configuration.md#the-pin-factoryfactoryjson","checks":[{"module":"scripts/factory/lib/render.mjs","export":"FEATURE_DEFAULTS","path":"demoVideo"}]},{"id":"scriptScope","group":"evidence","label":"Narration scope","kind":"config","config":"video.script.scope","type":"enum","values":["headline","all","none"],"default":"headline","help":"Which videos the demo-narrator agent scripts. none: automatic lines only, no narrator agent. Any other value stops every command that loads the pipeline config.","doc":"ai-pipeline/pr-demo-video.md#narration-scripts","checks":[{"module":"scripts/pr-video/lib/script.mjs","export":"SCRIPT_DEFAULTS","path":"scope"},{"code":"scripts/pr-video/lib/local.mjs","literals":true},{"module":"scripts/pipeline/lib/config.mjs","export":"VIDEO_SCRIPT_SCOPES","values":true}]},{"id":"requireBefore","group":"evidence","label":"Require before-the-fix evidence","kind":"config","config":"video.bugPair.requireBefore","type":"boolean","default":false,"help":"A bug whose reproduction cannot be shown before the fix (UI video pair or backend request evidence) opens no PR.","doc":"ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix","checks":[{"module":"scripts/pr-video/lib/bugpair.mjs","export":"BUG_PAIR_DEFAULTS","path":"requireBefore"}]},{"id":"maxPairRounds","group":"loops","label":"maxPairRounds","kind":"config","config":"implement.maxPairRounds","type":"integer","min":1,"max":10,"default":3,"help":"Rounds a pair gets before it escalates to the orchestrator (rewrite or takeover, once).","doc":"ai-pipeline/implement-reference.md#limits","checks":[{"json":"scripts/implement/config.json","path":"implement.maxPairRounds"}]},{"id":"reviewMaxRounds","group":"loops","label":"review.maxRounds","kind":"config","config":"review.maxRounds","type":"integer","min":1,"max":20,"default":5,"help":"Architecture review rounds before the review escalates.","doc":"ai-pipeline/review.md#the-policy-step-engine-and-policy","checks":[{"json":"scripts/review/config.json","path":"review.maxRounds"}]},{"id":"maxBugFixCycles","group":"loops","label":"maxBugFixCycles","kind":"config","config":"implement.maxBugFixCycles","type":"integer","min":0,"max":10,"default":2,"help":"Times a product bug found by the automated tests goes back to implementation.","doc":"ai-pipeline/implement-reference.md#config","checks":[{"json":"scripts/implement/config.json","path":"implement.maxBugFixCycles"}]},{"id":"returnEnabled","group":"loops","label":"Return PR check findings to implementation","kind":"config","config":"implement.prCheck.returnToImplementation.enabled","type":"boolean","default":true,"help":"Off: every PR check finding stays with pr-check-fixer.","doc":"ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation","checks":[{"json":"scripts/implement/config.json","path":"implement.prCheck.returnToImplementation.enabled"},{"module":"scripts/implement/lib/pr-check-return.mjs","export":"RETURN_DEFAULTS","path":"enabled"}]},{"id":"maxReturns","group":"loops","label":"returnToImplementation.maxReturns","kind":"config","config":"implement.prCheck.returnToImplementation.maxReturns","type":"integer","min":0,"max":10,"default":2,"help":"Returns from the PR check to implementation or test automation per ticket (a wrongly routed one is re-routed once for free).","doc":"ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation","checks":[{"json":"scripts/implement/config.json","path":"implement.prCheck.returnToImplementation.maxReturns"},{"module":"scripts/implement/lib/pr-check-return.mjs","export":"RETURN_DEFAULTS","path":"maxReturns"}]},{"id":"minSeverity","group":"loops","label":"returnToImplementation.minSeverity","kind":"config","config":"implement.prCheck.returnToImplementation.minSeverity","type":"enum","values":["blocking","major","minor"],"default":"major","help":"The least severe production finding that returns; below it pr-check-fixer handles it.","doc":"ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation","checks":[{"json":"scripts/implement/config.json","path":"implement.prCheck.returnToImplementation.minSeverity"},{"module":"scripts/implement/lib/pr-check-return.mjs","export":"RETURN_DEFAULTS","path":"minSeverity"},{"module":"scripts/pipeline/lib/severity.mjs","export":"SEVERITIES","values":true}]},{"id":"ciFixRounds","group":"loops","label":"ciFixRounds","kind":"config","config":"implement.ciFixRounds","env":"PIPELINE_CI_FIX_ROUNDS","type":"integer","min":0,"max":5,"default":1,"help":"0 sends red CI straight to a person. Any value above 0 gives one fixing round per CI gate (the gate runs at most one).","doc":"configuration.md#stage-sections","checks":[{"module":"scripts/implement/lib/ci-wait.mjs","export":"ciFixRounds","call":[{},{}]}]},{"id":"draftCycles","group":"loops","label":"preOpen.draftCycles","kind":"config","config":"implement.preOpen.draftCycles","type":"integer","min":0,"max":5,"default":1,"help":"Times an open PR may go back on hold for a CI fixing round before a person decides.","doc":"configuration.md#stage-sections","checks":[{"module":"scripts/implement/lib/pre-open.mjs","export":"PRE_OPEN_DEFAULTS","path":"draftCycles"}]},{"id":"afterOpen","group":"loops","label":"preOpen.afterOpen (hold mode)","kind":"config","config":"implement.preOpen.afterOpen","type":"enum","values":["draft","label","close-reopen"],"default":"draft","help":"How an open PR is held while agents work on it again. close-reopen becomes draft on a host that cannot reopen (Bitbucket); factory doctor reports it.","doc":"configuration.md#stage-sections","checks":[{"module":"scripts/implement/lib/pre-open.mjs","export":"PRE_OPEN_DEFAULTS","path":"afterOpen"},{"code":"scripts/implement/lib/pre-open.mjs","includes":"const AFTER_OPEN = ['draft', 'label', 'close-reopen']"}]},{"id":"ciWait","group":"loops","label":"ciWait","kind":"config","config":"implement.ciWait","type":"boolean","default":true,"help":"false: no CI proof on the branch before the open and no wait for the PR's checks after it (the PR opens without the proof).","doc":"configuration.md#stage-sections","checks":[{"json":"scripts/implement/config.json","path":"implement.ciWait","absent":true},{"code":"scripts/implement/lib/pre-open.mjs","includes":"settings.ciWait === false"},{"code":"scripts/implement/lib/implement.mjs","includes":"settings.ciWait !== false"}]},{"id":"autoMerge","group":"gate","label":"autoMerge.enabled","kind":"config","config":"implement.autoMerge.enabled","type":"boolean","default":true,"help":"The kill switch: off, every PR that would auto-merge waits for approvals instead.","doc":"ai-pipeline/review-gate.md#auto-merge","checks":[{"json":"scripts/implement/config.json","path":"implement.autoMerge.enabled"}]},{"id":"approvals.Low","group":"gate","label":"approvals.Low","kind":"config","config":"implement.reviewGate.approvals.Low","type":"integer","min":1,"max":5,"default":1,"help":"Approvals a Low PR needs when it does not auto-merge.","doc":"ai-pipeline/review-gate.md#approvals-policy","checks":[{"json":"scripts/implement/config.json","path":"implement.reviewGate.approvals.Low"}]},{"id":"approvals.Medium","group":"gate","label":"approvals.Medium","kind":"config","config":"implement.reviewGate.approvals.Medium","type":"integer","min":1,"max":5,"default":1,"help":"Approvals a Medium PR needs.","doc":"ai-pipeline/review-gate.md#approvals-policy","checks":[{"json":"scripts/implement/config.json","path":"implement.reviewGate.approvals.Medium"}]},{"id":"approvals.High","group":"gate","label":"approvals.High","kind":"config","config":"implement.reviewGate.approvals.High","type":"integer","min":1,"max":5,"default":1,"help":"Approvals a High PR needs.","doc":"ai-pipeline/review-gate.md#approvals-policy","checks":[{"json":"scripts/implement/config.json","path":"implement.reviewGate.approvals.High"}]},{"id":"approvals.Severe","group":"gate","label":"approvals.Severe","kind":"config","config":"implement.reviewGate.approvals.Severe","type":"integer","min":1,"max":5,"default":1,"help":"Approvals a Severe PR needs.","doc":"ai-pipeline/review-gate.md#approvals-policy","checks":[{"json":"scripts/implement/config.json","path":"implement.reviewGate.approvals.Severe"}]},{"id":"host","group":"products","label":"Code host","kind":"config","config":"host.type","type":"enum","values":["github","gitlab","azure-devops","bitbucket","custom"],"default":"github","help":"Detected from the origin remote; github without one.","doc":"configuration.md#code-host-tracker-and-ci","checks":[{"module":"scripts/pipeline/lib/products.mjs","export":"HOST_TYPES","values":true},{"module":"scripts/pipeline/lib/products.mjs","export":"resolveProducts","call":[{},{"remote":""}],"path":"host.type"}]},{"id":"tracker","group":"products","label":"Tracker (board)","kind":"config","config":"tracker.type","type":"enum","values":["github","jira","azure-boards","gitlab","linear","custom"],"default":"github","help":"The host's own tracker by default (Bitbucket has none: set it).","doc":"configuration.md#code-host-tracker-and-ci","checks":[{"module":"scripts/pipeline/lib/products.mjs","export":"TRACKER_TYPES","values":true},{"module":"scripts/pipeline/lib/products.mjs","export":"resolveProducts","call":[{},{"remote":""}],"path":"tracker.type"}]},{"id":"ciProvider","group":"products","label":"CI system","kind":"config","config":"ci.provider","type":"enum","values":["github-actions","gitlab-ci","azure-pipelines","jenkins","circleci","bitbucket-pipelines","custom"],"default":"github-actions","help":"The host's own CI system by default. Whether it runs pipelines on a branch push (capability branchPipelines) decides between proving CI before the open and opening as a draft.","doc":"hosts-and-trackers.md#ci-systems","checks":[{"module":"scripts/pipeline/lib/products.mjs","export":"CI_PROVIDERS","values":true},{"module":"scripts/pipeline/lib/products.mjs","export":"resolveProducts","call":[{},{"remote":""}],"path":"ci.provider"}]},{"id":"ciCustomBranchPipelines","group":"products","label":"custom CI declares branchPipelines","kind":"config","config":"ci.capabilities.branchPipelines","type":"boolean","default":false,"onlyWhen":{"eq":["ciProvider","custom"]},"help":"A custom CI adapter's capabilities come from its describe operation and ci.capabilities.","doc":"hosts-and-trackers.md#ci-systems","checks":[{"code":"scripts/pipeline/lib/providers/custom.mjs","includes":"settings.capabilities"}]}],"branchPipelines":{"$comment":"The CI adapters' capability branchPipelines (scripts/pipeline/lib/ci/\u003cprovider>.mjs CAPABILITIES); custom: declared.","github-actions":true,"gitlab-ci":true,"azure-pipelines":false,"jenkins":true,"circleci":true,"bitbucket-pipelines":true,"custom":null},"normalize":[{"when":{"eq":["entry","feature-epic"]},"set":{"ticket":"feature"},"note":"A feature epic's tickets are stories: ticket kind is feature."},{"when":{"all":[{"eq":["entry","bug-epic"]},{"eq":["ticket","feature"]}]},"set":{"ticket":"ui-bug"},"note":"A bug epic's tickets are bugs: ticket kind set to UI bug."},{"when":{"all":[{"eq":["ticket","ui-bug"]},{"eq":["changes","backend"]}]},"set":{"changes":"both"},"note":"A UI bug's fix touches the frontend: change set to frontend and backend."}],"facts":[{"id":"isEpicEntry","label":"an epic run was asked for","is":{"in":["entry",["feature-epic","bug-epic"]]}},{"id":"epicRun","label":"delivered in epic units","is":{"all":[{"is":"isEpicEntry"},{"eq":["delivery","epic"]}]}},{"id":"singleFlow","label":"a ticket delivers its own PR","is":{"not":{"is":"epicRun"}}},{"id":"shapeEpic","label":"one epic branch and one PR","is":{"all":[{"is":"epicRun"},{"any":[{"eq":["grouping","epic"]},{"all":[{"eq":["grouping","auto"]},{"eq":["entry","feature-epic"]},{"eq":["prSplit","epic"]}]}]}]}},{"id":"shapeFeatureGroups","label":"a feature epic split into PRs","is":{"all":[{"is":"epicRun"},{"eq":["grouping","auto"]},{"eq":["entry","feature-epic"]},{"in":["prSplit",["story","groups"]]}]}},{"id":"shapeBugGroups","label":"bug groups (strict bug majority, or grouping ticket)","is":{"all":[{"is":"epicRun"},{"not":{"is":"shapeEpic"}},{"not":{"is":"shapeFeatureGroups"}}]}},{"id":"epicPlanner","label":"the epic plan runs","is":{"all":[{"is":"epicRun"},{"not":{"eq":["grouping","ticket"]}}]}},{"id":"isBug","label":"the ticket is a bug","is":{"in":["ticket",["ui-bug","backend-bug"]]}},{"id":"bugUnit","label":"the PR is a bug-fix PR (rated by the gate)","is":{"any":[{"all":[{"is":"singleFlow"},{"is":"isBug"}]},{"is":"shapeBugGroups"}]}},{"id":"frontendChange","label":"the change touches the frontend","is":{"in":["changes",["frontend","both"]]}},{"id":"backendChange","label":"the change touches the backend","is":{"in":["changes",["backend","both"]]}},{"id":"branchPipelines","label":"the CI system runs pipelines on a branch push","is":{"any":[{"in":["ciProvider",["github-actions","gitlab-ci","jenkins","circleci","bitbucket-pipelines"]]},{"all":[{"eq":["ciProvider","custom"]},{"is":"ciCustomBranchPipelines"}]}]}},{"id":"proveOnBranch","label":"CI is proven on the branch before the open","is":{"all":[{"is":"ciWait"},{"is":"branchPipelines"}]}},{"id":"draftFirst","label":"the PR opens as a draft (or labelled) and is marked ready when green","is":{"all":[{"is":"ciWait"},{"not":{"is":"branchPipelines"}}]}},{"id":"heldPr","label":"the PR is already open with a hold recorded (a re-delivery, or a resumed wait): it is updated, not opened, and released when green","walk":true,"is":false},{"id":"videoSection","label":"demo video of the changed specs","is":{"all":[{"is":"demoVideo"},{"is":"frontendChange"}]}},{"id":"uiPair","label":"UI bug before/after video pair","is":{"all":[{"is":"demoVideo"},{"eq":["ticket","ui-bug"]},{"is":"frontendChange"}]}},{"id":"backendEvidence","label":"backend bug request evidence","is":{"all":[{"is":"demoVideo"},{"eq":["ticket","backend-bug"]}]}},{"id":"apiSection","label":"API changes section","is":{"all":[{"is":"demoVideo"},{"is":"backendChange"}]}},{"id":"narrator","label":"the demo-narrator agent writes scripts","is":{"all":[{"is":"demoVideo"},{"not":{"eq":["scriptScope","none"]}}]}},{"id":"ticketPrCheck","label":"the ticket's own PR check is waited for","is":{"all":[{"is":"singleFlow"},{"is":"pr"}]}},{"id":"returnsOn","label":"PR check findings can return to implementation","is":{"all":[{"is":"ticketPrCheck"},{"is":"returnEnabled"}]}},{"id":"unitPrCheck","label":"the unit's PR check runs","is":{"all":[{"is":"epicRun"},{"not":{"eq":["epicPrCheck","off"]}}]}},{"id":"ciFix","label":"red CI gets a fixing round","is":{"gt":["ciFixRounds",0]}},{"id":"fixAfterOpen","label":"a failing check after the open gets a hold and a fixing round","is":{"all":[{"is":"ciFix"},{"gt":["draftCycles",0]}]}},{"id":"autoMergeEligible","label":"the gate can auto-merge","is":{"all":[{"is":"bugUnit"},{"is":"autoMerge"},{"eq":["severity","Low"]},{"eq":["confidence","high"]}]}},{"id":"approvalsNeeded","label":"approvals this severity needs","select":["severity",{"Low":"approvals.Low","Medium":"approvals.Medium","High":"approvals.High","Severe":"approvals.Severe"}]}],"entries":[{"node":"run","when":{"not":{"eq":["entry","resume"]}}},{"node":"resume","when":{"eq":["entry","resume"]}}],"nodes":[{"id":"run","label":"Start the run","kind":"harness","lane":null,"layout":{"row":0,"col":1},"desc":"implement run (a ticket, or --epic for every ticket of an epic) refuses to start while another run is active here, recovers a dead run's daemons, fetches the tickets and plans the batch in Blocked-by order.","settings":["entry","pr","delivery"],"doc":"ai-pipeline/implement.md#what-happens"},{"id":"resume","label":"implement resume / requeue","kind":"harness","lane":null,"layout":{"row":0,"col":0},"decision":"resume","desc":"Continues a run that stopped, from its saved phase, or (requeue) runs again a ticket a person resolved or reopened. A PR that did not open (pr-refused, gate-assessment-failed) replays the delivery from the analysis gate and push, even under needs-human. A stopped CI wait resumes there; when a hold is still recorded (hold-failed, release-unconfirmed, a held or draft PR) it is released once green, with the CI wait off too.","settings":["entry"],"doc":"ai-pipeline/implement.md#resume-and-interrupted-runs"},{"id":"claim","label":"Sync the board, claim the card","kind":"harness","lane":"In Progress","layout":{"row":1,"col":1},"decision":"claim","desc":"board sync, then the claim moves the card to In Progress from Backlog, Ready, Failed or In Progress (Pending Review and Done only with --force); a card another machine holds is skipped unless --takeover.","settings":["tracker"],"doc":"ai-pipeline/board.md#the-state-machine"},{"id":"entry","label":"One ticket or an epic?","kind":"harness","route":true,"lane":"In Progress","layout":{"row":2,"col":1},"desc":"A ticket delivers its own PR; an epic run (implement.delivery epic) is delivered in units. --delivery story runs an epic's tickets one PR each, with no epic plan.","settings":["entry","delivery"],"doc":"ai-pipeline/implement.md#delivery-modes"},{"id":"reopenHold","label":"Hold the open PR","kind":"harness","lane":null,"layout":{"row":2,"col":0},"desc":"After the claim, with --pr, a ticket whose PR is still open (reopened, sent back, or its last record names an open or unreadable PR: one host read at plan time, after the skip, resume and reopen routing, none under --dry-run) runs on that PR's branch: the PR is put on hold (preOpen.afterOpen) and the hold confirmed before any agent runs; a hold already confirmed is kept. The reopened label stays until then. Without --pr nothing is held. After a merge it becomes a follow-up branch and a new PR instead.","settings":["afterOpen"],"doc":"ai-pipeline/review-gate.md#human-reopens","decision":"reopenHold"},{"id":"requeue","label":"A person resolves or reopens it","kind":"person","lane":"Ready","layout":{"row":1,"col":0},"desc":"The person answers the questions on the Failed ticket and ticks Resolved, or reopens a delivered bug fix (or sends its PR back); board sync moves it to Ready and implement requeue (or run) claims it again, with the answers as binding decisions.","settings":[],"doc":"ai-pipeline/escalations.md#questions-and-the-resolve-checkbox"},{"id":"tracker","label":"Tracker","kind":"service","lane":null,"layout":{"row":1,"col":3},"labelRef":"tracker","desc":"The ticket board, through the tracker adapter: lanes, ticket text, evidence, questions.","settings":["tracker"],"doc":"configuration.md#code-host-tracker-and-ci","spine":false},{"id":"epicPlan","label":"Epic plan","kind":"agent","agents":["implementer (orchestrator)"],"lane":"In Progress","layout":{"row":3,"col":1},"decision":"epicPlan","when":{"is":"epicPlanner"},"desc":"The orchestrator writes the epic's design note (contracts, journeys) and, for planned groups, the PR groups the harness validates; grouping ticket skips it.","settings":["grouping","prSplit"],"doc":"ai-pipeline/implement.md#epic-delivery"},{"id":"shape","label":"Delivery units","kind":"harness","lane":"In Progress","layout":{"row":4,"col":1},"when":{"is":"epicRun"},"desc":"The units the epic is delivered in: one epic branch, or PR groups (one per story, planned groups, or bug groups) stacked on the groups they depend on.","settings":["grouping","prSplit","delivery"],"doc":"ai-pipeline/implement.md#delivery-modes"},{"id":"foundation","label":"Foundation pair","kind":"agent","agents":["pair-implementer","pair-verifier"],"lane":"In Progress","layout":{"row":5,"col":2},"decision":"foundation","when":{"is":"shapeEpic"},"desc":"When the design note names a foundation (shared contracts), one pair builds it on the epic branch before the stories.","settings":[],"doc":"ai-pipeline/implement.md#epic-delivery"},{"id":"plan","label":"Orchestrator plans","kind":"agent","agents":["implementer (orchestrator)"],"lane":"In Progress","layout":{"row":6,"col":1},"decision":"plan","desc":"Keeps the ticket (self mode) or plans up to implement.maxSubtasks subtasks with owned files; the harness validates the plan. In an epic this runs for every ticket of the unit.","settings":[],"doc":"ai-pipeline/implement.md#plan"},{"id":"pairs","label":"Implementer","kind":"agent","agents":["pair-implementer","implementer (self mode, fixes)"],"lane":"In Progress","layout":{"row":7,"col":1},"desc":"A pair-implementer writes each subtask in its own worktree (the orchestrator itself in self mode); review fixes, product bugs and PR check returns come back here.","settings":[],"doc":"ai-pipeline/implement.md#what-happens"},{"id":"harnessChecks","label":"Harness checks","kind":"harness","lane":"In Progress","layout":{"row":8,"col":1},"decision":"harnessChecks","desc":"After every implementer run: language-server errors, whitespace-only hunks, the repository's lint on changed lines and, with static analysis on, the analysis tools; a secret only in unpushed commits is folded out by the harness.","settings":["analysis","analysisBounces"],"doc":"ai-pipeline/implement.md#static-analysis-in-the-pair-rounds"},{"id":"verifier","label":"Pair verifier","kind":"agent","agents":["pair-verifier","pair-ui-verifier"],"councilStages":["pairVerify","pairUiVerify"],"lane":"In Progress","layout":{"row":9,"col":1},"decision":"verifier","desc":"A fresh read-only verifier (pair-ui-verifier on a test-stack slot for UI subtasks) or a council checks each round; approved subtasks are merged into the story branch.","settings":["council.pairVerify","council.pairUiVerify","maxPairRounds"],"doc":"ai-pipeline/implement.md#ui-verification"},{"id":"policy","label":"Policy engine","kind":"harness","lane":"In Progress","layout":{"row":10,"col":1},"decision":"policy","desc":"The architecture policy engine runs first, deterministically; a block goes back to the implementer.","settings":[],"doc":"ai-pipeline/review.md#the-policy-step-engine-and-policy"},{"id":"review","label":"Architecture review","kind":"agent","agents":["architecture-reviewer"],"councilStages":["review"],"lane":"In Progress","layout":{"row":11,"col":1},"decision":"review","desc":"A fresh architecture-reviewer (or a council) approves the code on disk; approval moves the card to Testing.","settings":["council.review","reviewMaxRounds"],"doc":"ai-pipeline/review.md#the-policy-step-engine-and-policy"},{"id":"testPlan","label":"Test plan","kind":"agent","agents":["test-planner","test-plan-verifier"],"councilStages":["testPlan"],"lane":"Testing","layout":{"row":12,"col":1},"decision":"testPlan","desc":"Feature verification workflow 1: the test plan, checked by test-plan-verifier (or a council); required cases from the PR check or the pairs are added.","settings":["council.testPlan"],"doc":"ai-pipeline/feature-verification.md#workflow-1-story-to-test-plan"},{"id":"fv","label":"Test automation","kind":"agent","agents":["test-automation","test-automation-verifier"],"councilStages":["testAutomation"],"lane":"Testing","layout":{"row":13,"col":1},"decision":"fv","desc":"Workflow 2: automated tests for every case, checked by test-automation-verifier (or a council); a test that finds a product bug sends the change back.","settings":["council.testAutomation","maxBugFixCycles"],"doc":"ai-pipeline/feature-verification.md#workflow-2-implementation-to-automated-tests"},{"id":"unit","label":"Merged into the unit branch","kind":"harness","lane":"Testing","layout":{"row":14,"col":2},"when":{"is":"epicRun"},"desc":"Each verified ticket merges into its unit's branch (the epic branch or its group branch); the per-ticket PR check is skipped in units.","settings":[],"doc":"ai-pipeline/implement.md#epic-delivery"},{"id":"doneNoPr","label":"Run ends: done, no PR","kind":"record","lane":"Pending Review","layout":{"row":14,"col":3},"end":true,"desc":"Without --pr: outcome done, the ticket published, the card to Pending Review with its evidence; the branch stays local (an epic unit stays merged on its branch).","settings":["pr"],"doc":"ai-pipeline/escalations.md#outcomes"},{"id":"journeys","label":"Unit feature verification","kind":"agent","agents":["test-planner","test-automation","verifiers"],"lane":"Testing","layout":{"row":15,"col":2},"decision":"journeys","when":{"all":[{"is":"epicRun"},{"is":"epicFeatureVerification"}]},"desc":"The cross-story journeys, verified once per unit (a split feature epic: on the last journey group, stacked on the others; a bug group: only journeys wholly inside it); tests later tickets made stale are re-verified.","settings":["epicFeatureVerification"],"doc":"ai-pipeline/implement.md#epic-delivery"},{"id":"unitPrCheck","label":"Unit PR check","kind":"agent","agents":["pr-check critics","defender","judge","pr-check-fixer"],"councilStages":["prCheck"],"lane":"Testing","layout":{"row":16,"col":2},"when":{"is":"unitPrCheck"},"desc":"Every ticket of the unit checked against the unit's diff in one run; fix mode lets pr-check-fixer fix upheld findings, and an escalated check stops the unit after the push.","settings":["epicPrCheck","council.prCheck"],"doc":"ai-pipeline/pr-check.md#several-tickets-an-epic"},{"id":"prCheck","label":"PR check","kind":"agent","agents":["pr-check critics","defender","judge"],"councilStages":["prCheck"],"lane":"Testing","layout":{"row":17,"col":1},"decision":"prCheck","when":{"is":"ticketPrCheck"},"desc":"Critics (or council members), a defender and a judge debate the change against its ticket; the harness computes the score and routes each upheld finding by what would resolve it. Not waited for when the Stop hook's check is off (prCheck.hook.enabled false, or PR_CHECK_SKIP=1): delivery goes straight on.","settings":["council.prCheck","returnEnabled","maxReturns","minSeverity"],"doc":"ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation"},{"id":"fixer","label":"pr-check-fixer","kind":"agent","agents":["pr-check-fixer"],"lane":"Testing","layout":{"row":18,"col":0},"when":{"is":"ticketPrCheck"},"desc":"Fixes findings confined to tests, docs, records, PR text or style, and production findings below minSeverity (implement.prCheck.fixUntil, bugFixUntil).","settings":["minSeverity"],"doc":"ai-pipeline/pr-check.md#before-the-pr-exists","spine":false},{"id":"parity","label":"Publish, CI parity, re-verify","kind":"harness","calls":["pr-check-fixer (parity failures)","feature verification (other tickets)"],"lane":"Testing","layout":{"row":18,"col":1},"decision":"parity","when":{"all":[{"is":"pr"},{"not":{"is":"shapeEpic"}}]},"desc":"The ticket is published and fetched back as CI reads it, what CI runs on the PR runs here first (failures go through a fixing round), and another ticket's verified plan or tests this change edited is verified again. For a single ticket, implement.ciParity false skips the parity run; a bug group's parity run still runs. The setting also skips the pre-push analysis gate, for every delivery.","settings":[],"doc":"ai-pipeline/ci-parity.md"},{"id":"analysisGate","label":"Pre-push analysis gate","kind":"harness","lane":"Testing","layout":{"row":19,"col":1},"decision":"analysisGate","when":{"all":[{"is":"pr"},{"is":"analysis"}]},"desc":"CI's analysis jobs (rendered only with static analysis on) run with CI's own script on a clean checkout of the head before anything is pushed; a secret the commit gate held still in the worktree stops the push. implement.ciParity false skips the gate too.","settings":["analysis"],"doc":"ai-pipeline/analysis.md#ci"},{"id":"analysisFix","label":"Analysis fixing round","kind":"agent","agents":["pr-check-fixer"],"lane":"Testing","layout":{"row":20,"col":0},"when":{"all":[{"is":"pr"},{"is":"analysis"}]},"desc":"One fixing round on the blocking findings; a secret only in unpushed commits is folded out by the harness.","settings":[],"doc":"ai-pipeline/analysis.md#ci","spine":false},{"id":"push","label":"Push the branch","kind":"harness","lane":"Testing","layout":{"row":20,"col":1},"decision":"push","when":{"is":"pr"},"desc":"The branch is pushed once the records it carries are redacted and scanned; then the tickets are published.","settings":[],"doc":"ai-pipeline/analysis.md#secrets-in-records-and-posts-redaction"},{"id":"ownerQ","label":"Owner question or unfinished check?","kind":"harness","lane":"Testing","layout":{"row":21,"col":1},"decision":"ownerQ","when":{"is":"pr"},"desc":"Checked after the push, before the CI proof: an owner question from the PR check, or a PR check that did not finish (or a unit check that escalated), opens no PR.","settings":[],"doc":"ai-pipeline/implement.md#the-pr-opens-finished"},{"id":"branchCi","label":"CI proven on the branch head","kind":"harness","lane":"Testing","layout":{"row":22,"col":1},"decision":"branchCi","when":{"all":[{"is":"pr"},{"is":"proveOnBranch"}]},"desc":"Every pipeline a push of the branch runs must complete green on that exact SHA (a skipped run is not a pass, a retry-only pass is a finding); if the base moved it is merged in and the new head proven again.","settings":["ciWait","ciProvider","ciFixRounds"],"doc":"ai-pipeline/implement.md#the-pr-opens-finished"},{"id":"ciFixRound","label":"CI fixing round","kind":"agent","agents":["pr-check-fixer"],"lane":"Testing","layout":{"row":23,"col":0},"decision":"ciFixRound","when":{"all":[{"is":"pr"},{"is":"proveOnBranch"},{"is":"ciFix"}]},"desc":"One fixing round on the failing checks (the PR check in fix mode, pushed), then the harness's own way out once (CI's analysis jobs here, the secret decision table), then the head is proven again.","settings":["ciFixRounds"],"doc":"ai-pipeline/implement.md#the-pr-opens-finished"},{"id":"ciSystem","label":"CI system","kind":"service","lane":null,"layout":{"row":26,"col":3},"labelRef":"ciProvider","desc":"The CI adapter reads the head's runs, statuses and logs.","settings":["ciProvider","ciCustomBranchPipelines"],"doc":"hosts-and-trackers.md#ci-systems","spine":false},{"id":"bug","label":"A bug fix?","kind":"harness","route":true,"lane":"Testing","layout":{"row":24,"col":1},"when":{"is":"pr"},"desc":"A bug ticket (type bug or a BUG-n key), or a bug group of a bug epic, is rated by the review gate; a feature PR, a feature epic or its groups are not.","settings":["ticket","entry"],"doc":"ai-pipeline/review-gate.md#assessment"},{"id":"triage","label":"Bug triage","kind":"agent","agents":["bug-triage"],"lane":"Testing","layout":{"row":25,"col":1},"when":{"all":[{"is":"pr"},{"is":"bugUnit"}]},"desc":"The read-only bug-triage agent rates each bug ticket (Impact, Complexity, Fix risk) from the branch's change; the harness computes Severity and Confidence. A resumed delivery reuses a saved rating. If the active gate cannot assess, no new PR opens. With the review gate off (implement.reviewGate.enabled false, or REVIEW_GATE=0) nothing is rated or published.","settings":["severity","confidence"],"doc":"ai-pipeline/review-gate.md#assessment","decision":"triage"},{"id":"headScan","label":"Static analysis of the head","kind":"harness","lane":"Testing","layout":{"row":26,"col":1},"when":{"all":[{"is":"pr"},{"is":"analysis"}]},"desc":"The delivered head's own scan for the PR body (deterministic; a head already scanned is not scanned again).","settings":["analysis"],"doc":"ai-pipeline/analysis.md#metrics-pr-body-disk","spine":false},{"id":"evidence","label":"Demo video","kind":"harness","calls":["demo-narrator"],"lane":"Testing","layout":{"row":27,"col":1},"when":{"all":[{"is":"pr"},{"is":"videoSection"}]},"desc":"The changed e2e specs recorded in demo mode on a test-stack slot of this machine, narrated (demo-narrator, by narration scope) and subtitled, checked for secrets and stored for this head; a failed step is a note, never a hold.","settings":["demoVideo","scriptScope","changes"],"doc":"ai-pipeline/pr-demo-video.md#how-it-works"},{"id":"uiPair","label":"UI bug: before / after videos","kind":"harness","calls":["demo-narrator"],"lane":"Testing","layout":{"row":28,"col":1},"decision":"uiPair","when":{"all":[{"is":"pr"},{"is":"uiPair"}]},"desc":"The bug's reproducing browser case recorded against the merge base (it must fail at its check) and on the fix (it passes), narrated as a pair.","settings":["requireBefore","scriptScope"],"doc":"ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix"},{"id":"apiEvidence","label":"Backend bug: request evidence","kind":"harness","calls":["demo-narrator (prose)"],"lane":"Testing","layout":{"row":29,"col":1},"decision":"apiEvidence","when":{"all":[{"is":"pr"},{"is":"backendEvidence"}]},"desc":"The reproduction case's requests and responses recorded on the base and on the fix: only a Playwright assertion that fails after the block's first recorded response counts. A Reproduction comment on the ticket (one not posted is a minor finding and a note in the PR) and a Before / After section in the PR (a backend-only change films nothing). Card fields and numbers are masked in this evidence only, by JSON key, form key and check digit.","settings":["requireBefore"],"doc":"ai-pipeline/pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix"},{"id":"apiChanges","label":"API changes section","kind":"harness","lane":"Testing","layout":{"row":30,"col":1},"when":{"all":[{"is":"pr"},{"is":"apiSection"}]},"desc":"One entry per HTTP endpoint added, changed or removed (route extractor or OpenAPI diff), with example calls the specs recorded; any change with backend code gets it, mixed frontend and backend included.","settings":["demoVideo","changes"],"doc":"ai-pipeline/pr-demo-video.md#api-changes"},{"id":"open","label":"Open the PR, or update the held one","kind":"harness","lane":"Pending Review","layout":{"row":31,"col":1},"decision":"open","when":{"is":"pr"},"desc":"The body is written whole and the PR opens once on the proven head (deliverFinished); on a CI system without branch pipelines it opens as a draft, confirmed by re-reading the PR, with the work-in-progress label as fallback. A PR already open and held (a re-delivery) gets its body refreshed instead: the same PR, never a second one.","settings":["host","ciProvider","ciWait"],"doc":"ai-pipeline/implement.md#the-pr-opens-finished"},{"id":"codeHost","label":"Code host","kind":"service","lane":null,"layout":{"row":30,"col":3},"labelRef":"host","desc":"The host adapter pushes, opens, holds and merges PRs.","settings":["host"],"doc":"configuration.md#code-host-tracker-and-ci","spine":false},{"id":"gatePublish","label":"Gate publishes the rating","kind":"harness","lane":"Pending Review","layout":{"row":32,"col":1},"decision":"gatePublish","when":{"all":[{"is":"pr"},{"is":"bugUnit"}]},"desc":"The saved rating is published on the PR, the tickets and the board with --no-agent: no model call. An unreadable rating is published as not assessed (review, needs-human). A feature PR gets no rating. Skipped when the review gate is off.","settings":[],"doc":"ai-pipeline/review-gate.md#assessment"},{"id":"checks","label":"Wait for the PR's checks","kind":"harness","lane":"Pending Review","layout":{"row":33,"col":1},"decision":"checks","when":{"all":[{"is":"pr"},{"is":"ciWait"}]},"desc":"The PR's own checks are waited for with no fixing agent; a check only a PR runs, or a moved base, can still fail here. With implement.ciWait false nothing is waited for and the run goes on as green.","settings":["ciWait","draftCycles","ciFixRounds"],"doc":"ai-pipeline/implement.md#after-the-open"},{"id":"hold","label":"Hold the PR","kind":"harness","lane":"Pending Review","layout":{"row":34,"col":2},"when":{"all":[{"is":"pr"},{"is":"ciWait"},{"is":"fixAfterOpen"}]},"desc":"The PR goes back to draft, gets the work-in-progress label, or is closed (preOpen.afterOpen) before any agent works on it again; Bitbucket cannot reopen, so close-reopen becomes draft there. The hold is confirmed by re-reading the PR (up to 3 reads, 1 s apart); a hold that is not confirmed stops the run before any agent. A PR already confirmed on hold (draft-first, a re-delivery) keeps its hold.","settings":["afterOpen","draftCycles"],"doc":"ai-pipeline/implement.md#after-the-open","decision":"hold"},{"id":"holdFix","label":"CI fixing round on hold","kind":"agent","agents":["pr-check-fixer"],"lane":"Pending Review","layout":{"row":35,"col":2},"decision":"holdFix","when":{"all":[{"is":"pr"},{"is":"ciWait"},{"is":"fixAfterOpen"}]},"desc":"One fixing round on the branch while the PR is held; still failing with cycles left, another round on the same hold, at most preOpen.draftCycles rounds in all.","settings":["draftCycles","ciFixRounds"],"doc":"ai-pipeline/implement.md#after-the-open"},{"id":"ready","label":"Release the hold, mark ready","kind":"harness","lane":"Pending Review","layout":{"row":36,"col":2},"when":{"is":"pr"},"desc":"Every hold not yet released (a draft-first open, a re-delivered or resumed PR, a fixing round) is released only when every expected check is green on the head, with the CI wait off too, each release confirmed by re-reading the PR; the run records ready only when all are confirmed.","settings":["afterOpen"],"doc":"ai-pipeline/implement.md#after-the-open","decision":"ready"},{"id":"runDone","label":"Run ends: outcome done","kind":"record","lane":"Pending Review","layout":{"row":37,"col":1},"when":{"is":"pr"},"desc":"The run reports done with the PR open; the card stays in Pending Review. Run outcome done is not the board's Done lane, which needs the merge.","settings":[],"doc":"ai-pipeline/implement.md#after-the-open"},{"id":"gate","label":"Review gate decides","kind":"harness","lane":"Pending Review","layout":{"row":38,"col":1},"decision":"gate","when":{"is":"pr"},"desc":"At the open and at every board sync. A bug PR auto-merges only when: every ticket assessed and Low, high confidence, no owner question, no human reopen, no delivery waiting for a person, the PR itself Low (no floor or bump), checks green, not already sent to people, unchanged since assessed, the delivery check ran on this head, and autoMerge.enabled. Otherwise approvals:N and needs-human. A feature PR waits under the host's own rules. With the review gate off, nothing is rated or auto-merged and the PR waits under the host's rules.","settings":["autoMerge","severity","confidence","approvals.Low","approvals.Medium","approvals.High","approvals.Severe"],"doc":"ai-pipeline/review-gate.md#the-gate"},{"id":"autoMerge","label":"Auto-merge","kind":"harness","lane":"Pending Review","layout":{"row":39,"col":2},"when":{"all":[{"is":"pr"},{"is":"autoMergeEligible"}]},"desc":"Merged through the host adapter, bound to the head the gate assessed (where the host can; Bitbucket re-reads the head before merging).","settings":["autoMerge","host"],"doc":"ai-pipeline/review-gate.md#auto-merge"},{"id":"approval","label":"A person reviews","kind":"person","lane":"Pending Review","layout":{"row":39,"col":1},"decision":"approval","when":{"is":"pr"},"desc":"Approvals counted by the review-quorum check on the latest push (bug PRs), or the repository's own branch rules (feature PRs).","settings":[],"doc":"ai-pipeline/review-gate.md#enforcement-the-review-quorum-check"},{"id":"merged","label":"Merged: card to Done","kind":"harness","lane":"Done","layout":{"row":40,"col":1},"end":true,"when":{"is":"pr"},"desc":"The issues close with the merge and board sync moves the cards to the Done lane.","settings":[],"doc":"ai-pipeline/board.md#board-sync"},{"id":"sentBack","label":"Sent back: reopen recorded","kind":"harness","lane":"In Progress","layout":{"row":40,"col":2},"when":{"is":"pr"},"desc":"board sync records a human reopen (changes requested, card moved back, issue reopened): severity rises, the gate stays with people, and requeue or a run starts the ticket again.","settings":[],"doc":"ai-pipeline/review-gate.md#human-reopens"},{"id":"skipped","label":"Skipped","kind":"exit","lane":null,"layout":{"row":3,"col":3},"outcome":["skipped"],"remains":{"branch":"unchanged","ticket":"the card where it was (another machine holds it, it waits for a person, or it is already implemented)","pr":"none"},"continue":"--takeover for a card another machine holds, --force for an implemented ticket; a ticket waiting for a person runs once it is resolved.","desc":"The claim is refused or the ticket is skipped.","settings":[],"doc":"ai-pipeline/board.md#starting-the-pipeline"},{"id":"epicFailed","label":"Epic plan failed","kind":"exit","lane":"Failed","layout":{"row":4,"col":3},"outcome":["plan-rejected","foundation-failed"],"remains":{"branch":"the epic branch with whatever the foundation committed","ticket":"every ticket blocked by the epic plan, with the findings","pr":"none"},"continue":"A person fixes the epic or its tickets; implement resume continues the saved epic state.","desc":"The epic plan or its foundation failed: no ticket runs.","settings":[],"doc":"ai-pipeline/implement.md#epic-delivery"},{"id":"implFailed","label":"Escalation: implementation","kind":"exit","lane":"Failed","layout":{"row":8,"col":3},"outcome":["plan-rejected","pair-exhausted","blocked","no-changes","merge-conflict","limit-agent-runs","limit-wall-clock"],"remains":{"branch":"the story branch in its worktree, not pushed","ticket":"the findings and up to three questions from the escalation-questions agent; card in Failed","pr":"none"},"epic":"In an epic the unit gets no PR, tickets that depend on it are skipped, and independent units go on.","continue":"Answer the questions on the ticket and tick Resolved; board sync moves it to Ready and implement requeue (or run \u003cKEY>) runs it with the decisions.","desc":"Planning or a pair could not finish.","settings":["maxPairRounds"],"doc":"ai-pipeline/escalations.md#outcomes"},{"id":"reviewFailed","label":"Review escalated","kind":"exit","lane":"Failed","layout":{"row":11,"col":3},"outcome":["review-escalated","unresolved"],"remains":{"branch":"the story branch, not pushed; the escalation note in the worktree","ticket":"the blocking findings and questions; card in Failed","pr":"none"},"epic":"In an epic the unit gets no PR; dependents are skipped.","continue":"Answer on the ticket and tick Resolved (or delete the escalation note after fixing by hand); requeue or run it again.","desc":"The review did not approve within its rounds, or the implementer runs ran out.","settings":["reviewMaxRounds"],"doc":"ai-pipeline/escalations.md#outcomes"},{"id":"fvFailed","label":"Feature verification failed","kind":"exit","lane":"Failed","layout":{"row":13,"col":3},"outcome":["fv-product-bug","fv-escalated","fv-blocked-on-plan","fv-crashed","fv-timed-out"],"remains":{"branch":"the story branch with the plan and tests so far (not verified), not pushed","ticket":"the bugs or the escalation; card in Failed","pr":"none"},"epic":"In an epic the unit gets no PR; dependents are skipped.","continue":"Answer on the ticket and Resolve; crashed and timed-out runs resume with implement resume.","desc":"The plan or tests did not verify, or product bugs remained after the bug-fix cycles.","settings":["maxBugFixCycles"],"doc":"ai-pipeline/escalations.md#outcomes"},{"id":"unitFailed","label":"Unit gets no PR","kind":"exit","lane":"Failed","layout":{"row":15,"col":3},"outcome":["stories-failed","epic-fv-\u003cstatus>","fv-reverify-failed"],"remains":{"branch":"the unit branch with the tickets merged so far","ticket":"the failed tickets in Failed; the epic's evidence comment","pr":"none for this unit; an already open group PR stays on hold"},"continue":"Resolve the failed tickets; implement resume (or the epic run again) continues the unit and skips units already delivered.","desc":"A ticket of the unit, the unit's journeys or a stale-test re-verification failed.","settings":["epicFeatureVerification"],"doc":"ai-pipeline/implement.md#how-an-epic-is-split-into-prs"},{"id":"unresolved","label":"Unresolved after returns","kind":"exit","lane":"Failed","layout":{"row":17,"col":3},"outcome":["unresolved"],"remains":{"branch":"the story branch with the verified tests committed, not pushed","ticket":"the findings still upheld (or returned with nothing addressed); card in Failed","pr":"none"},"continue":"Answer on the ticket and Resolve; requeue runs it with the decision.","desc":"The PR check still upholds findings after maxReturns returns, or a return came back with nothing addressed.","settings":["maxReturns"],"doc":"ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation"},{"id":"notDelivered","label":"Not delivered","kind":"exit","lane":"Failed","layout":{"row":18,"col":3},"outcome":["not-delivered"],"remains":{"branch":"pushed if the push got that far","ticket":"the reason; card in Failed","pr":"none (an open PR on hold stays on hold)"},"continue":"Fix the cause (another ticket's tests, the push, the base merge) and run the ticket again.","desc":"Re-verifying another ticket's tests failed, the push or base sync failed, or the open failed for a reason other than the text.","settings":[],"doc":"ai-pipeline/escalations.md#outcomes"},{"id":"blocked","label":"Blocked before the push","kind":"exit","lane":"Failed","layout":{"row":19,"col":3},"outcome":["blocked"],"remains":{"branch":"nothing pushed","ticket":"the analysis findings or the held secret's location (never its value); card in Failed","pr":"none"},"continue":"Remove the secret or fix the finding in the worktree, then run the ticket again.","desc":"CI's analysis jobs still fail after the fixing round, or a held secret is still in the worktree.","settings":["analysis"],"doc":"ai-pipeline/analysis.md#decision-table-for-a-secret-finding"},{"id":"needsDecision","label":"needs-decision","kind":"exit","lane":"Failed","layout":{"row":21,"col":3},"outcome":["needs-decision"],"remains":{"branch":"pushed","ticket":"published, the owner's question asked on it; card in Failed","pr":"none (an open PR on hold stays on hold)"},"continue":"The owner answers on the ticket and ticks Resolved; requeue runs it with the decision.","desc":"The PR check raised a question only the ticket's owner can answer.","settings":[],"doc":"ai-pipeline/escalations.md#questions-and-the-resolve-checkbox"},{"id":"prcIncomplete","label":"PR check incomplete","kind":"exit","lane":"Failed","layout":{"row":22,"col":3},"outcome":["pr-check-incomplete","pr-check-escalated"],"remains":{"branch":"pushed","ticket":"the findings; card in Failed","pr":"none"},"continue":"Resolve on the ticket; requeue or run again.","desc":"The PR check did not finish, or a unit's check ended escalated or with findings at fixUntil or worse.","settings":["epicPrCheck"],"doc":"ai-pipeline/escalations.md#outcomes"},{"id":"ciRed","label":"CI not green: no PR","kind":"exit","lane":"Failed","layout":{"row":23,"col":3},"outcome":["ci-red","ci-flaky","ci-unverified","ci-conflict","ci-escalated"],"remains":{"branch":"pushed, CI evidence on it","ticket":"the failing checks and what the fix round did; card in Failed","pr":"none"},"continue":"A person decides from the ticket's questions; requeue or run again after the fix.","desc":"CI on the branch head is red, passed only with retries, cannot be read, conflicts, or the fix round escalated.","settings":["ciFixRounds"],"doc":"ai-pipeline/implement.md#the-pr-opens-finished"},{"id":"videoBlocked","label":"demo-video-blocked","kind":"exit","lane":"Failed","layout":{"row":28,"col":3},"outcome":["demo-video-blocked"],"remains":{"branch":"pushed and CI-proven","ticket":"why the bug could not be shown before the fix (DEMO-NO-REPRO / API-NO-REPRO); card in Failed","pr":"none"},"continue":"Fix the reproduction case (or turn requireBefore off) and run the ticket again.","desc":"requireBefore is on and the UI video pair or the backend request evidence could not show the bug on the base.","settings":["requireBefore"],"doc":"ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix"},{"id":"gateAssessFailed","label":"gate-assessment-failed","kind":"exit","lane":"Failed","layout":{"row":25,"col":3},"outcome":["gate-assessment-failed"],"remains":{"branch":"pushed; CI-proven unless the proof was bypassed (draft-first or ciWait off)","ticket":"the finding GATE-ASSESS-FAILED; card in Failed","pr":"no new PR; a re-delivered PR stays open on hold"},"continue":"Fix the gate CLI or the triage agent (or turn the gate off). A PR that never opened: the next run or implement resume replays the delivery from the analysis gate and push, even under needs-human, and rates again before the open. A held re-delivery runs again on hold and updates the same PR.","desc":"The review gate is on and could not produce the bug-triage assessment before the open: no new PR opens. A re-delivered PR stays open on hold.","settings":[],"doc":"ai-pipeline/escalations.md#outcomes"},{"id":"prRefused","label":"pr-refused","kind":"exit","lane":"Failed","layout":{"row":31,"col":3},"outcome":["pr-refused"],"remains":{"branch":"pushed and CI-proven","ticket":"the refusal; card in Failed","pr":"none; the title and body are saved"},"continue":"implement resume runs the delivery again from the saved title and body: no implementation, review or test agent; the analysis gate, the CI proof, the demo-video step (narrator) and triage (when no rating was saved) can run again.","desc":"The code host refused the PR's text even with the shortest body.","settings":["host"],"doc":"ai-pipeline/implement-reference.md#a-host-that-refuses-the-prs-text"},{"id":"heldFailed","label":"On hold: a person decides","kind":"exit","lane":"Failed","layout":{"row":33,"col":3},"outcome":["ci-red","ci-flaky","ci-unverified","ci-conflict","ci-escalated"],"remains":{"branch":"pushed","ticket":"the CI findings; tickets in Failed","pr":"open; on hold when a hold was applied; the gate requires a person"},"continue":"A person fixes it on the branch or decides; implement resume --stopped continues a stopped CI wait.","desc":"A check failed after the open and no fixing round is left (every preOpen.draftCycles cycle used, or ciFixRounds 0), or CI could not be read or conflicts.","settings":["draftCycles","ciFixRounds"],"doc":"ai-pipeline/implement.md#after-the-open"},{"id":"holdFailed","label":"hold-failed","kind":"exit","lane":"Failed","layout":{"row":34,"col":3},"outcome":["hold-failed"],"remains":{"branch":"pushed","ticket":"the finding PR-HOLD-FAILED; card in Failed","pr":"open; it may already be in draft or labelled; no agent ran"},"continue":"Check the PR on the host, then tick Resolved: after the open the run resumes at the CI wait; a reopened ticket keeps its reopened label and is held again first.","desc":"The code host did not confirm the hold, so no agent works on the PR (also for a reopened ticket, an epic unit joined again, and a ticket whose last record left an open PR).","settings":["afterOpen"],"doc":"ai-pipeline/implement.md#after-the-open"},{"id":"releaseUnconf","label":"release-unconfirmed","kind":"exit","lane":"Failed","layout":{"row":36,"col":3},"outcome":["release-unconfirmed"],"remains":{"branch":"pushed, checks green","ticket":"the finding PR-RELEASE-UNCONFIRMED; card in Failed","pr":"open, possibly still on hold; no ready time recorded"},"continue":"Tick Resolved and the CI-wait resume releases every hold not yet released, or mark the PR ready by hand.","desc":"Checks were green but the code host did not confirm releasing the PR from hold.","settings":["afterOpen"],"doc":"ai-pipeline/escalations.md#outcomes"}],"decisions":[{"id":"resume","at":"resume","label":"Where did it stop?","outcomes":[{"id":"implementing","label":"in implementation or review","default":true},{"id":"approved","label":"after the review approved"},{"id":"refused","label":"pr-refused"},{"id":"gate-failed","label":"gate-assessment-failed, no PR opened"},{"id":"adopted","label":"PR opened, not recorded"},{"id":"ci-wait","label":"waiting for the PR's CI"},{"id":"held","label":"a hold still recorded (hold-failed, release-unconfirmed, a held PR)"},{"id":"resolved","label":"a person resolved it, no PR open"},{"id":"reopened","label":"reopened or resolved, its PR still open"}]},{"id":"reopenHold","at":"reopenHold","label":"Hold confirmed?","outcomes":[{"id":"confirmed","label":"confirmed","default":true},{"id":"unconfirmed","label":"not confirmed"}]},{"id":"claim","at":"claim","label":"Claimed?","outcomes":[{"id":"claimed","label":"claimed","default":true},{"id":"skipped","label":"refused or skipped"}]},{"id":"epicPlan","at":"epicPlan","label":"Plan valid?","outcomes":[{"id":"ok","label":"design note","default":true},{"id":"failed","label":"plan failed"}]},{"id":"foundation","at":"foundation","label":"Foundation?","outcomes":[{"id":"ok","label":"none or built","default":true},{"id":"failed","label":"failed"}]},{"id":"plan","at":"plan","label":"Plan accepted?","outcomes":[{"id":"planned","label":"self or subtasks","default":true},{"id":"rejected","label":"rejected or blocked"}]},{"id":"harnessChecks","at":"harnessChecks","label":"Checks clean?","outcomes":[{"id":"clean","label":"clean","default":true},{"id":"finding","label":"blocking finding"}]},{"id":"verifier","at":"verifier","label":"Verifier verdict?","outcomes":[{"id":"approved","label":"approved","default":true},{"id":"changes","label":"verifier requests changes"},{"id":"exhausted","label":"rounds and rewrite used"}]},{"id":"policy","at":"policy","label":"Policy?","outcomes":[{"id":"pass","label":"pass","default":true},{"id":"block","label":"block"}]},{"id":"review","at":"review","label":"Review verdict?","outcomes":[{"id":"approved","label":"approved: card to Testing","default":true},{"id":"changes","label":"changes requested"},{"id":"escalated","label":"escalated"}]},{"id":"testPlan","at":"testPlan","label":"Plan verified?","outcomes":[{"id":"verified","label":"verified","default":true},{"id":"failed","label":"not verified"}]},{"id":"fv","at":"fv","label":"Tests verdict?","outcomes":[{"id":"verified","label":"verified","default":true},{"id":"product-bug","label":"product bug found by a test"},{"id":"failed","label":"not verified"}]},{"id":"journeys","at":"journeys","label":"Journeys verified?","outcomes":[{"id":"verified","label":"verified","default":true},{"id":"failed","label":"failed"}]},{"id":"prCheck","at":"prCheck","label":"Upheld findings?","outcomes":[{"id":"pass","label":"none","default":true},{"id":"production","label":"production finding: to implementation","when":{"is":"returnsOn"}},{"id":"tests","label":"test gap: to test planning","when":{"is":"returnsOn"}},{"id":"light","label":"records, docs, style or minor: to the fixer"},{"id":"unresolved","label":"returns spent or nothing addressed","when":{"is":"returnsOn"}}]},{"id":"parity","at":"parity","label":"Parity and re-verify?","outcomes":[{"id":"ok","label":"green","default":true},{"id":"failed","label":"another ticket's tests fail"}]},{"id":"analysisGate","at":"analysisGate","label":"Analysis jobs?","outcomes":[{"id":"pass","label":"pass","default":true},{"id":"finding","label":"analysis finding"},{"id":"blocked","label":"still failing or held secret"}]},{"id":"push","at":"push","label":"Pushed?","outcomes":[{"id":"pushed","label":"pushed","default":true},{"id":"failed","label":"push refused"}]},{"id":"ownerQ","at":"ownerQ","label":"Owner question?","outcomes":[{"id":"none","label":"no","default":true},{"id":"question","label":"owner question"},{"id":"incomplete","label":"PR check unfinished or escalated"}]},{"id":"branchCi","at":"branchCi","label":"CI on the head?","outcomes":[{"id":"green","label":"green","default":true},{"id":"red","label":"CI red on the branch"},{"id":"base-moved","label":"base moved"}]},{"id":"triage","at":"triage","label":"Assessed?","outcomes":[{"id":"assessed","label":"assessed","default":true},{"id":"failed","label":"the gate cannot assess"}]},{"id":"ciFixRound","at":"ciFixRound","label":"Green after the fix?","outcomes":[{"id":"green","label":"green","default":true},{"id":"red","label":"still red, flaky, unknown or escalated"}]},{"id":"uiPair","at":"uiPair","label":"Bug shown before the fix?","outcomes":[{"id":"shown","label":"shown","default":true},{"id":"missing","label":"not reproduced on the base"}]},{"id":"apiEvidence","at":"apiEvidence","label":"Requests reproduce it?","outcomes":[{"id":"shown","label":"shown","default":true},{"id":"missing","label":"not reproduced on the base"}]},{"id":"open","at":"open","label":"Opened?","outcomes":[{"id":"updated","label":"already open and held: body refreshed, same PR","default":true,"when":{"is":"heldPr"}},{"id":"opened","label":"opened","default":true,"when":{"not":{"is":"heldPr"}}},{"id":"refused","label":"host refuses the PR text","when":{"not":{"is":"heldPr"}}},{"id":"failed","label":"open fails","when":{"not":{"is":"heldPr"}}}]},{"id":"gatePublish","at":"gatePublish","label":"Saved rating?","outcomes":[{"id":"saved","label":"saved before the open","default":true},{"id":"missing","label":"not readable: not assessed, no agent"}]},{"id":"checks","at":"checks","label":"PR checks?","outcomes":[{"id":"green","label":"green","default":true},{"id":"failed","label":"a check fails after the open"},{"id":"unknown","label":"unknown or conflict"}]},{"id":"hold","at":"hold","label":"Hold confirmed?","outcomes":[{"id":"confirmed","label":"confirmed","default":true},{"id":"unconfirmed","label":"not confirmed"}]},{"id":"holdFix","at":"holdFix","label":"Green on the new head?","outcomes":[{"id":"green","label":"green","default":true},{"id":"again","label":"still failing, cycles left: another round on hold","when":{"gt":["draftCycles",1]},"cyclesLeft":"draftCycles"},{"id":"failed","label":"still failing, every cycle used","cyclesUsed":"draftCycles"}]},{"id":"ready","at":"ready","label":"Release confirmed?","outcomes":[{"id":"confirmed","label":"confirmed","default":true},{"id":"unconfirmed","label":"not confirmed"}]},{"id":"gate","at":"gate","label":"Gate action?","outcomes":[{"id":"auto-merge","label":"auto-merge","when":{"is":"autoMergeEligible"}},{"id":"approvals","label":"approvals:{approvalsNeeded}, needs-human","when":{"is":"bugUnit"}},{"id":"person","label":"feature PR: host rules","when":{"not":{"is":"bugUnit"}}}]},{"id":"approval","at":"approval","label":"Reviewer?","outcomes":[{"id":"merged","label":"approves and merges","default":true},{"id":"sent-back","label":"reviewer sends it back"}]}],"edges":[{"from":"run","to":"claim"},{"from":"resume","to":"pairs","outcome":"implementing","label":"implementer continues on the branch"},{"from":"resume","to":"testPlan","outcome":"approved","label":"approved code: tests restart"},{"from":"resume","to":"analysisGate","outcome":"refused","label":"delivery again, saved title and body"},{"from":"resume","to":"analysisGate","outcome":"gate-failed","label":"rated again first"},{"from":"resume","to":"checks","outcome":"adopted","label":"PR adopted"},{"from":"resume","to":"checks","outcome":"ci-wait","label":"CI wait (--stopped)"},{"from":"resume","to":"checks","outcome":"held","label":"hold released when green","set":{"heldPr":true}},{"from":"resume","to":"requeue","outcome":"resolved","label":"a person resolved it"},{"from":"resume","to":"requeue","outcome":"reopened","label":"reopened, its PR still open","set":{"heldPr":true}},{"from":"reopenHold","to":"entry","outcome":"confirmed"},{"from":"reopenHold","to":"holdFailed","outcome":"unconfirmed"},{"from":"requeue","to":"claim","label":"board sync to Ready, then the claim"},{"from":"claim","to":"tracker","type":"uses"},{"from":"claim","to":"entry","outcome":"claimed","when":{"not":{"all":[{"is":"heldPr"},{"is":"pr"}]}}},{"from":"claim","to":"reopenHold","outcome":"claimed","when":{"all":[{"is":"heldPr"},{"is":"pr"}]},"label":"its PR open, --pr: held first"},{"from":"entry","to":"epicPlan","when":{"is":"epicRun"},"label":"--epic: delivered in units"},{"from":"entry","to":"plan","when":{"is":"singleFlow"},"label":"one ticket"},{"from":"claim","to":"skipped","outcome":"skipped"},{"from":"epicPlan","to":"shape","outcome":"ok"},{"from":"epicPlan","to":"epicFailed","outcome":"failed"},{"from":"shape","to":"foundation"},{"from":"foundation","to":"plan","outcome":"ok"},{"from":"foundation","to":"epicFailed","outcome":"failed"},{"from":"plan","to":"pairs","outcome":"planned"},{"from":"plan","to":"implFailed","outcome":"rejected"},{"from":"pairs","to":"harnessChecks"},{"from":"harnessChecks","to":"verifier","outcome":"clean"},{"from":"harnessChecks","to":"pairs","outcome":"finding","loop":{"budget":"analysisBounces","text":"fix loop: lint 2, analysis {analysisBounces}; no review round spent"}},{"from":"verifier","to":"policy","outcome":"approved","label":"merged into the story branch"},{"from":"verifier","to":"pairs","outcome":"changes","loop":{"budget":"maxPairRounds","text":"loop, at most {maxPairRounds} pair rounds"}},{"from":"verifier","to":"implFailed","outcome":"exhausted"},{"from":"policy","to":"review","outcome":"pass"},{"from":"policy","to":"pairs","outcome":"block","loop":{"budget":"reviewMaxRounds","text":"loop, a review round"}},{"from":"review","to":"testPlan","outcome":"approved","lane":"Testing"},{"from":"review","to":"pairs","outcome":"changes","loop":{"budget":"reviewMaxRounds","text":"loop, at most {reviewMaxRounds} review rounds"}},{"from":"review","to":"reviewFailed","outcome":"escalated"},{"from":"testPlan","to":"fv","outcome":"verified"},{"from":"testPlan","to":"fvFailed","outcome":"failed"},{"from":"fv","to":"unit","outcome":"verified","when":{"is":"epicRun"},"label":"a unit ticket: merged into the unit"},{"from":"fv","to":"prCheck","outcome":"verified","when":{"is":"ticketPrCheck"},"label":"verified"},{"from":"fv","to":"doneNoPr","outcome":"verified","when":{"all":[{"is":"singleFlow"},{"not":{"is":"pr"}}]},"label":"verified, no --pr: done, no PR"},{"from":"fv","to":"pairs","outcome":"product-bug","lane":"In Progress","loop":{"budget":"maxBugFixCycles","text":"loop, at most {maxBugFixCycles} bug-fix cycles; card to In Progress"}},{"from":"fv","to":"fvFailed","outcome":"failed"},{"from":"unit","to":"journeys"},{"from":"journeys","to":"unitPrCheck","outcome":"verified"},{"from":"journeys","to":"unitFailed","outcome":"failed"},{"from":"unitPrCheck","to":"parity","when":{"is":"pr"}},{"from":"unitPrCheck","to":"doneNoPr","when":{"not":{"is":"pr"}}},{"from":"prCheck","to":"parity","outcome":"pass","label":"no upheld finding"},{"from":"prCheck","to":"pairs","outcome":"production","lane":"In Progress","loop":{"budget":"maxReturns","text":"return, at most {maxReturns}; {minSeverity} or worse; card to In Progress"}},{"from":"prCheck","to":"testPlan","outcome":"tests","loop":{"budget":"maxReturns","text":"return as required cases, at most {maxReturns}"}},{"from":"prCheck","to":"fixer","outcome":"light","label":"minor findings: pr-check-fixer"},{"from":"prCheck","to":"unresolved","outcome":"unresolved"},{"from":"fixer","to":"parity"},{"from":"parity","to":"analysisGate","outcome":"ok"},{"from":"parity","to":"notDelivered","outcome":"failed"},{"from":"analysisGate","to":"push","outcome":"pass"},{"from":"analysisGate","to":"analysisFix","outcome":"finding"},{"from":"analysisGate","to":"blocked","outcome":"blocked"},{"from":"analysisFix","to":"analysisGate","loop":{"budget":null,"text":"one fixing round, then the jobs again"}},{"from":"push","to":"ownerQ","outcome":"pushed"},{"from":"push","to":"notDelivered","outcome":"failed"},{"from":"push","to":"codeHost","type":"uses"},{"from":"ownerQ","to":"branchCi","outcome":"none"},{"from":"ownerQ","to":"needsDecision","outcome":"question"},{"from":"ownerQ","to":"prcIncomplete","outcome":"incomplete"},{"from":"branchCi","to":"bug","outcome":"green"},{"from":"branchCi","to":"ciFixRound","outcome":"red","when":{"is":"ciFix"}},{"from":"branchCi","to":"ciRed","outcome":"red","when":{"not":{"is":"ciFix"}},"label":"ciFixRounds 0: a person decides"},{"from":"branchCi","to":"branchCi","outcome":"base-moved","loop":{"budget":null,"text":"base merged in, the new head proven again"}},{"from":"branchCi","to":"ciSystem","type":"uses"},{"from":"ciFixRound","to":"bug","outcome":"green"},{"from":"ciFixRound","to":"ciRed","outcome":"red"},{"from":"bug","to":"triage","when":{"is":"bugUnit"},"label":"bug fix"},{"from":"bug","to":"headScan","when":{"not":{"is":"bugUnit"}},"label":"feature"},{"from":"triage","to":"headScan","outcome":"assessed"},{"from":"triage","to":"gateAssessFailed","outcome":"failed"},{"from":"headScan","to":"evidence"},{"from":"evidence","to":"uiPair"},{"from":"uiPair","to":"apiEvidence","outcome":"shown"},{"from":"uiPair","to":"videoBlocked","outcome":"missing","when":{"is":"requireBefore"}},{"from":"uiPair","to":"apiEvidence","outcome":"missing","when":{"not":{"is":"requireBefore"}},"label":"a note in the section"},{"from":"apiEvidence","to":"apiChanges","outcome":"shown"},{"from":"apiEvidence","to":"videoBlocked","outcome":"missing","when":{"is":"requireBefore"}},{"from":"apiEvidence","to":"apiChanges","outcome":"missing","when":{"not":{"is":"requireBefore"}},"label":"a note in the section"},{"from":"apiChanges","to":"open"},{"from":"open","to":"gatePublish","outcome":"opened","lane":"Pending Review"},{"from":"open","to":"gatePublish","outcome":"updated","label":"same PR, body refreshed"},{"from":"open","to":"prRefused","outcome":"refused"},{"from":"open","to":"notDelivered","outcome":"failed"},{"from":"open","to":"codeHost","type":"uses"},{"from":"gatePublish","to":"checks","outcome":"saved"},{"from":"gatePublish","to":"checks","outcome":"missing"},{"from":"checks","to":"ready","outcome":"green","when":{"any":[{"is":"draftFirst"},{"is":"heldPr"}]},"label":"a hold to release: ready when green"},{"from":"checks","to":"runDone","outcome":"green","when":{"not":{"any":[{"is":"draftFirst"},{"is":"heldPr"}]}}},{"from":"checks","to":"hold","outcome":"failed","when":{"is":"fixAfterOpen"}},{"from":"checks","to":"heldFailed","outcome":"failed","when":{"not":{"is":"fixAfterOpen"}}},{"from":"checks","to":"heldFailed","outcome":"unknown"},{"from":"hold","to":"holdFix","outcome":"confirmed"},{"from":"hold","to":"holdFailed","outcome":"unconfirmed"},{"from":"holdFix","to":"ready","outcome":"green"},{"from":"holdFix","to":"holdFix","outcome":"again","loop":{"budget":"draftCycles","text":"another round on hold, at most {draftCycles}"},"label":"cycles left: another round"},{"from":"holdFix","to":"heldFailed","outcome":"failed","label":"draftCycles {draftCycles} used"},{"from":"ready","to":"runDone","outcome":"confirmed"},{"from":"ready","to":"releaseUnconf","outcome":"unconfirmed"},{"from":"runDone","to":"gate"},{"from":"gate","to":"autoMerge","outcome":"auto-merge"},{"from":"gate","to":"approval","outcome":"approvals"},{"from":"gate","to":"approval","outcome":"person"},{"from":"autoMerge","to":"merged"},{"from":"approval","to":"merged","outcome":"merged"},{"from":"approval","to":"sentBack","outcome":"sent-back"},{"from":"sentBack","to":"requeue","label":"requeue or run again, PR still open","set":{"heldPr":true}}],"presets":[{"id":"full","label":"Full-featured example","help":"A UI bug fix with --pr, a council at every stage, static analysis, demo video with requireBefore, auto-merge on.","values":{"entry":"single","ticket":"ui-bug","changes":"both","pr":true,"council.pairVerify":true,"council.pairUiVerify":true,"council.review":true,"council.testPlan":true,"council.testAutomation":true,"council.prCheck":true,"analysis":true,"demoVideo":true,"requireBefore":true}},{"id":"feature","label":"Single feature ticket, defaults","help":"Every setting at its default, plus --pr.","values":{"entry":"single","ticket":"feature","pr":true}},{"id":"ui-bug","label":"UI bug fix","help":"A bug whose fix changes the frontend, with demo videos on.","values":{"entry":"single","ticket":"ui-bug","changes":"frontend","pr":true,"demoVideo":true}},{"id":"backend-bug","label":"Backend bug fix","help":"A bug whose fix changes only the backend, with demo videos on (request evidence, API changes).","values":{"entry":"single","ticket":"backend-bug","changes":"backend","pr":true,"demoVideo":true}},{"id":"feature-epic-story","label":"Feature epic, one PR per story","help":"--epic with --pr-split story.","values":{"entry":"feature-epic","prSplit":"story","pr":true}},{"id":"bug-epic","label":"Bug epic","help":"--epic of mostly bugs: bug groups, each rated by the gate.","values":{"entry":"bug-epic","ticket":"ui-bug","pr":true,"demoVideo":true}},{"id":"resume","label":"Resume after a stop","help":"implement resume: pick where it stopped at the resume step.","values":{"entry":"resume","ticket":"feature","pr":true}}],"spineGroups":[{"id":"failed","label":"Failed: no PR, or the PR held; card to Failed with up to three questions","members":["skipped","epicFailed","implFailed","reviewFailed","fvFailed","unitFailed","unresolved","notDelivered","blocked","needsDecision","prcIncomplete","ciRed","gateAssessFailed","videoBlocked","heldFailed","holdFailed","releaseUnconf"],"doc":"ai-pipeline/escalations.md"}]}</script>
+<!-- flow-data:end -->
+<!-- flow-eval:start -->
+<script>
+const FlowEval = (() => {
+// The pipeline explorer's flow evaluator: pure functions over docs/pipeline-flow.json, no imports and no I/O, so the same
+// code runs in the tests and, inlined by scripts/docs/build-explorer.mjs, in docs/pipeline-explorer.html. It says what the
+// rules in the data file give for one configuration; it runs nothing.
+//
+//   defaults(flow)                       { settingId: default }
+//   resolve(flow, input)                 { values, facts, notes }: defaults + input, normalized, facts derived
+//   evaluate(flow, input, choices)       the configuration's flow: nodes (active, skipped, off), edges, the walk
+//   walk(flow, ev, choices)              the path the reader's decision outcomes take, to its end state
+//   decisionView(flow, ev, nodeId)       a decision's outcomes as the details show them: per walk visit, else in any state
+//
+// A fact marked `"walk": true` starts false and is set by the edges the walk takes (`"set": {"heldPr": true}`): it carries
+// what an earlier step left behind (a PR already open and held) to later decisions. Reachability follows those facts:
+// each step is reached in the walk states (`ev.states[node]`, the walk facts' values) its incoming edges can carry, and
+// an edge or an outcome that depends on such a fact is possible where some reaching state allows it.
+//   encodeHash / decodeHash              the configuration in the URL hash
+//   configFragment / cliCommand          the matching .factory/config.json fragment and command line
+
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+function defaults(flow) {
+  const out = {};
+  for (const s of flow.settings) out[s.id] = s.default;
+  return out;
+}
+
+// A setting's value from user input (strings from a URL or a form), typed by the setting; invalid values fall back to
+// the default.
+function coerce(setting, raw) {
+  if (raw === undefined || raw === null || raw === '') return setting.default;
+  if (setting.type === 'boolean') {
+    if (typeof raw === 'boolean') return raw;
+    if (raw === 'true' || raw === '1') return true;
+    if (raw === 'false' || raw === '0') return false;
+    return setting.default;
+  }
+  if (setting.type === 'integer') {
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isInteger(n)) return setting.default;
+    const min = setting.min ?? Number.MIN_SAFE_INTEGER;
+    const max = setting.max ?? Number.MAX_SAFE_INTEGER;
+    return Math.min(max, Math.max(min, n));
+  }
+  if (setting.type === 'enum') return setting.values.includes(raw) ? raw : setting.default;
+  return raw;
+}
+
+// The value of a reference: a setting or a fact.
+const ref = (env, name) => {
+  if (has(env.facts, name)) return env.facts[name];
+  if (has(env.values, name)) return env.values[name];
+  throw new Error(`unknown reference "${name}"`);
+};
+
+// A condition from the data file: true when absent.
+function test(cond, env) {
+  if (cond === undefined || cond === null || cond === true) return true;
+  if (cond === false) return false;
+  if (has(cond, 'is')) return Boolean(ref(env, cond.is));
+  if (has(cond, 'eq')) return ref(env, cond.eq[0]) === cond.eq[1];
+  if (has(cond, 'in')) return cond.in[1].includes(ref(env, cond.in[0]));
+  if (has(cond, 'gt')) return Number(ref(env, cond.gt[0])) > cond.gt[1];
+  if (has(cond, 'not')) return !test(cond.not, env);
+  if (has(cond, 'all')) return cond.all.every((c) => test(c, env));
+  if (has(cond, 'any')) return cond.any.some((c) => test(c, env));
+  throw new Error(`unknown condition ${JSON.stringify(cond)}`);
+}
+
+// Every reference a condition names (the tests check them against the settings and facts).
+function refsOf(cond, out = []) {
+  if (!cond || typeof cond !== 'object') return out;
+  if (has(cond, 'is')) out.push(cond.is);
+  for (const k of ['eq', 'in', 'gt']) if (has(cond, k)) out.push(cond[k][0]);
+  if (has(cond, 'not')) refsOf(cond.not, out);
+  for (const k of ['all', 'any']) if (has(cond, k)) for (const c of cond[k]) refsOf(c, out);
+  if (has(cond, 'select')) out.push(cond.select[0], ...Object.values(cond.select[1]));
+  return out;
+}
+
+function resolve(flow, input = {}) {
+  const values = defaults(flow);
+  for (const s of flow.settings) if (has(input, s.id)) values[s.id] = coerce(s, input[s.id]);
+  const notes = [];
+  const env = { values, facts: {} };
+  for (const rule of flow.normalize ?? []) {
+    if (!test(rule.when, env)) continue;
+    Object.assign(values, rule.set);
+    notes.push(rule.note);
+  }
+  for (const f of flow.facts) {
+    if (has(f, 'select')) {
+      const [by, map] = f.select;
+      const target = map[ref(env, by)];
+      env.facts[f.id] = target ? ref(env, target) : null;
+    } else env.facts[f.id] = test(f.is, env);
+  }
+  return { values, facts: env.facts, notes };
+}
+
+// "{maxPairRounds}" in a label becomes the setting's (or fact's) value.
+function interpolate(text, env) {
+  return String(text ?? '').replace(/\{([\w.]+)\}/g, (m, name) => (has(env.facts, name) || has(env.values, name) ? String(ref(env, name)) : m));
+}
+
+const decisionOf = (flow, nodeId) => flow.decisions.find((d) => d.at === nodeId) ?? null;
+
+// The outcomes of a decision available under this configuration, in order; the default is the first one marked
+// default that is available, else the first available.
+function outcomesFor(decision, env) {
+  const available = decision.outcomes.filter((o) => test(o.when, env));
+  const def = available.find((o) => o.default) ?? available[0] ?? null;
+  return { available, default: def ? def.id : null };
+}
+
+const flowEdges = (flow) => flow.edges.filter((e) => e.type !== 'uses');
+
+// The edge a skipped node passes on through: its default outcome's edge, or its plain edge.
+function passEdge(flow, env, nodeId) {
+  const d = decisionOf(flow, nodeId);
+  const out = flowEdges(flow).filter((e) => e.from === nodeId && test(e.when, env));
+  if (d) {
+    const { default: def } = outcomesFor(d, env);
+    return out.find((e) => e.outcome === def) ?? null;
+  }
+  return out.find((e) => !e.outcome) ?? null;
+}
+
+// An edge is live when its condition holds and, from a decision, its outcome is available.
+function edgeLive(flow, env, e) {
+  if (!test(e.when, env)) return false;
+  if (!e.outcome) return true;
+  const d = decisionOf(flow, e.from);
+  return Boolean(d) && outcomesFor(d, env).available.some((o) => o.id === e.outcome);
+}
+
+// The facts the walk sets; a walk state is their values (all false at an entry).
+const walkFacts = (flow) => flow.facts.filter((f) => f.walk).map((f) => f.id);
+const withSet = (x, set) => (set ? { values: x.values, facts: { ...x.facts, ...set } } : x);
+const stateKey = (flow, x) => walkFacts(flow).map((id) => (x.facts[id] ? 1 : 0)).join('');
+const stateOf = (flow, x) => Object.fromEntries(walkFacts(flow).map((id) => [id, Boolean(x.facts[id])]));
+
+// A node is on (its condition holds) or off; an off node on the way is skipped: the flow passes through it.
+function evaluate(flow, input = {}, choices = {}) {
+  const { values, facts, notes } = resolve(flow, input);
+  const env = { values, facts };
+  const nodes = {};
+  for (const n of flow.nodes) nodes[n.id] = { id: n.id, on: test(n.when, env), reached: false, state: 'off' };
+  const entries = flow.entries.filter((e) => test(e.when, env)).map((e) => e.node);
+  // Reachability from the entry over live edges, per walk state: an edge is followed in the states that reach its step
+  // and carries what it sets; a node that is off forwards along its pass edge.
+  const reach = {};
+  const queue = entries.map((id) => [id, env]);
+  while (queue.length) {
+    const [id, x] = queue.shift();
+    const k = stateKey(flow, x);
+    reach[id] = reach[id] ?? new Map();
+    if (reach[id].has(k)) continue;
+    reach[id].set(k, x);
+    const st = nodes[id];
+    st.reached = true;
+    if (!st.on) {
+      const p = passEdge(flow, x, id);
+      if (p) queue.push([p.to, withSet(x, p.set)]);
+      continue;
+    }
+    for (const e of flow.edges.filter((y) => y.from === id)) if (e.type === 'uses' || edgeLive(flow, x, e)) queue.push([e.to, withSet(x, e.set)]);
+  }
+  const statesAt = (id) => [...(reach[id]?.values() ?? [])];
+  for (const st of Object.values(nodes)) st.state = st.reached ? (st.on ? 'active' : 'skipped') : 'off';
+  // Where an edge really leads once skipped nodes are passed through (the "remove" view draws these), in each walk state
+  // the edge is taken in, with what the edge and the passed edges set carried along (a hold set on the way decides where
+  // a skipped CI wait passes on to).
+  const through = (to, x, guard = 0) => {
+    let t = to;
+    let at = x;
+    while (nodes[t] && nodes[t].state === 'skipped' && guard++ < 50) {
+      const p = passEdge(flow, at, t);
+      if (!p) return null;
+      at = withSet(at, p.set);
+      t = p.to;
+    }
+    return t;
+  };
+  const edges = flow.edges.map((e, i) => {
+    const from = nodes[e.from].state === 'active' ? statesAt(e.from) : [];
+    const takenIn = e.type === 'uses' ? from : from.filter((x) => edgeLive(flow, x, e));
+    const live = takenIn.length > 0;
+    const label = e.loop ? interpolate(e.loop.text, env) : e.label ? interpolate(e.label, env) : e.outcome ? interpolate(decisionOf(flow, e.from)?.outcomes.find((o) => o.id === e.outcome)?.label ?? e.outcome, env) : '';
+    const effectiveTos = [...new Set(takenIn.map((x) => through(e.to, withSet(x, e.set))).filter(Boolean))];
+    return { index: i, from: e.from, to: e.to, outcome: e.outcome ?? null, type: e.type ?? 'flow', loop: Boolean(e.loop), live, label, effectiveTo: effectiveTos[0] ?? null, effectiveTos };
+  });
+  const decisions = {};
+  for (const d of flow.decisions) {
+    const o = outcomesFor(d, env);
+    decisions[d.id] = { id: d.id, at: d.at, available: o.available.map((x) => x.id), default: o.default, active: nodes[d.at].state === 'active' };
+  }
+  const states = Object.fromEntries(Object.keys(reach).map((id) => [id, statesAt(id).map((x) => stateOf(flow, x))]));
+  const ev = { values, facts, notes, nodes, edges, decisions, entries, states };
+  ev.walk = walk(flow, ev, choices);
+  return ev;
+}
+
+// The reader's path: from the entry, at each decision the reader's outcome on its first visit (when it is available
+// here), otherwise the default, until an exit or an end. A loop is taken once; on the way back the step passes. A list
+// of outcomes picks one per visit (["again", "green"]: a second fixing round, then green).
+function walk(flow, ev, choices = {}) {
+  const env = { values: ev.values, facts: { ...ev.facts } };
+  const byId = Object.fromEntries(flow.nodes.map((n) => [n.id, n]));
+  const steps = [];
+  const visits = {};
+  let lane = null;
+  let at = ev.entries[0] ?? null;
+  let via = null;
+  for (let guard = 0; at && guard < 400; guard++) {
+    const node = byId[at];
+    const st = ev.nodes[at];
+    visits[at] = (visits[at] ?? 0) + 1;
+    if (st.state === 'skipped') {
+      const p = passEdge(flow, env, at);
+      steps.push({ node: at, skipped: true, lane });
+      if (p?.set) Object.assign(env.facts, p.set);
+      at = p ? p.to : null;
+      continue;
+    }
+    if (via?.lane) lane = via.lane;
+    if (node.lane) lane = node.lane;
+    const d = decisionOf(flow, at);
+    let outcome = null;
+    let chosen = false;
+    let available;
+    if (d) {
+      // A budgeted loop: an outcome offered only while cycles are left (cyclesLeft), or once they are used (cyclesUsed).
+      const budget = (name) => Number(ref(env, name));
+      const offered = outcomesFor(d, env).available.filter((x) => (!x.cyclesLeft || visits[at] < budget(x.cyclesLeft)) && (!x.cyclesUsed || visits[at] >= budget(x.cyclesUsed)));
+      const def = (offered.find((x) => x.default) ?? offered[0])?.id ?? null;
+      available = offered.map((x) => x.id);
+      const picks = choices[d.id];
+      const pick = Array.isArray(picks) ? picks[visits[at] - 1] : visits[at] === 1 ? picks : undefined;
+      if (pick && available.includes(pick)) {
+        outcome = pick;
+        chosen = pick !== def;
+      } else outcome = def;
+    }
+    const out = flowEdges(flow).filter((e) => e.from === at && edgeLive(flow, env, e));
+    // A decision step keeps this visit's default and where each of its outcomes leads from here (the details show them).
+    const targets = d ? Object.fromEntries(available.map((id) => [id, out.find((e) => e.outcome === id)?.to ?? null])) : null;
+    const step = { node: at, lane, decision: d ? d.id : null, outcome, chosen, visit: visits[at], ...(d ? { available, default: (outcomesFor(d, env).available.find((x) => available.includes(x.id) && x.default) ?? null)?.id ?? available[0] ?? null, targets } : {}) };
+    steps.push(step);
+    if (node.kind === 'exit' || node.end) {
+      return { steps, end: at, endKind: node.kind === 'exit' ? 'exit' : 'end', lane };
+    }
+    const next = d ? out.find((e) => e.outcome === outcome) : out.find((e) => !e.outcome);
+    if (!next) return { steps, end: at, endKind: 'stuck', lane };
+    step.edge = flow.edges.indexOf(next);
+    if (next.set) Object.assign(env.facts, next.set);
+    via = next;
+    at = next.to;
+  }
+  return { steps, end: at, endKind: at ? 'limit' : 'stuck', lane };
+}
+
+// A decision's outcomes for the details pane. On the walk: one entry per visit, with the outcomes that visit offers (a
+// held PR is updated, never opened; an exhausted budget only once it is spent), where each leads, and the walk's pick.
+// Off the walk: one entry with what the configuration allows in the walk states that reach the step, each outcome's possible destinations
+// and its budget ({ kind: 'left' | 'used', n }: offered on visits before n, or from visit n).
+function decisionView(flow, ev, nodeId) {
+  const d = decisionOf(flow, nodeId);
+  if (!d) return null;
+  const visits = ev.walk.steps.filter((s) => s.node === nodeId && !s.skipped && s.decision);
+  if (visits.length) {
+    return {
+      decision: d.id,
+      onWalk: true,
+      visits: visits.map((s) => ({ visit: s.visit, outcome: s.outcome, default: s.default, outcomes: d.outcomes.map((o) => ({ id: o.id, label: o.label, possible: s.available.includes(o.id), to: s.targets?.[o.id] ? [s.targets[o.id]] : [] })) })),
+    };
+  }
+  const env = { values: ev.values, facts: ev.facts };
+  const envs = (ev.states?.[nodeId] ?? []).map((st) => withSet(env, st));
+  const outcomes = d.outcomes.map((o) => {
+    const inEnvs = envs.filter((x) => outcomesFor(d, x).available.some((a) => a.id === o.id));
+    const to = [...new Set(flowEdges(flow).filter((e) => e.from === nodeId && e.outcome === o.id && inEnvs.some((x) => test(e.when, x))).map((e) => e.to))];
+    const budget = o.cyclesLeft ? { kind: 'left', n: Number(ref(env, o.cyclesLeft)) } : o.cyclesUsed ? { kind: 'used', n: Number(ref(env, o.cyclesUsed)) } : null;
+    return { id: o.id, label: o.label, possible: inEnvs.length > 0, to, budget };
+  });
+  return { decision: d.id, onWalk: false, visits: [{ visit: null, outcome: null, default: outcomesFor(d, env).default, outcomes }] };
+}
+
+// ---- the configuration in the URL hash --------------------------------------------------------------------------------
+
+function encodeHash(flow, input = {}, choices = {}, view = {}) {
+  const { values } = resolve(flow, input);
+  const parts = [];
+  for (const s of flow.settings) if (has(input, s.id) && values[s.id] !== s.default) parts.push(`${encodeURIComponent(s.id)}=${encodeURIComponent(String(values[s.id]))}`);
+  // A decision's id is its step's id, which may equal a setting's: outcomes are prefixed with @.
+  for (const d of flow.decisions) if (choices[d.id]) parts.push(`@${encodeURIComponent(d.id)}=${encodeURIComponent([].concat(choices[d.id]).join(','))}`);
+  for (const [k, v] of Object.entries(view)) if (v !== undefined && v !== null && v !== '') parts.push(`_${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? `#${parts.join('&')}` : '';
+}
+
+function decodeHash(flow, hash) {
+  const input = {};
+  const choices = {};
+  const view = {};
+  const text = String(hash ?? '').replace(/^#/, '');
+  if (!text) return { input, choices, view };
+  for (const pair of text.split('&')) {
+    const i = pair.indexOf('=');
+    if (i < 1) continue;
+    let k;
+    let v;
+    try {
+      k = decodeURIComponent(pair.slice(0, i));
+      v = decodeURIComponent(pair.slice(i + 1));
+    } catch {
+      continue;
+    }
+    const s = flow.settings.find((x) => x.id === k);
+    if (k.startsWith('@')) {
+      const id = k.slice(1);
+      const d = flow.decisions.find((x) => x.id === id);
+      const picks = v.split(',');
+      if (d && picks.every((p) => d.outcomes.some((o) => o.id === p))) choices[id] = picks.length > 1 ? picks : picks[0];
+    } else if (k.startsWith('_')) view[k.slice(1)] = v;
+    else if (s) input[k] = coerce(s, v);
+  }
+  return { input, choices, view };
+}
+
+// ---- what to write to get this configuration ---------------------------------------------------------------------------
+
+const setPath = (obj, path, value) => {
+  const keys = path.split('.');
+  let o = obj;
+  for (const k of keys.slice(0, -1)) o = o[k] = o[k] && typeof o[k] === 'object' ? o[k] : {};
+  o[keys.at(-1)] = value;
+};
+
+// The .factory/config.json and .factory/factory.json fragments for the settings that differ from their defaults
+// (scenario values and CLI-only flags are not config). A seated council stage needs members: the fragment names a
+// placeholder member to replace.
+function configFragment(flow, input = {}) {
+  const { values } = resolve(flow, input);
+  const files = {};
+  for (const s of flow.settings) {
+    if (s.kind !== 'config' || values[s.id] === s.default) continue;
+    if (s.onlyWhen && !test(s.onlyWhen, { values, facts: {} })) continue;
+    const file = s.file ?? '.factory/config.json';
+    files[file] = files[file] ?? {};
+    if (s.seat) {
+      if (!values[s.id]) continue;
+      setPath(files[file], `council.stages.${s.seat}`, {});
+      if (!files[file].council.members) files[file].council.members = [{ name: 'member-1', cli: 'claude', model: 'opus', lens: 'correctness' }];
+    } else if (s.section) {
+      if (values[s.id]) setPath(files[file], s.config, {});
+    } else setPath(files[file], s.config, values[s.id]);
+  }
+  return files;
+}
+
+// The command line that starts this configuration.
+function cliCommand(flow, input = {}) {
+  const { values } = resolve(flow, input);
+  const entry = flow.settings.find((s) => s.id === 'entry');
+  const parts = [entry.cli[values.entry]];
+  const epic = values.entry === 'feature-epic' || values.entry === 'bug-epic';
+  for (const s of flow.settings) {
+    if (!s.flag || s.id === 'pr') continue;
+    if (values[s.id] === s.default) continue;
+    if (!epic && ['grouping', 'prSplit'].includes(s.id)) continue;
+    if (values.entry === 'resume') continue;
+    parts.push(`${s.flag} ${values[s.id]}`);
+  }
+  if (values.pr) parts.push('--pr');
+  const env = flow.settings.filter((s) => s.env && values[s.id] !== s.default).map((s) => `${s.env}=${values[s.id]}`);
+  return [...env, ...parts].join(' ');
+}
+return { defaults, coerce, test, refsOf, resolve, interpolate, outcomesFor, evaluate, walk, decisionView, encodeHash, decodeHash, configFragment, cliCommand };
+})();
+</script>
+<!-- flow-eval:end -->
+<script>
+(() => {
+  'use strict';
+  const flow = JSON.parse(document.getElementById('flow-data').textContent);
+  const E = FlowEval;
+  const NS = 'http://www.w3.org/2000/svg';
+  const W = 196, H = 64, GX = 46, GY = 30, PADX = 60, PADY = 26;
+  const byId = Object.fromEntries(flow.nodes.map((n) => [n.id, n]));
+  const settingById = Object.fromEntries(flow.settings.map((s) => [s.id, s]));
+  const decisionAt = Object.fromEntries(flow.decisions.map((d) => [d.at, d]));
+  const decisionById = Object.fromEntries(flow.decisions.map((d) => [d.id, d]));
+  const factById = Object.fromEntries(flow.facts.map((f) => [f.id, f]));
+  const KIND_WORD = { agent: 'AGENT', harness: 'HARNESS', service: 'SERVICE', record: 'RECORD', exit: 'EXIT', person: 'PERSON' };
+  const KIND_VARS = { agent: 'agent', harness: 'harness', service: 'ext', record: 'rec', exit: 'exit', person: 'person' };
+  const state = { input: {}, choices: {}, view: 'grey', selected: null, scale: null, preset: null };
+  let ev = null;
+
+  const el = (tag, attrs = {}, ...kids) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k === 'text') e.textContent = v;
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? '' : v);
+    }
+    for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) e.append(k.nodeType ? k : document.createTextNode(String(k)));
+    return e;
+  };
+  const sv = (tag, attrs = {}) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) if (v !== undefined && v !== null) e.setAttribute(k, v);
+    return e;
+  };
+  const yesNo = (v) => (v === true ? 'yes' : v === false ? 'no' : String(v));
+  const fmt = (s, v) => (s.type === 'boolean' ? (v ? 'on' : 'off') : s.valueLabels?.[v] ?? String(v));
+  const refLabel = (r) => factById[r]?.label ?? settingById[r]?.label ?? r;
+  const refValue = (r) => (Object.prototype.hasOwnProperty.call(ev.facts, r) ? ev.facts[r] : ev.values[r]);
+
+  // ---- state and the URL hash --------------------------------------------------------------------------------------
+  function loadHash() {
+    const h = E.decodeHash(flow, location.hash);
+    state.input = h.input;
+    state.choices = h.choices;
+    state.view = h.view.view === 'remove' ? 'remove' : 'grey';
+    state.selected = h.view.node && byId[h.view.node] ? h.view.node : state.selected;
+  }
+  let writing = false;
+  function saveHash() {
+    const hash = E.encodeHash(flow, state.input, state.choices, { view: state.view === 'remove' ? 'remove' : '', node: state.selected || '' });
+    try {
+      history.replaceState(null, '', hash || location.pathname + location.search);
+    } catch {
+      writing = true;
+      location.hash = hash;
+    }
+  }
+  window.addEventListener('hashchange', () => {
+    if (writing) {
+      writing = false;
+      return;
+    }
+    loadHash();
+    render();
+  });
+
+  // ---- controls ------------------------------------------------------------------------------------------------------
+  function buildControls() {
+    const form = document.getElementById('controls');
+    for (const g of flow.groups) {
+      const det = el('details', { class: 'group', open: ['scenario', 'delivery'].includes(g.id) ? true : null });
+      det.append(el('summary', { text: g.label }));
+      const fs = el('fieldset');
+      for (const s of flow.settings.filter((x) => x.group === g.id)) fs.append(control(s));
+      det.append(fs);
+      form.append(det);
+    }
+    const presets = document.getElementById('presets');
+    for (const p of flow.presets) {
+      presets.append(el('button', { type: 'button', 'data-preset': p.id, 'aria-pressed': 'false', title: p.help, onclick: () => applyPreset(p) }, p.label));
+    }
+  }
+  const pathText = (s) => [s.config ? `${s.file && s.file !== '.factory/config.json' ? `${s.file}: ` : ''}${s.config}` : null, s.flag ?? null, s.env ?? null].filter(Boolean).join(' · ') || 'scenario (not a setting)';
+  function control(s) {
+    const id = `ctl-${s.id}`;
+    const onchange = (e) => {
+      const t = e.target;
+      const v = s.type === 'boolean' ? t.checked : s.type === 'integer' ? Number(t.value) : t.value;
+      state.input = { ...state.input, [s.id]: v };
+      if (v === s.default) delete state.input[s.id];
+      state.preset = null;
+      render();
+    };
+    const help = el('span', { class: 'path', id: `${id}-help` }, el('code', { text: pathText(s) }), ` default ${fmt(s, s.default)}. `, s.help ?? '');
+    if (s.type === 'boolean') {
+      return el('div', { class: 'ctl check', 'data-setting': s.id }, el('input', { type: 'checkbox', id, 'aria-describedby': `${id}-help`, onchange }), el('label', { for: id, text: s.label }), help);
+    }
+    let input;
+    if (s.type === 'enum') {
+      input = el('select', { id, 'aria-describedby': `${id}-help`, onchange });
+      for (const v of s.values) input.append(el('option', { value: v, text: s.valueLabels?.[v] ?? v }));
+    } else input = el('input', { type: 'number', id, min: s.min, max: s.max, step: 1, inputmode: 'numeric', 'aria-describedby': `${id}-help`, onchange });
+    return el('div', { class: 'ctl', 'data-setting': s.id }, el('label', { for: id, text: s.label }), input, help);
+  }
+  function syncControls() {
+    for (const s of flow.settings) {
+      const input = document.getElementById(`ctl-${s.id}`);
+      const v = ev.values[s.id];
+      if (s.type === 'boolean') input.checked = Boolean(v);
+      else input.value = String(v);
+      const off = s.onlyWhen && !E.test(s.onlyWhen, { values: ev.values, facts: ev.facts });
+      input.disabled = Boolean(off);
+      input.closest('.ctl').dataset.disabled = off ? 'true' : 'false';
+    }
+    for (const b of document.querySelectorAll('#presets button')) b.setAttribute('aria-pressed', b.dataset.preset === state.preset ? 'true' : 'false');
+  }
+  function applyPreset(p) {
+    state.input = { ...p.values };
+    state.choices = {};
+    state.preset = p.id;
+    render();
+  }
+
+  // ---- legend --------------------------------------------------------------------------------------------------------
+  function buildLegend() {
+    const lg = document.getElementById('legend');
+    for (const k of Object.keys(flow.kinds)) {
+      const s = sv('svg', { width: 34, height: 18, 'aria-hidden': 'true' });
+      s.append(shapeFor(k, 1, 1, 32, 16, true));
+      lg.append(el('span', { title: flow.kinds[k].help }, s, `${flow.kinds[k].label} (${KIND_WORD[k].toLowerCase()})`));
+    }
+    const p = sv('svg', { width: 34, height: 18, 'aria-hidden': 'true' });
+    p.append(sv('line', { x1: 2, y1: 9, x2: 32, y2: 9, stroke: 'var(--path)', 'stroke-width': 3 }));
+    lg.append(el('span', {}, p, 'the path taken'));
+    const d = sv('svg', { width: 34, height: 18, 'aria-hidden': 'true' });
+    d.append(sv('line', { x1: 2, y1: 9, x2: 32, y2: 9, stroke: 'var(--edge)', 'stroke-width': 1.4, 'stroke-dasharray': '7 3' }));
+    lg.append(el('span', {}, d, 'loop (with its budget)'));
+    lg.append(el('span', {}, el('span', { class: 'chip', text: '◇ decide' }), 'decision point (the reader picks an outcome)'));
+  }
+
+  // ---- shapes --------------------------------------------------------------------------------------------------------
+  function shapeFor(kind, x, y, w, h, small = false) {
+    const v = KIND_VARS[kind];
+    const common = { class: 'shape', fill: `var(--${v}-fill)`, stroke: `var(--${v}-stroke)`, 'stroke-width': small ? 1.2 : 1.6 };
+    if (kind === 'agent') return sv('rect', { ...common, x, y, width: w, height: h, rx: small ? 5 : 14 });
+    if (kind === 'harness') return sv('rect', { ...common, x, y, width: w, height: h, rx: 2, 'stroke-dasharray': '5 3' });
+    if (kind === 'person') return sv('rect', { ...common, x, y, width: w, height: h, rx: h / 2 });
+    if (kind === 'service') {
+      const i = small ? 5 : 14;
+      return sv('polygon', { ...common, points: `${x + i},${y} ${x + w - i},${y} ${x + w},${y + h / 2} ${x + w - i},${y + h} ${x + i},${y + h} ${x},${y + h / 2}` });
+    }
+    if (kind === 'exit') {
+      const c = small ? 4 : 12;
+      return sv('polygon', { ...common, points: `${x + c},${y} ${x + w - c},${y} ${x + w},${y + c} ${x + w},${y + h - c} ${x + w - c},${y + h} ${x + c},${y + h} ${x},${y + h - c} ${x},${y + c}` });
+    }
+    // record: a page with a folded corner
+    const f = small ? 5 : 14;
+    return sv('path', { ...common, d: `M${x},${y} H${x + w - f} L${x + w},${y + f} V${y + h} H${x} Z` });
+  }
+  const wrap = (text, max = 26) => {
+    const words = String(text).split(/\s+/);
+    const lines = [''];
+    for (const w of words) {
+      const cur = lines[lines.length - 1];
+      if (!cur) lines[lines.length - 1] = w;
+      else if ((cur + ' ' + w).length <= max) lines[lines.length - 1] = cur + ' ' + w;
+      else lines.push(w);
+    }
+    if (lines.length > 2) return [lines[0], `${lines.slice(1).join(' ').slice(0, max - 1)}…`];
+    return lines;
+  };
+
+  // ---- the diagram ---------------------------------------------------------------------------------------------------
+  function nodeLabel(n) {
+    if (n.labelRef) return `${n.label}: ${fmt(settingById[n.labelRef], ev.values[n.labelRef])}`;
+    if (n.councilStages) {
+      const seated = n.councilStages.filter((s) => ev.values[`council.${s}`]);
+      if (seated.length) return `${n.label} (council)`;
+    }
+    return n.label;
+  }
+  function render() {
+    ev = E.evaluate(flow, state.input, state.choices);
+    syncControls();
+    renderStatus();
+    renderDiagram();
+    renderPath();
+    renderConfig();
+    renderDetail();
+    saveHash();
+  }
+  function renderDiagram() {
+    const svg = document.getElementById('svg');
+    const focused = document.activeElement?.closest?.('.node')?.dataset.id ?? null;
+    svg.replaceChildren();
+    const visible = flow.nodes.filter((n) => state.view === 'grey' || ev.nodes[n.id].state === 'active');
+    const rows = [...new Set(visible.map((n) => n.layout.row))].sort((a, b) => a - b);
+    const rowIndex = Object.fromEntries(rows.map((r, i) => [r, i]));
+    const pos = {};
+    for (const n of visible) pos[n.id] = { x: PADX + n.layout.col * (W + GX), y: PADY + rowIndex[n.layout.row] * (H + GY), col: n.layout.col, row: rowIndex[n.layout.row] };
+    const width = PADX + 4 * (W + GX) - GX + 24;
+    const height = PADY * 2 + rows.length * (H + GY) - GY;
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.dataset.width = width;
+    svg.dataset.height = height;
+    applyScale();
+    const defs = sv('defs');
+    for (const [id, color] of [['arrow', 'var(--edge)'], ['arrow-dead', 'var(--edge-dead)'], ['arrow-path', 'var(--path)']]) {
+      const m = sv('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
+      m.append(sv('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }));
+      defs.append(m);
+    }
+    svg.append(defs);
+    const walkNodes = new Map();
+    ev.walk.steps.forEach((s, i) => {
+      if (!s.skipped && !walkNodes.has(s.node)) walkNodes.set(s.node, { n: i + 1, lane: s.lane });
+    });
+    const walkEdges = new Set(ev.walk.steps.filter((s) => s.edge !== undefined).map((s) => s.edge));
+    // edges
+    const gEdges = sv('g', { 'aria-hidden': 'true' });
+    const gLabels = sv('g', { 'aria-hidden': 'true' });
+    svg.append(gEdges);
+    const drawn = new Set();
+    const boxes = Object.values(pos);
+    const placed = [];
+    let gutter = 0;
+    const list = [];
+    for (const e of ev.edges) {
+      if (state.view === 'grey') {
+        if (pos[e.from] && pos[e.to]) list.push({ ...e, target: e.to });
+      } else if (e.live && pos[e.from]) {
+        // Each place the edge can lead once skipped steps are passed through, in the walk states that take it.
+        for (const t of e.effectiveTos) {
+          const key = `${e.from}>${t}>${e.outcome ?? ''}`;
+          if (!pos[t] || drawn.has(key)) continue;
+          drawn.add(key);
+          list.push({ ...e, target: t });
+        }
+      }
+    }
+    // edges into skipped-node chains: on the path when the walk passed through them
+    const walkPairs = new Set();
+    const st = ev.walk.steps;
+    for (let i = 0; i < st.length; i++) {
+      if (st[i].skipped) continue;
+      let j = i + 1;
+      while (j < st.length && st[j].skipped) j++;
+      if (j < st.length) walkPairs.add(`${st[i].node}>${st[j].node}>${st[i].edge}`);
+    }
+    for (const e of list) {
+      const a = pos[e.from];
+      const b = pos[e.target];
+      const onPath = state.view === 'grey' ? walkEdges.has(e.index) : walkPairs.has(`${e.from}>${e.target}>${e.index}`);
+      const d = route(a, b, e, () => gutter++);
+      const cls = ['edge', e.type === 'uses' ? 'uses' : '', e.loop ? 'loop' : '', e.live ? '' : 'dead', onPath ? 'onpath' : ''].filter(Boolean).join(' ');
+      const p = sv('path', { d, class: cls, 'data-from': e.from, 'data-to': e.target, 'data-outcome': e.outcome ?? null, 'marker-end': e.type === 'uses' ? null : `url(#${onPath ? 'arrow-path' : e.live ? 'arrow' : 'arrow-dead'})` });
+      gEdges.append(p);
+      const showLabel = e.label && e.live && (onPath || e.loop || e.from === state.selected || e.target === state.selected);
+      if (showLabel) {
+        const text = e.label.length > 58 ? `${e.label.slice(0, 57)}…` : e.label;
+        const lw = text.length * 5.6 + 6;
+        const len = p.getTotalLength();
+        const hits = (x, y) => boxes.some((r) => x < r.x + W && x + lw > r.x && y - 11 < r.y + H && y + 2 > r.y) || placed.some((r) => x < r.x + r.w && x + lw > r.x && y - 11 < r.y + 2 && y + 2 > r.y - 11);
+        let best = null;
+        for (const f of [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.12, 0.88]) {
+          const pt = p.getPointAtLength(len * f);
+          for (const [dx, dy] of [[4, -3], [-lw - 4, -3], [4, 12], [-lw - 4, 12]]) {
+            if (!hits(pt.x + dx, pt.y + dy)) {
+              best = { x: pt.x + dx, y: pt.y + dy };
+              break;
+            }
+          }
+          if (best) break;
+        }
+        if (!best) {
+          const pt = p.getPointAtLength(len / 2);
+          best = { x: pt.x + 4, y: pt.y - 3 };
+        }
+        placed.push({ x: best.x, y: best.y, w: lw });
+        const g = sv('g', { class: `elabel${onPath ? ' onpath' : ''}` });
+        const t = sv('text', { x: best.x, y: best.y });
+        t.textContent = text;
+        g.append(t);
+        gLabels.append(g);
+      }
+    }
+    // nodes, in reading order
+    const gNodes = sv('g');
+    svg.append(gNodes, gLabels);
+    const ordered = [...visible].sort((a, b) => a.layout.row - b.layout.row || a.layout.col - b.layout.col);
+    for (const n of ordered) {
+      const p = pos[n.id];
+      const s = ev.nodes[n.id];
+      const w = walkNodes.get(n.id);
+      const d = decisionAt[n.id];
+      const cls = ['node', s.state === 'active' ? '' : 'off', w ? 'onpath' : '', state.selected === n.id ? 'selected' : ''].filter(Boolean).join(' ');
+      const label = nodeLabel(n);
+      const stateWord = s.state === 'active' ? '' : s.state === 'skipped' ? 'not run here (skipped)' : 'not reached here';
+      const g = sv('g', { class: cls, tabindex: 0, role: 'button', 'data-id': n.id, 'aria-label': `${n.id}, ${label}, ${flow.kinds[n.kind].label}${d ? `, decision: ${d.label}` : ''}${stateWord ? `, ${stateWord}` : ''}${w ? `, step ${w.n} of the path` : ''}`, transform: `translate(${p.x},${p.y})` });
+      g.append(shapeFor(n.kind, 0, 0, W, H));
+      const k = sv('text', { class: 'kind', x: 10, y: 14 });
+      k.textContent = `${n.id} · ${KIND_WORD[n.kind]}${n.calls ? ' + agent' : ''}`;
+      g.append(k);
+      if (d) {
+        const bx = W - 58;
+        g.append(sv('polygon', { points: `${bx},9 ${bx + 7},2 ${bx + 14},9 ${bx + 7},16`, fill: 'none', stroke: 'var(--muted)', 'stroke-width': 1.2 }));
+        const q = sv('text', { class: 'kind', x: bx + 17, y: 14 });
+        q.textContent = 'decide';
+        g.append(q);
+      }
+      wrap(label).forEach((line, i) => {
+        const t = sv('text', { class: 'title', x: 10, y: 31 + i * 15 });
+        t.textContent = line;
+        g.append(t);
+      });
+      const sub = sv('text', { class: 'sub', x: 10, y: H - 6 });
+      sub.textContent = stateWord || (w ? `#${w.n}${w.lane ? ` · ${w.lane}` : ''}` : n.lane ? `lane: ${n.lane}` : '');
+      g.append(sub);
+      const title = sv('title');
+      title.textContent = `${n.id} ${label}: ${n.desc}`;
+      g.append(title);
+      g.addEventListener('click', () => select(n.id, false));
+      g.addEventListener('keydown', (ev2) => {
+        if (ev2.key === 'Enter' || ev2.key === ' ') {
+          ev2.preventDefault();
+          select(n.id, true);
+        }
+      });
+      gNodes.append(g);
+    }
+    for (const lbl of gLabels.querySelectorAll('g')) {
+      const t = lbl.querySelector('text');
+      const bb = t.getBBox();
+      lbl.insertBefore(sv('rect', { x: bb.x - 2, y: bb.y - 1, width: bb.width + 4, height: bb.height + 2, rx: 3 }), t);
+    }
+    if (focused) svg.querySelector(`.node[data-id="${focused}"]`)?.focus({ preventScroll: true });
+  }
+  function route(a, b, e, next) {
+    const amx = a.x + W / 2, amy = a.y + H / 2;
+    if (a === b || (a.x === b.x && a.y === b.y)) return `M${a.x + 24},${a.y} C${a.x + 24},${a.y - 26} ${a.x + 70},${a.y - 26} ${a.x + 70},${a.y}`;
+    const longJump = a.col === 0 && b.col <= 1 && b.row - a.row > 2;
+    if (b.row < a.row && b.col <= a.col || longJump) {
+      const k = next();
+      const gx = 10 + (k % 8) * 5;
+      const ty = b.y + H / 2 - 8 + (k % 4) * 5;
+      if (longJump) return `M${a.x},${amy} H${gx} V${ty} H${b.x}`;
+      const sx = a.x + 14 + (k % 6) * 7;
+      return `M${sx},${a.y} V${a.y - GY / 2 + (k % 3) * 3} H${gx} V${ty} H${b.x}`;
+    }
+    if (b.col > a.col) {
+      const x1 = a.x + W, y1 = amy + (b.row === a.row ? -6 : 0), x2 = b.x, y2 = b.y + H / 2 + (b.row === a.row ? -6 : 0);
+      const mx = (x1 + x2) / 2;
+      return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+    }
+    if (b.col === a.col) return `M${amx},${a.y + H} V${b.y}`;
+    if (b.row === a.row) return `M${a.x},${amy + 6} H${b.x + W}`;
+    const x2 = b.x + W / 2 + 30, y2 = b.y;
+    return `M${a.x},${amy} C${x2},${amy} ${x2},${amy} ${x2},${y2}`;
+  }
+  function applyScale() {
+    const svg = document.getElementById('svg');
+    const w = Number(svg.dataset.width || 1000), h = Number(svg.dataset.height || 1000);
+    const avail = document.getElementById('scroller').clientWidth - 2;
+    const fit = Math.min(1, Math.max(0.3, avail / w));
+    const scale = state.scale ?? (avail < 600 ? Math.max(fit, 0.72) : fit);
+    svg.setAttribute('width', Math.round(w * scale));
+    svg.setAttribute('height', Math.round(h * scale));
+  }
+
+  // ---- status, path, config ------------------------------------------------------------------------------------------
+  function endText() {
+    const w = ev.walk;
+    const n = byId[w.end];
+    if (!n) return 'The walk did not reach an end.';
+    if (w.endKind === 'exit') return `Ends at ${n.label} (${n.id}; outcome ${n.outcome.join(', ')}).`;
+    return `Ends at ${n.label} (${n.id}).`;
+  }
+  function renderStatus() {
+    const box = document.getElementById('status');
+    const f = ev.facts, v = ev.values;
+    const shape = f.shapeEpic ? 'one epic branch and one PR' : f.shapeFeatureGroups ? `a PR per ${v.prSplit === 'story' ? 'story' : 'group of stories'} (feature units)` : f.shapeBugGroups ? `bug groups, one PR each${v.grouping === 'ticket' ? ' (one per ticket, no planner)' : ''}` : v.entry === 'resume' ? 'the stopped run, from its saved phase' : 'one PR for the ticket';
+    const items = [
+      `Delivery: ${v.pr || v.entry === 'resume' ? shape : `${shape}, but without --pr no PR opens`}.`,
+      `CI: ${!v.ciWait ? 'ciWait off: no proof on the branch and no wait for the PR checks' : f.branchPipelines ? 'proven green on the branch head before the PR opens' : `${fmt(settingById.ciProvider, v.ciProvider)} runs no pipelines on a branch push: the PR opens as a draft and is marked ready when green`}.`,
+      `Evidence: ${[f.videoSection && 'demo video', f.uiPair && 'UI bug before/after pair', f.backendEvidence && 'backend request evidence', f.apiSection && 'API changes section'].filter(Boolean).join(', ') || 'none (demo video off or nothing applies)'}${f.narrator && (f.videoSection || f.uiPair || f.backendEvidence) ? ', narrated by the demo-narrator agent' : ''}.`,
+      `Review gate: ${f.bugUnit ? (f.autoMergeEligible ? 'can auto-merge (every condition holds in this scenario)' : `waits for ${f.approvalsNeeded} approval(s)`) : 'a feature PR waits for a person under the host rules'}.`,
+    ];
+    const end = el('p', { class: 'end', style: 'margin:0' }, endText(), ' ', el('button', { type: 'button', class: 'link', style: 'border:0;background:none;color:var(--focus);text-decoration:underline;padding:0', onclick: () => select(ev.walk.end, true), text: 'details' }));
+    const endNode = byId[ev.walk.end];
+    const remains = endNode?.kind === 'exit' ? el('p', { style: 'margin:0;font-size:0.92em' }, `What remains: branch ${endNode.remains.branch}; ticket ${endNode.remains.ticket}; PR ${endNode.remains.pr}. Next: ${endNode.continue}`) : null;
+    box.replaceChildren(...[el('ul', { class: 'summary' }, items.map((t) => el('li', { text: t }))), end, remains, ev.notes.length ? el('ul', { class: 'notes' }, ev.notes.map((t) => el('li', { text: t }))) : null].filter(Boolean));
+  }
+  function renderPath() {
+    const ol = document.getElementById('path');
+    ol.replaceChildren();
+    for (const s of ev.walk.steps) {
+      const n = byId[s.node];
+      if (s.skipped) {
+        ol.append(el('li', { class: 'skipped' }, `${n.id} ${n.label}: skipped`));
+        continue;
+      }
+      const li = el('li', {}, el('button', { type: 'button', class: 'link', onclick: () => select(n.id, true), text: `${n.id} ${nodeLabel(n)}` }), ' ', el('span', { class: 'lane', text: s.lane ? `· lane ${s.lane}` : '' }));
+      if (s.decision) {
+        const d = decisionById[s.decision];
+        const avail = s.available ?? ev.decisions[d.id].available;
+        // A budgeted loop (the post-open fixing rounds) can take a different outcome on each visit.
+        const perVisit = d.outcomes.some((o) => o.cyclesLeft || o.cyclesUsed);
+        if ((s.visit === 1 || perVisit) && avail.length > 1) {
+          const sel = el('select', { 'aria-label': `${d.id} ${d.label}${s.visit > 1 ? `, visit ${s.visit}` : ''}`, onchange: (e2) => (s.visit > 1 ? setChoiceAt(d.id, s.visit, e2.target.value) : setChoice(d.id, e2.target.value, s.default)) });
+          for (const o of d.outcomes.filter((x) => avail.includes(x.id))) sel.append(el('option', { value: o.id, text: E.interpolate(o.label, ev) }));
+          sel.value = s.outcome;
+          li.append(' ', el('span', { class: s.chosen ? 'chosen' : '', text: d.label }), sel);
+        } else li.append(' ', el('span', { class: 'muted', text: `${d.label} ${E.interpolate(d.outcomes.find((o) => o.id === s.outcome)?.label ?? s.outcome, ev)}${s.visit > 1 ? ' (on the way back)' : ''}` }));
+      }
+      ol.append(li);
+    }
+  }
+  // The outcome of a decision's nth visit: the walk's outcomes of the earlier visits are kept, later ones dropped.
+  function setChoiceAt(id, visit, value) {
+    const prior = ev.walk.steps.filter((x) => x.decision === id && !x.skipped && x.visit < visit).map((x) => x.outcome);
+    state.choices = { ...state.choices, [id]: [...prior, value] };
+    render();
+  }
+  // The first visit's outcome; `def` is that visit's own default (a held PR's open defaults to the update).
+  function setChoice(id, value, def = ev.decisions[id].default) {
+    const d = decisionById[id];
+    if (value === def) delete state.choices[id];
+    else state.choices = { ...state.choices, [id]: value };
+    if (!d) return;
+    render();
+  }
+  function renderConfig() {
+    const box = document.getElementById('cfg');
+    const files = E.configFragment(flow, state.input);
+    const cmd = E.cliCommand(flow, state.input);
+    const kids = [el('h2', { style: 'font-size:1rem;margin:12px 0 4px', text: 'Copy as config' })];
+    kids.push(el('p', { class: 'muted', style: 'margin:0;font-size:0.88em', text: 'Only the values that differ from the defaults. Scenario values (entry, ticket kind, the change, triage severity and confidence) are not settings.' }));
+    kids.push(block('Command', cmd));
+    const names = Object.keys(files);
+    if (!names.length) kids.push(el('p', { class: 'muted', style: 'font-size:0.9em', text: 'Every setting is at its default: nothing to add to .factory/config.json.' }));
+    for (const f of names) kids.push(block(f, JSON.stringify(files[f], null, 2)));
+    if (files['.factory/config.json']?.council) kids.push(el('p', { class: 'muted', style: 'font-size:0.85em;margin:0', text: 'member-1 is a placeholder: name your council members (council.md).' }));
+    box.replaceChildren(...kids);
+  }
+  function block(title, text) {
+    const pre = el('pre', { class: 'cfg', tabindex: 0, 'aria-label': title, text });
+    const btn = el('button', { type: 'button', onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = 'Copied';
+      } catch {
+        const r = document.createRange();
+        r.selectNodeContents(pre);
+        const s = getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+        btn.textContent = 'Selected: press Ctrl+C';
+      }
+      setTimeout(() => (btn.textContent = `Copy ${title}`), 1800);
+    } }, `Copy ${title}`);
+    return el('div', {}, el('div', { class: 'toolbar', style: 'margin-top:6px' }, el('strong', { style: 'font-size:0.9em', text: title }), btn), pre);
+  }
+
+  // ---- details of a node ---------------------------------------------------------------------------------------------
+  function describe(c) {
+    if (!c) return 'always';
+    if (c.is) return `${refLabel(c.is)} (${yesNo(refValue(c.is))})`;
+    if (c.eq) return `${refLabel(c.eq[0])} is ${c.eq[1]} (now ${refValue(c.eq[0])})`;
+    if (c.in) return `${refLabel(c.in[0])} is ${c.in[1].join(' or ')} (now ${refValue(c.in[0])})`;
+    if (c.gt) return `${refLabel(c.gt[0])} above ${c.gt[1]} (now ${refValue(c.gt[0])})`;
+    if (c.not) return `not: ${describe(c.not)}`;
+    if (c.all) return c.all.map(describe).join('; and ');
+    if (c.any) return `one of: ${c.any.map(describe).join('; or ')}`;
+    return JSON.stringify(c);
+  }
+  function select(id, focusDetail) {
+    state.selected = id;
+    render();
+    if (focusDetail) document.getElementById('detail-title')?.focus();
+  }
+  function renderDetail() {
+    const box = document.getElementById('detail');
+    const n = byId[state.selected];
+    if (!n) {
+      box.replaceChildren(el('h2', { id: 'detail-title', tabindex: -1, text: 'Details' }), el('p', { class: 'muted', text: 'Select a step in the diagram or the path (Tab to it, then Enter) to see what it is, the settings that control it and the page that explains it.' }));
+      return;
+    }
+    const s = ev.nodes[n.id];
+    const d = decisionAt[n.id];
+    const stateText = s.state === 'active' ? 'Runs for this configuration.' : s.state === 'skipped' ? 'Does not run for this configuration: the flow passes through it.' : 'Not reached for this configuration.';
+    const kids = [
+      el('h2', { id: 'detail-title', tabindex: -1, text: `${n.id} · ${nodeLabel(n)}` }),
+      el('p', { style: 'margin:0 0 6px' }, el('span', { class: 'chip', text: flow.kinds[n.kind].label }), n.lane ? el('span', { class: 'chip', text: `lane: ${n.lane}` }) : null),
+      el('p', { class: `state-${s.state}`, style: 'margin:0 0 6px;font-weight:600', text: stateText }),
+      el('p', { style: 'margin:0 0 6px', text: n.desc }),
+      el('p', { class: 'muted', style: 'margin:0 0 6px;font-size:0.9em', text: `${flow.kinds[n.kind].help}` }),
+    ];
+    const dl = el('dl');
+    if (n.when) dl.append(el('dt', { text: 'Runs when' }), el('dd', { text: describe(n.when) }));
+    if (n.agents) dl.append(el('dt', { text: 'Agents' }), el('dd', { text: n.agents.join(', ') }));
+    if (n.calls) dl.append(el('dt', { text: 'May call' }), el('dd', { text: n.calls.join(', ') }));
+    if (n.councilStages) {
+      const seated = n.councilStages.filter((st) => ev.values[`council.${st}`]);
+      dl.append(el('dt', { text: 'Council' }), el('dd', { text: seated.length ? `seated for ${seated.join(', ')} (council.stages)` : `not seated: the single verifier sits (${n.councilStages.map((x) => `council.stages.${x}`).join(', ')})` }));
+    }
+    if (n.kind === 'exit') {
+      dl.append(el('dt', { text: 'Run outcome' }), el('dd', { text: n.outcome.join(', ') }));
+      dl.append(el('dt', { text: 'Branch' }), el('dd', { text: n.remains.branch }));
+      dl.append(el('dt', { text: 'Ticket' }), el('dd', { text: n.remains.ticket }));
+      dl.append(el('dt', { text: 'PR' }), el('dd', { text: n.remains.pr }));
+      dl.append(el('dt', { text: 'Continue' }), el('dd', { text: n.continue }));
+      if (n.epic) dl.append(el('dt', { text: 'In an epic' }), el('dd', { text: n.epic }));
+    }
+    dl.append(el('dt', { text: 'Explained in' }), el('dd', {}, el('a', { href: n.doc, text: n.doc })));
+    kids.push(dl);
+    if (d) {
+      // The outcomes of the walk's own visits (a held PR is updated, an exhausted budget is offered only once spent);
+      // off the walk, what the configuration allows in the walk states that reach this step.
+      const view = E.decisionView(flow, ev, n.id);
+      kids.push(el('h3', { text: `Decision: ${d.label}` }));
+      if (!view.onWalk) kids.push(el('p', { class: 'muted', style: 'margin:0 0 4px;font-size:0.9em', text: 'Not on the path walked now: the outcomes this configuration allows here.' }));
+      const budgetText = (b) => (!b ? '' : b.kind === 'left' ? ` (only on visits before ${b.n})` : ` (only from visit ${b.n}, every cycle used)`);
+      for (const v of view.visits) {
+        if (view.visits.length > 1) kids.push(el('p', { style: 'margin:6px 0 2px;font-weight:600', text: `Visit ${v.visit} on the path` }));
+        const ul = el('ul', { style: 'margin:0;padding-left:1.1em', 'data-visit': v.visit ?? '' });
+        for (const o of v.outcomes) {
+          const go = o.possible ? o.to.map((t) => el('span', {}, ' → ', el('button', { type: 'button', class: 'link', onclick: () => select(t, true), text: `${t} ${byId[t].label}` }))) : [];
+          const marks = `${o.id === v.outcome ? ' (taken on the path)' : ''}${o.id === v.default ? ' (default)' : ''}`;
+          ul.append(el('li', { class: o.possible ? '' : 'muted', 'data-outcome': o.id, 'data-possible': String(o.possible) }, `${E.interpolate(o.label, ev)}${o.possible ? '' : view.onWalk && view.visits.length > 1 ? ' (not possible on this visit)' : ' (not possible here)'}${view.onWalk ? '' : budgetText(o.budget)}`, ...go, marks));
+        }
+        kids.push(ul);
+        const offered = v.outcomes.filter((o) => o.possible);
+        if (s.state === 'active' && offered.length > 1) {
+          const sid = v.visit > 1 ? `detail-choice-${v.visit}` : 'detail-choice';
+          const sel = el('select', { id: sid, onchange: (e2) => (v.visit > 1 ? setChoiceAt(d.id, v.visit, e2.target.value) : setChoice(d.id, e2.target.value, v.default ?? undefined)) });
+          for (const o of offered) sel.append(el('option', { value: o.id, text: E.interpolate(o.label, ev) }));
+          sel.value = v.outcome ?? [].concat(state.choices[d.id] ?? v.default)[0];
+          kids.push(el('p', { style: 'margin:6px 0 0' }, el('label', { for: sid, text: view.visits.length > 1 ? `Walk this outcome on visit ${v.visit}: ` : 'Walk this outcome: ' }), sel));
+        }
+      }
+    }
+    if (n.settings?.length) {
+      kids.push(el('h3', { text: 'Settings that control it' }));
+      const ul = el('ul', { class: 'settings' });
+      for (const id of n.settings) {
+        const st = settingById[id];
+        const now = ev.values[id];
+        ul.append(el('li', {}, el('button', { type: 'button', class: 'link', onclick: () => focusControl(id), text: st.label }), `: ${fmt(st, now)}${now === st.default ? ' (default)' : `, default ${fmt(st, st.default)}`}`, el('br'), el('code', { text: pathText(st) })));
+      }
+      kids.push(ul);
+    }
+    const out = flow.edges.filter((x) => x.from === n.id);
+    const inc = flow.edges.filter((x) => x.to === n.id);
+    const nav = (list, key) => list.map((x) => el('li', {}, el('button', { type: 'button', class: 'link', onclick: () => select(x[key], true), text: `${x[key]} ${byId[x[key]].label}` }), x.type === 'uses' ? ' (uses)' : x.outcome ? ` (${E.interpolate(decisionAt[x.from]?.outcomes.find((o) => o.id === x.outcome)?.label ?? x.outcome, ev)})` : ''));
+    if (inc.length) kids.push(el('h3', { text: 'Comes from' }), el('ul', { style: 'margin:0;padding-left:1.1em' }, nav(inc, 'from')));
+    if (out.length) kids.push(el('h3', { text: 'Leads to' }), el('ul', { style: 'margin:0;padding-left:1.1em' }, nav(out, 'to')));
+    kids.push(el('p', { style: 'margin-top:10px' }, el('button', { type: 'button', onclick: () => document.querySelector(`.node[data-id="${n.id}"]`)?.focus() ?? document.getElementById('scroller').focus(), text: 'Back to the diagram' })));
+    box.replaceChildren(...kids);
+  }
+  function focusControl(id) {
+    const panel = document.getElementById('panel');
+    if (getComputedStyle(panel).display === 'none') togglePanel(true);
+    const input = document.getElementById(`ctl-${id}`);
+    const det = input.closest('details');
+    if (det) det.open = true;
+    input.focus();
+  }
+  function togglePanel(open) {
+    const panel = document.getElementById('panel');
+    const btn = document.getElementById('panel-toggle');
+    const now = open ?? !panel.classList.contains('open');
+    panel.classList.toggle('open', now);
+    btn.setAttribute('aria-expanded', String(now));
+  }
+  document.getElementById('detail').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.selected) document.querySelector(`.node[data-id="${state.selected}"]`)?.focus();
+  });
+
+  // ---- wiring --------------------------------------------------------------------------------------------------------
+  document.getElementById('reset').addEventListener('click', () => {
+    state.input = {};
+    state.choices = {};
+    state.preset = null;
+    render();
+  });
+  document.getElementById('clear-walk').addEventListener('click', () => {
+    state.choices = {};
+    render();
+  });
+  const setView = (v) => {
+    state.view = v;
+    document.getElementById('view-grey').setAttribute('aria-pressed', String(v === 'grey'));
+    document.getElementById('view-remove').setAttribute('aria-pressed', String(v === 'remove'));
+    render();
+  };
+  document.getElementById('view-grey').addEventListener('click', () => setView('grey'));
+  document.getElementById('view-remove').addEventListener('click', () => setView('remove'));
+  const zoom = (f) => {
+    const svg = document.getElementById('svg');
+    const cur = Number(svg.getAttribute('width')) / Number(svg.dataset.width);
+    state.scale = f === null ? null : Math.min(2, Math.max(0.3, cur * f));
+    applyScale();
+  };
+  document.getElementById('zoom-in').addEventListener('click', () => zoom(1.2));
+  document.getElementById('zoom-out').addEventListener('click', () => zoom(1 / 1.2));
+  document.getElementById('zoom-fit').addEventListener('click', () => zoom(null));
+  document.getElementById('panel-toggle').addEventListener('click', () => togglePanel());
+  window.addEventListener('resize', () => applyScale());
+
+  buildControls();
+  buildLegend();
+  loadHash();
+  // A first visit (no configuration in the link) opens on the full-featured example.
+  if (!location.hash) state.input = { ...flow.presets[0].values };
+  document.getElementById('view-grey').setAttribute('aria-pressed', String(state.view === 'grey'));
+  document.getElementById('view-remove').setAttribute('aria-pressed', String(state.view === 'remove'));
+  const match = flow.presets.find((p) => JSON.stringify(E.resolve(flow, p.values).values) === JSON.stringify(E.resolve(flow, state.input).values));
+  state.preset = match ? match.id : null;
+  render();
+})();
+</script>
+</body>
+</html>

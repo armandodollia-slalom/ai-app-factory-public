@@ -46,14 +46,15 @@ const USAGE = `Usage: node scripts/pr-video/pr-video.mjs <command> [options]
         the section and the PR's videos (for PRs that don't change the frontend).
   scope --base <ref>
         Print what the PR changes as key=value lines (for $GITHUB_OUTPUT): frontend, backend,
-        video (frontend changed) and api (backend changed, frontend not).
+        video (frontend changed) and api (backend changed).
   api --base <ref> (--pr <n> | --dry-run) [--manifest <prVideo.videosDir>/manifest.json]
       [--openapi <url,url>] [--specs <a,b>] [--head-sha <sha>] [--run-url <url>]
       [--api true|false --frontend true|false]   the scope from \`scope\`, so it is not diffed again
         Document the HTTP endpoints the PR adds, changes or removes (method, route, parameters, request
         and response types from OpenAPI, and example calls recorded with E2E_API_LOG=1) in the PR's
-        "API changes" section, or print it with --dry-run. Only for backend-only PRs; removes the section
-        when the PR also changes the frontend or there is nothing to show. The endpoints come from the
+        "API changes" section, or print it with --dry-run. Shown for any PR that changes backend code
+        (including mixed frontend/backend PRs); removes the section when the PR changes no backend code
+        or there is nothing to show. The endpoints come from the
         route extractor in prVideo.api.extractor, else from the OpenAPI files in prVideo.api.openapi
         compared with the merge base; with neither configured the section is skipped with a note.
 
@@ -127,7 +128,7 @@ async function main() {
       writeResult({ video: null, error: String(error?.message ?? error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join('\n') });
       throw error;
     }
-    // The API summary of a backend-only change, stored for the branch the same way (OpenAPI files and route extractor;
+    // The API summary of a backend change, stored for the branch the same way (OpenAPI files and route extractor;
     // without a recording, so no example calls).
     const api = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'api', '--base', flags.base, '--key', flags.key, ...(flags['head-sha'] ? ['--head-sha', flags['head-sha']] : [])], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, HEAD_SHA: flags['head-sha'] ?? '' } });
     if (api.status !== 0) log(`${flags.key}: the API summary failed (exit ${api.status}); the PR opens without it`);

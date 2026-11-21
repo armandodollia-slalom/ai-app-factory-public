@@ -1,5 +1,7 @@
 # GitHub Actions (CI system)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `ci.provider: "github-actions"`, the default with a GitHub host. The adapter is `scripts/pipeline/lib/ci/github-actions.mjs`. The pipelines a head must run are the workflows that a `pull_request` (or `pull_request_target`) event for that pull request triggers. They are read from the repository's workflow files at that head, after their `types`, `branches` and `paths` filters. Runs and logs come from the Actions API through `gh`.
 
 **Generated files:** `.github/workflows/factory-*.yml` and `.github/actions/setup-factory`, `setup-agent-cli` and `factory-toolchain`. They are the same files v0.2.68 generated, byte for byte (a test compares them), plus `factory-analysis.yml` when `analysis` is on. Secrets are repository or organisation secrets. GitHub withholds them from fork pull requests, and no workflow uses `pull_request_target` or `workflow_run` with secrets.

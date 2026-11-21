@@ -1,0 +1,4763 @@
+{
+  "$comment": "Single source of truth for docs/pipeline-explorer.html and the Mermaid spine (scripts/docs/build-explorer.mjs). It models what the runner's rules say will happen for a configuration; it does not run anything. Settings name their real config path or CLI flag and say where the code keeps their default and allowed values (`checks`, verified by scripts/docs/test/pipeline-flow.test.mjs). Conditions are data: {\"eq\":[ref,value]}, {\"in\":[ref,[values]]}, {\"is\":ref}, {\"not\":c}, {\"all\":[c]}, {\"any\":[c]}, {\"gt\":[ref,n]}; a ref is a setting id or a fact id. A fact with \"walk\": true starts false and is set by the edges the walk takes ({\"set\":{fact:true}}); an outcome with cyclesLeft or cyclesUsed (a setting id) is offered only before, or once, that many visits of its step. Doc links are relative to docs/.",
+  "version": 1,
+  "factoryVersion": "0.2.94",
+  "kinds": {
+    "agent": {
+      "label": "Agent",
+      "help": "A fresh headless agent process (a model call)."
+    },
+    "harness": {
+      "label": "Harness",
+      "help": "Deterministic runner code: no agent, no model call (unless it says it calls one)."
+    },
+    "service": {
+      "label": "Outside service",
+      "help": "Reached through a pluggable adapter (code host, tracker, CI system)."
+    },
+    "record": {
+      "label": "Record",
+      "help": "What the run writes and reports."
+    },
+    "exit": {
+      "label": "Exit",
+      "help": "The run stops here for this ticket; a person decides what happens next."
+    },
+    "person": {
+      "label": "Person",
+      "help": "A person acts."
+    }
+  },
+  "lanes": [
+    "Backlog",
+    "Ready",
+    "In Progress",
+    "Testing",
+    "Pending Review",
+    "Done",
+    "Failed"
+  ],
+  "groups": [
+    {
+      "id": "scenario",
+      "label": "Scenario"
+    },
+    {
+      "id": "delivery",
+      "label": "Delivery"
+    },
+    {
+      "id": "council",
+      "label": "Council (per stage)"
+    },
+    {
+      "id": "evidence",
+      "label": "Static analysis and evidence"
+    },
+    {
+      "id": "loops",
+      "label": "Loops and budgets"
+    },
+    {
+      "id": "gate",
+      "label": "Review gate"
+    },
+    {
+      "id": "products",
+      "label": "Code host, tracker and CI"
+    }
+  ],
+  "settings": [
+    {
+      "id": "entry",
+      "group": "scenario",
+      "label": "Entry",
+      "kind": "scenario",
+      "type": "enum",
+      "values": [
+        "single",
+        "feature-epic",
+        "bug-epic",
+        "resume"
+      ],
+      "default": "single",
+      "valueLabels": {
+        "single": "Single ticket",
+        "feature-epic": "Feature epic",
+        "bug-epic": "Bug epic",
+        "resume": "Resume after a stop"
+      },
+      "cli": {
+        "single": "factory implement run <KEY>",
+        "feature-epic": "factory implement run --epic <EPIC>",
+        "bug-epic": "factory implement run --epic <EPIC>",
+        "resume": "factory implement resume"
+      },
+      "help": "How the run starts. A bug epic is an epic whose tickets are strictly more than half bugs.",
+      "doc": "ai-pipeline/implement.md#delivery-modes",
+      "checks": [
+        {
+          "usage": "scripts/implement/implement.mjs",
+          "includes": "run <KEY...> | --epic <EPIC>"
+        },
+        {
+          "usage": "scripts/implement/implement.mjs",
+          "includes": "resume [KEY]"
+        },
+        {
+          "code": "scripts/implement/lib/epic-plan.mjs",
+          "includes": "bugs * 2 > tickets.length"
+        }
+      ]
+    },
+    {
+      "id": "ticket",
+      "group": "scenario",
+      "label": "Ticket kind",
+      "kind": "scenario",
+      "type": "enum",
+      "values": [
+        "feature",
+        "ui-bug",
+        "backend-bug"
+      ],
+      "default": "feature",
+      "valueLabels": {
+        "feature": "Feature (story)",
+        "ui-bug": "UI bug",
+        "backend-bug": "Backend bug"
+      },
+      "help": "A bug is a ticket of type bug (or a BUG-n key). A UI bug's verified plan has a browser case a changed spec runs; a backend bug's reproduction case drives the service through its public interface.",
+      "doc": "ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix",
+      "checks": [
+        {
+          "module": "scripts/implement/lib/epic-plan.mjs",
+          "export": "isBugTicket",
+          "call": [
+            {
+              "type": "bug"
+            }
+          ],
+          "expect": true
+        }
+      ]
+    },
+    {
+      "id": "changes",
+      "group": "scenario",
+      "label": "The change touches",
+      "kind": "scenario",
+      "type": "enum",
+      "values": [
+        "frontend",
+        "backend",
+        "both"
+      ],
+      "default": "both",
+      "valueLabels": {
+        "frontend": "Frontend only",
+        "backend": "Backend only",
+        "both": "Frontend and backend"
+      },
+      "help": "Decided by the project model (project.frontendPaths, service kinds, prVideo.backendPaths). Frontend gets the demo video; any backend change gets the API changes section, mixed changes included.",
+      "doc": "ai-pipeline/pr-demo-video.md#which-prs-get-what",
+      "checks": [
+        {
+          "module": "scripts/pr-video/lib/api-summary.mjs",
+          "export": "classifyFiles",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "pr",
+      "group": "scenario",
+      "label": "--pr (open a PR)",
+      "kind": "cli",
+      "flag": "--pr",
+      "type": "boolean",
+      "default": false,
+      "help": "Without --pr a run stops after the tests are verified: no push, no PR. The presets turn it on because the generated pipeline is run with it.",
+      "doc": "ai-pipeline/implement-reference.md#command-options",
+      "checks": [
+        {
+          "usage": "scripts/implement/implement.mjs",
+          "includes": "[--pr]"
+        }
+      ]
+    },
+    {
+      "id": "severity",
+      "group": "scenario",
+      "label": "Triage severity (bug PR)",
+      "kind": "scenario",
+      "type": "enum",
+      "values": [
+        "Low",
+        "Medium",
+        "High",
+        "Severe"
+      ],
+      "default": "Low",
+      "help": "What the harness computes from the bug-triage agent's ratings and the floor rules. Only bug-fix PRs are rated.",
+      "doc": "ai-pipeline/review-gate.md#assessment",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.reviewGate.approvals",
+          "keysInclude": true
+        }
+      ]
+    },
+    {
+      "id": "confidence",
+      "group": "scenario",
+      "label": "Triage confidence",
+      "kind": "scenario",
+      "type": "enum",
+      "values": [
+        "high",
+        "low"
+      ],
+      "default": "high",
+      "help": "High when every ticket's confidence is at least implement.reviewGate.confidence.highMin (85) with no owner question.",
+      "doc": "ai-pipeline/review-gate.md#assessment",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.reviewGate.confidence.highMin",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "delivery",
+      "group": "delivery",
+      "label": "Delivery",
+      "kind": "config",
+      "config": "implement.delivery",
+      "flag": "--delivery",
+      "type": "enum",
+      "values": [
+        "epic",
+        "story"
+      ],
+      "default": "epic",
+      "help": "story: every ticket of an epic gets its own branch and PR, with no epic plan.",
+      "doc": "ai-pipeline/implement.md#delivery-modes",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.delivery"
+        },
+        {
+          "usage": "scripts/implement/implement.mjs",
+          "flagValues": "--delivery"
+        },
+        {
+          "code": "scripts/implement/implement.mjs",
+          "includes": "['epic', 'story'].includes(delivery)"
+        }
+      ]
+    },
+    {
+      "id": "grouping",
+      "group": "delivery",
+      "label": "Grouping",
+      "kind": "config",
+      "config": "implement.epic.grouping",
+      "flag": "--grouping",
+      "type": "enum",
+      "values": [
+        "auto",
+        "epic",
+        "ticket"
+      ],
+      "default": "auto",
+      "help": "Precedence: an explicit grouping wins (epic: one PR; ticket: one PR per ticket, no planner), then a strict bug majority (bug groups), then the PR split.",
+      "doc": "ai-pipeline/implement.md#how-an-epic-is-split-into-prs",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.epic.grouping"
+        },
+        {
+          "module": "scripts/implement/lib/epic-plan.mjs",
+          "export": "GROUPINGS",
+          "values": true
+        },
+        {
+          "usage": "scripts/implement/implement.mjs",
+          "flagValues": "--grouping"
+        }
+      ]
+    },
+    {
+      "id": "prSplit",
+      "group": "delivery",
+      "label": "PR split (feature epic)",
+      "kind": "config",
+      "config": "implement.epic.prSplit",
+      "flag": "--pr-split",
+      "type": "enum",
+      "values": [
+        "epic",
+        "story",
+        "groups"
+      ],
+      "default": "epic",
+      "help": "epic: one PR; story: one PR per story; groups: PRs of stories the orchestrator groups. Applies only when the epic is not mostly bugs and grouping is auto.",
+      "doc": "ai-pipeline/implement.md#how-an-epic-is-split-into-prs",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.epic.prSplit",
+          "absent": true
+        },
+        {
+          "code": "scripts/implement/implement.mjs",
+          "includes": "config.implement.epic?.prSplit ?? 'epic'"
+        },
+        {
+          "module": "scripts/implement/lib/epic-plan.mjs",
+          "export": "PR_SPLITS",
+          "values": true
+        },
+        {
+          "usage": "scripts/implement/implement.mjs",
+          "flagValues": "--pr-split"
+        }
+      ]
+    },
+    {
+      "id": "epicFeatureVerification",
+      "group": "delivery",
+      "label": "Unit feature verification",
+      "kind": "config",
+      "config": "implement.epic.featureVerification",
+      "type": "boolean",
+      "default": true,
+      "help": "The cross-story journeys of an epic unit are planned, automated and verified once on the unit.",
+      "doc": "ai-pipeline/implement.md#epic-delivery",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.epic.featureVerification"
+        }
+      ]
+    },
+    {
+      "id": "epicPrCheck",
+      "group": "delivery",
+      "label": "Unit PR check",
+      "kind": "config",
+      "config": "implement.epic.prCheck",
+      "type": "enum",
+      "values": [
+        "fix",
+        "report",
+        "off"
+      ],
+      "default": "fix",
+      "help": "The PR check of every ticket of a unit against the unit's diff, in one run.",
+      "doc": "ai-pipeline/implement.md#epic-delivery",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.epic.prCheck"
+        },
+        {
+          "code": "scripts/implement/lib/epic.mjs",
+          "literals": true
+        }
+      ]
+    },
+    {
+      "id": "council.pairVerify",
+      "group": "council",
+      "label": "pairVerify",
+      "kind": "config",
+      "config": "council.stages.pairVerify",
+      "type": "boolean",
+      "default": false,
+      "seat": "pairVerify",
+      "help": "Seat a council instead of the single pair-verifier.",
+      "doc": "ai-pipeline/council.md#stages",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "COUNCIL_STAGES",
+          "hasKey": "pairVerify"
+        },
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "council",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "council.pairUiVerify",
+      "group": "council",
+      "label": "pairUiVerify",
+      "kind": "config",
+      "config": "council.stages.pairUiVerify",
+      "type": "boolean",
+      "default": false,
+      "seat": "pairUiVerify",
+      "help": "Seat a council instead of the single pair-ui-verifier (UI subtasks).",
+      "doc": "ai-pipeline/council.md#stages",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "COUNCIL_STAGES",
+          "hasKey": "pairUiVerify"
+        },
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "council",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "council.review",
+      "group": "council",
+      "label": "review",
+      "kind": "config",
+      "config": "council.stages.review",
+      "type": "boolean",
+      "default": false,
+      "seat": "review",
+      "help": "Seat a council instead of the single architecture-reviewer.",
+      "doc": "ai-pipeline/council.md#stages",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "COUNCIL_STAGES",
+          "hasKey": "review"
+        },
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "council",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "council.testPlan",
+      "group": "council",
+      "label": "testPlan",
+      "kind": "config",
+      "config": "council.stages.testPlan",
+      "type": "boolean",
+      "default": false,
+      "seat": "testPlan",
+      "help": "Seat a council instead of the single test-plan-verifier.",
+      "doc": "ai-pipeline/council.md#stages",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "COUNCIL_STAGES",
+          "hasKey": "testPlan"
+        },
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "council",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "council.testAutomation",
+      "group": "council",
+      "label": "testAutomation",
+      "kind": "config",
+      "config": "council.stages.testAutomation",
+      "type": "boolean",
+      "default": false,
+      "seat": "testAutomation",
+      "help": "Seat a council instead of the single test-automation-verifier.",
+      "doc": "ai-pipeline/council.md#stages",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "COUNCIL_STAGES",
+          "hasKey": "testAutomation"
+        },
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "council",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "council.prCheck",
+      "group": "council",
+      "label": "prCheck",
+      "kind": "config",
+      "config": "council.stages.prCheck",
+      "type": "boolean",
+      "default": false,
+      "seat": "prCheck",
+      "help": "Seat council members instead of the PR check critics.",
+      "doc": "ai-pipeline/council.md#stages",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "COUNCIL_STAGES",
+          "hasKey": "prCheck"
+        },
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "council",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "analysis",
+      "group": "evidence",
+      "label": "Static analysis",
+      "kind": "config",
+      "config": "analysis",
+      "type": "boolean",
+      "default": false,
+      "section": true,
+      "help": "On when .factory/config.json has an analysis section. Off: no local analysis slots, and no analysis jobs are rendered for CI, so the pre-push analysis gate has nothing to run.",
+      "doc": "ai-pipeline/analysis.md#where-it-runs",
+      "checks": [
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "analysis",
+          "absent": true
+        },
+        {
+          "module": "scripts/pipeline/lib/analysis/config.mjs",
+          "export": "analysisOn",
+          "call": [
+            {}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "analysisBounces",
+      "group": "loops",
+      "label": "Analysis fix loop",
+      "kind": "config",
+      "config": "analysis.fixLoop.bounces",
+      "type": "integer",
+      "min": 0,
+      "max": 10,
+      "default": 2,
+      "help": "Blocking analysis findings go back to the implementer this many times, without spending a review round.",
+      "doc": "ai-pipeline/analysis.md#configuration",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/analysis/config.mjs",
+          "export": "FIX_BOUNCES_DEFAULT"
+        }
+      ]
+    },
+    {
+      "id": "demoVideo",
+      "group": "evidence",
+      "label": "Demo video (features.demoVideo)",
+      "kind": "config",
+      "file": ".factory/factory.json",
+      "config": "features.demoVideo",
+      "type": "boolean",
+      "default": false,
+      "help": "Demo videos, bug before/after evidence and the API changes section, produced on the pipeline machine before the PR opens.",
+      "doc": "configuration.md#the-pin-factoryfactoryjson",
+      "checks": [
+        {
+          "module": "scripts/factory/lib/render.mjs",
+          "export": "FEATURE_DEFAULTS",
+          "path": "demoVideo"
+        }
+      ]
+    },
+    {
+      "id": "scriptScope",
+      "group": "evidence",
+      "label": "Narration scope",
+      "kind": "config",
+      "config": "video.script.scope",
+      "type": "enum",
+      "values": [
+        "headline",
+        "all",
+        "none"
+      ],
+      "default": "headline",
+      "help": "Which videos the demo-narrator agent scripts. none: automatic lines only, no narrator agent. Any other value stops every command that loads the pipeline config.",
+      "doc": "ai-pipeline/pr-demo-video.md#narration-scripts",
+      "checks": [
+        {
+          "module": "scripts/pr-video/lib/script.mjs",
+          "export": "SCRIPT_DEFAULTS",
+          "path": "scope"
+        },
+        {
+          "code": "scripts/pr-video/lib/local.mjs",
+          "literals": true
+        },
+        {
+          "module": "scripts/pipeline/lib/config.mjs",
+          "export": "VIDEO_SCRIPT_SCOPES",
+          "values": true
+        }
+      ]
+    },
+    {
+      "id": "requireBefore",
+      "group": "evidence",
+      "label": "Require before-the-fix evidence",
+      "kind": "config",
+      "config": "video.bugPair.requireBefore",
+      "type": "boolean",
+      "default": false,
+      "help": "A bug whose reproduction cannot be shown before the fix (UI video pair or backend request evidence) opens no PR.",
+      "doc": "ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix",
+      "checks": [
+        {
+          "module": "scripts/pr-video/lib/bugpair.mjs",
+          "export": "BUG_PAIR_DEFAULTS",
+          "path": "requireBefore"
+        }
+      ]
+    },
+    {
+      "id": "maxPairRounds",
+      "group": "loops",
+      "label": "maxPairRounds",
+      "kind": "config",
+      "config": "implement.maxPairRounds",
+      "type": "integer",
+      "min": 1,
+      "max": 10,
+      "default": 3,
+      "help": "Rounds a pair gets before it escalates to the orchestrator (rewrite or takeover, once).",
+      "doc": "ai-pipeline/implement-reference.md#limits",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.maxPairRounds"
+        }
+      ]
+    },
+    {
+      "id": "reviewMaxRounds",
+      "group": "loops",
+      "label": "review.maxRounds",
+      "kind": "config",
+      "config": "review.maxRounds",
+      "type": "integer",
+      "min": 1,
+      "max": 20,
+      "default": 5,
+      "help": "Architecture review rounds before the review escalates.",
+      "doc": "ai-pipeline/review.md#the-policy-step-engine-and-policy",
+      "checks": [
+        {
+          "json": "scripts/review/config.json",
+          "path": "review.maxRounds"
+        }
+      ]
+    },
+    {
+      "id": "maxBugFixCycles",
+      "group": "loops",
+      "label": "maxBugFixCycles",
+      "kind": "config",
+      "config": "implement.maxBugFixCycles",
+      "type": "integer",
+      "min": 0,
+      "max": 10,
+      "default": 2,
+      "help": "Times a product bug found by the automated tests goes back to implementation.",
+      "doc": "ai-pipeline/implement-reference.md#config",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.maxBugFixCycles"
+        }
+      ]
+    },
+    {
+      "id": "returnEnabled",
+      "group": "loops",
+      "label": "Return PR check findings to implementation",
+      "kind": "config",
+      "config": "implement.prCheck.returnToImplementation.enabled",
+      "type": "boolean",
+      "default": true,
+      "help": "Off: every PR check finding stays with pr-check-fixer.",
+      "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.prCheck.returnToImplementation.enabled"
+        },
+        {
+          "module": "scripts/implement/lib/pr-check-return.mjs",
+          "export": "RETURN_DEFAULTS",
+          "path": "enabled"
+        }
+      ]
+    },
+    {
+      "id": "maxReturns",
+      "group": "loops",
+      "label": "returnToImplementation.maxReturns",
+      "kind": "config",
+      "config": "implement.prCheck.returnToImplementation.maxReturns",
+      "type": "integer",
+      "min": 0,
+      "max": 10,
+      "default": 2,
+      "help": "Returns from the PR check to implementation or test automation per ticket (a wrongly routed one is re-routed once for free).",
+      "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.prCheck.returnToImplementation.maxReturns"
+        },
+        {
+          "module": "scripts/implement/lib/pr-check-return.mjs",
+          "export": "RETURN_DEFAULTS",
+          "path": "maxReturns"
+        }
+      ]
+    },
+    {
+      "id": "minSeverity",
+      "group": "loops",
+      "label": "returnToImplementation.minSeverity",
+      "kind": "config",
+      "config": "implement.prCheck.returnToImplementation.minSeverity",
+      "type": "enum",
+      "values": [
+        "blocking",
+        "major",
+        "minor"
+      ],
+      "default": "major",
+      "help": "The least severe production finding that returns; below it pr-check-fixer handles it.",
+      "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.prCheck.returnToImplementation.minSeverity"
+        },
+        {
+          "module": "scripts/implement/lib/pr-check-return.mjs",
+          "export": "RETURN_DEFAULTS",
+          "path": "minSeverity"
+        },
+        {
+          "module": "scripts/pipeline/lib/severity.mjs",
+          "export": "SEVERITIES",
+          "values": true
+        }
+      ]
+    },
+    {
+      "id": "ciFixRounds",
+      "group": "loops",
+      "label": "ciFixRounds",
+      "kind": "config",
+      "config": "implement.ciFixRounds",
+      "env": "PIPELINE_CI_FIX_ROUNDS",
+      "type": "integer",
+      "min": 0,
+      "max": 5,
+      "default": 1,
+      "help": "0 sends red CI straight to a person. Any value above 0 gives one fixing round per CI gate (the gate runs at most one).",
+      "doc": "configuration.md#stage-sections",
+      "checks": [
+        {
+          "module": "scripts/implement/lib/ci-wait.mjs",
+          "export": "ciFixRounds",
+          "call": [
+            {},
+            {}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "draftCycles",
+      "group": "loops",
+      "label": "preOpen.draftCycles",
+      "kind": "config",
+      "config": "implement.preOpen.draftCycles",
+      "type": "integer",
+      "min": 0,
+      "max": 5,
+      "default": 1,
+      "help": "Times an open PR may go back on hold for a CI fixing round before a person decides.",
+      "doc": "configuration.md#stage-sections",
+      "checks": [
+        {
+          "module": "scripts/implement/lib/pre-open.mjs",
+          "export": "PRE_OPEN_DEFAULTS",
+          "path": "draftCycles"
+        }
+      ]
+    },
+    {
+      "id": "afterOpen",
+      "group": "loops",
+      "label": "preOpen.afterOpen (hold mode)",
+      "kind": "config",
+      "config": "implement.preOpen.afterOpen",
+      "type": "enum",
+      "values": [
+        "draft",
+        "label",
+        "close-reopen"
+      ],
+      "default": "draft",
+      "help": "How an open PR is held while agents work on it again. close-reopen becomes draft on a host that cannot reopen (Bitbucket); factory doctor reports it.",
+      "doc": "configuration.md#stage-sections",
+      "checks": [
+        {
+          "module": "scripts/implement/lib/pre-open.mjs",
+          "export": "PRE_OPEN_DEFAULTS",
+          "path": "afterOpen"
+        },
+        {
+          "code": "scripts/implement/lib/pre-open.mjs",
+          "includes": "const AFTER_OPEN = ['draft', 'label', 'close-reopen']"
+        }
+      ]
+    },
+    {
+      "id": "ciWait",
+      "group": "loops",
+      "label": "ciWait",
+      "kind": "config",
+      "config": "implement.ciWait",
+      "type": "boolean",
+      "default": true,
+      "help": "false: no CI proof on the branch before the open and no wait for the PR's checks after it (the PR opens without the proof).",
+      "doc": "configuration.md#stage-sections",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.ciWait",
+          "absent": true
+        },
+        {
+          "code": "scripts/implement/lib/pre-open.mjs",
+          "includes": "settings.ciWait === false"
+        },
+        {
+          "code": "scripts/implement/lib/implement.mjs",
+          "includes": "settings.ciWait !== false"
+        }
+      ]
+    },
+    {
+      "id": "autoMerge",
+      "group": "gate",
+      "label": "autoMerge.enabled",
+      "kind": "config",
+      "config": "implement.autoMerge.enabled",
+      "type": "boolean",
+      "default": true,
+      "help": "The kill switch: off, every PR that would auto-merge waits for approvals instead.",
+      "doc": "ai-pipeline/review-gate.md#auto-merge",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.autoMerge.enabled"
+        }
+      ]
+    },
+    {
+      "id": "approvals.Low",
+      "group": "gate",
+      "label": "approvals.Low",
+      "kind": "config",
+      "config": "implement.reviewGate.approvals.Low",
+      "type": "integer",
+      "min": 1,
+      "max": 5,
+      "default": 1,
+      "help": "Approvals a Low PR needs when it does not auto-merge.",
+      "doc": "ai-pipeline/review-gate.md#approvals-policy",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.reviewGate.approvals.Low"
+        }
+      ]
+    },
+    {
+      "id": "approvals.Medium",
+      "group": "gate",
+      "label": "approvals.Medium",
+      "kind": "config",
+      "config": "implement.reviewGate.approvals.Medium",
+      "type": "integer",
+      "min": 1,
+      "max": 5,
+      "default": 1,
+      "help": "Approvals a Medium PR needs.",
+      "doc": "ai-pipeline/review-gate.md#approvals-policy",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.reviewGate.approvals.Medium"
+        }
+      ]
+    },
+    {
+      "id": "approvals.High",
+      "group": "gate",
+      "label": "approvals.High",
+      "kind": "config",
+      "config": "implement.reviewGate.approvals.High",
+      "type": "integer",
+      "min": 1,
+      "max": 5,
+      "default": 1,
+      "help": "Approvals a High PR needs.",
+      "doc": "ai-pipeline/review-gate.md#approvals-policy",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.reviewGate.approvals.High"
+        }
+      ]
+    },
+    {
+      "id": "approvals.Severe",
+      "group": "gate",
+      "label": "approvals.Severe",
+      "kind": "config",
+      "config": "implement.reviewGate.approvals.Severe",
+      "type": "integer",
+      "min": 1,
+      "max": 5,
+      "default": 1,
+      "help": "Approvals a Severe PR needs.",
+      "doc": "ai-pipeline/review-gate.md#approvals-policy",
+      "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.reviewGate.approvals.Severe"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "group": "products",
+      "label": "Code host",
+      "kind": "config",
+      "config": "host.type",
+      "type": "enum",
+      "values": [
+        "github",
+        "gitlab",
+        "azure-devops",
+        "bitbucket",
+        "custom"
+      ],
+      "default": "github",
+      "help": "Detected from the origin remote; github without one.",
+      "doc": "configuration.md#code-host-tracker-and-ci",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/products.mjs",
+          "export": "HOST_TYPES",
+          "values": true
+        },
+        {
+          "module": "scripts/pipeline/lib/products.mjs",
+          "export": "resolveProducts",
+          "call": [
+            {},
+            {
+              "remote": ""
+            }
+          ],
+          "path": "host.type"
+        }
+      ]
+    },
+    {
+      "id": "tracker",
+      "group": "products",
+      "label": "Tracker (board)",
+      "kind": "config",
+      "config": "tracker.type",
+      "type": "enum",
+      "values": [
+        "github",
+        "jira",
+        "azure-boards",
+        "gitlab",
+        "linear",
+        "custom"
+      ],
+      "default": "github",
+      "help": "The host's own tracker by default (Bitbucket has none: set it).",
+      "doc": "configuration.md#code-host-tracker-and-ci",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/products.mjs",
+          "export": "TRACKER_TYPES",
+          "values": true
+        },
+        {
+          "module": "scripts/pipeline/lib/products.mjs",
+          "export": "resolveProducts",
+          "call": [
+            {},
+            {
+              "remote": ""
+            }
+          ],
+          "path": "tracker.type"
+        }
+      ]
+    },
+    {
+      "id": "ciProvider",
+      "group": "products",
+      "label": "CI system",
+      "kind": "config",
+      "config": "ci.provider",
+      "type": "enum",
+      "values": [
+        "github-actions",
+        "gitlab-ci",
+        "azure-pipelines",
+        "jenkins",
+        "circleci",
+        "bitbucket-pipelines",
+        "custom"
+      ],
+      "default": "github-actions",
+      "help": "The host's own CI system by default. Whether it runs pipelines on a branch push (capability branchPipelines) decides between proving CI before the open and opening as a draft.",
+      "doc": "hosts-and-trackers.md#ci-systems",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/products.mjs",
+          "export": "CI_PROVIDERS",
+          "values": true
+        },
+        {
+          "module": "scripts/pipeline/lib/products.mjs",
+          "export": "resolveProducts",
+          "call": [
+            {},
+            {
+              "remote": ""
+            }
+          ],
+          "path": "ci.provider"
+        }
+      ]
+    },
+    {
+      "id": "ciCustomBranchPipelines",
+      "group": "products",
+      "label": "custom CI declares branchPipelines",
+      "kind": "config",
+      "config": "ci.capabilities.branchPipelines",
+      "type": "boolean",
+      "default": false,
+      "onlyWhen": {
+        "eq": [
+          "ciProvider",
+          "custom"
+        ]
+      },
+      "help": "A custom CI adapter's capabilities come from its describe operation and ci.capabilities.",
+      "doc": "hosts-and-trackers.md#ci-systems",
+      "checks": [
+        {
+          "code": "scripts/pipeline/lib/providers/custom.mjs",
+          "includes": "settings.capabilities"
+        }
+      ]
+    }
+  ],
+  "branchPipelines": {
+    "$comment": "The CI adapters' capability branchPipelines (scripts/pipeline/lib/ci/<provider>.mjs CAPABILITIES); custom: declared.",
+    "github-actions": true,
+    "gitlab-ci": true,
+    "azure-pipelines": false,
+    "jenkins": true,
+    "circleci": true,
+    "bitbucket-pipelines": true,
+    "custom": null
+  },
+  "normalize": [
+    {
+      "when": {
+        "eq": [
+          "entry",
+          "feature-epic"
+        ]
+      },
+      "set": {
+        "ticket": "feature"
+      },
+      "note": "A feature epic's tickets are stories: ticket kind is feature."
+    },
+    {
+      "when": {
+        "all": [
+          {
+            "eq": [
+              "entry",
+              "bug-epic"
+            ]
+          },
+          {
+            "eq": [
+              "ticket",
+              "feature"
+            ]
+          }
+        ]
+      },
+      "set": {
+        "ticket": "ui-bug"
+      },
+      "note": "A bug epic's tickets are bugs: ticket kind set to UI bug."
+    },
+    {
+      "when": {
+        "all": [
+          {
+            "eq": [
+              "ticket",
+              "ui-bug"
+            ]
+          },
+          {
+            "eq": [
+              "changes",
+              "backend"
+            ]
+          }
+        ]
+      },
+      "set": {
+        "changes": "both"
+      },
+      "note": "A UI bug's fix touches the frontend: change set to frontend and backend."
+    }
+  ],
+  "facts": [
+    {
+      "id": "isEpicEntry",
+      "label": "an epic run was asked for",
+      "is": {
+        "in": [
+          "entry",
+          [
+            "feature-epic",
+            "bug-epic"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "epicRun",
+      "label": "delivered in epic units",
+      "is": {
+        "all": [
+          {
+            "is": "isEpicEntry"
+          },
+          {
+            "eq": [
+              "delivery",
+              "epic"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "singleFlow",
+      "label": "a ticket delivers its own PR",
+      "is": {
+        "not": {
+          "is": "epicRun"
+        }
+      }
+    },
+    {
+      "id": "shapeEpic",
+      "label": "one epic branch and one PR",
+      "is": {
+        "all": [
+          {
+            "is": "epicRun"
+          },
+          {
+            "any": [
+              {
+                "eq": [
+                  "grouping",
+                  "epic"
+                ]
+              },
+              {
+                "all": [
+                  {
+                    "eq": [
+                      "grouping",
+                      "auto"
+                    ]
+                  },
+                  {
+                    "eq": [
+                      "entry",
+                      "feature-epic"
+                    ]
+                  },
+                  {
+                    "eq": [
+                      "prSplit",
+                      "epic"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "shapeFeatureGroups",
+      "label": "a feature epic split into PRs",
+      "is": {
+        "all": [
+          {
+            "is": "epicRun"
+          },
+          {
+            "eq": [
+              "grouping",
+              "auto"
+            ]
+          },
+          {
+            "eq": [
+              "entry",
+              "feature-epic"
+            ]
+          },
+          {
+            "in": [
+              "prSplit",
+              [
+                "story",
+                "groups"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "shapeBugGroups",
+      "label": "bug groups (strict bug majority, or grouping ticket)",
+      "is": {
+        "all": [
+          {
+            "is": "epicRun"
+          },
+          {
+            "not": {
+              "is": "shapeEpic"
+            }
+          },
+          {
+            "not": {
+              "is": "shapeFeatureGroups"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "epicPlanner",
+      "label": "the epic plan runs",
+      "is": {
+        "all": [
+          {
+            "is": "epicRun"
+          },
+          {
+            "not": {
+              "eq": [
+                "grouping",
+                "ticket"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "isBug",
+      "label": "the ticket is a bug",
+      "is": {
+        "in": [
+          "ticket",
+          [
+            "ui-bug",
+            "backend-bug"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "bugUnit",
+      "label": "the PR is a bug-fix PR (rated by the gate)",
+      "is": {
+        "any": [
+          {
+            "all": [
+              {
+                "is": "singleFlow"
+              },
+              {
+                "is": "isBug"
+              }
+            ]
+          },
+          {
+            "is": "shapeBugGroups"
+          }
+        ]
+      }
+    },
+    {
+      "id": "frontendChange",
+      "label": "the change touches the frontend",
+      "is": {
+        "in": [
+          "changes",
+          [
+            "frontend",
+            "both"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "backendChange",
+      "label": "the change touches the backend",
+      "is": {
+        "in": [
+          "changes",
+          [
+            "backend",
+            "both"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "branchPipelines",
+      "label": "the CI system runs pipelines on a branch push",
+      "is": {
+        "any": [
+          {
+            "in": [
+              "ciProvider",
+              [
+                "github-actions",
+                "gitlab-ci",
+                "jenkins",
+                "circleci",
+                "bitbucket-pipelines"
+              ]
+            ]
+          },
+          {
+            "all": [
+              {
+                "eq": [
+                  "ciProvider",
+                  "custom"
+                ]
+              },
+              {
+                "is": "ciCustomBranchPipelines"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "proveOnBranch",
+      "label": "CI is proven on the branch before the open",
+      "is": {
+        "all": [
+          {
+            "is": "ciWait"
+          },
+          {
+            "is": "branchPipelines"
+          }
+        ]
+      }
+    },
+    {
+      "id": "draftFirst",
+      "label": "the PR opens as a draft (or labelled) and is marked ready when green",
+      "is": {
+        "all": [
+          {
+            "is": "ciWait"
+          },
+          {
+            "not": {
+              "is": "branchPipelines"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "heldPr",
+      "label": "the PR is already open with a hold recorded (a re-delivery, or a resumed wait): it is updated, not opened, and released when green",
+      "walk": true,
+      "is": false
+    },
+    {
+      "id": "videoSection",
+      "label": "demo video of the changed specs",
+      "is": {
+        "all": [
+          {
+            "is": "demoVideo"
+          },
+          {
+            "is": "frontendChange"
+          }
+        ]
+      }
+    },
+    {
+      "id": "uiPair",
+      "label": "UI bug before/after video pair",
+      "is": {
+        "all": [
+          {
+            "is": "demoVideo"
+          },
+          {
+            "eq": [
+              "ticket",
+              "ui-bug"
+            ]
+          },
+          {
+            "is": "frontendChange"
+          }
+        ]
+      }
+    },
+    {
+      "id": "backendEvidence",
+      "label": "backend bug request evidence",
+      "is": {
+        "all": [
+          {
+            "is": "demoVideo"
+          },
+          {
+            "eq": [
+              "ticket",
+              "backend-bug"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "apiSection",
+      "label": "API changes section",
+      "is": {
+        "all": [
+          {
+            "is": "demoVideo"
+          },
+          {
+            "is": "backendChange"
+          }
+        ]
+      }
+    },
+    {
+      "id": "narrator",
+      "label": "the demo-narrator agent writes scripts",
+      "is": {
+        "all": [
+          {
+            "is": "demoVideo"
+          },
+          {
+            "not": {
+              "eq": [
+                "scriptScope",
+                "none"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "ticketPrCheck",
+      "label": "the ticket's own PR check is waited for",
+      "is": {
+        "all": [
+          {
+            "is": "singleFlow"
+          },
+          {
+            "is": "pr"
+          }
+        ]
+      }
+    },
+    {
+      "id": "returnsOn",
+      "label": "PR check findings can return to implementation",
+      "is": {
+        "all": [
+          {
+            "is": "ticketPrCheck"
+          },
+          {
+            "is": "returnEnabled"
+          }
+        ]
+      }
+    },
+    {
+      "id": "unitPrCheck",
+      "label": "the unit's PR check runs",
+      "is": {
+        "all": [
+          {
+            "is": "epicRun"
+          },
+          {
+            "not": {
+              "eq": [
+                "epicPrCheck",
+                "off"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "ciFix",
+      "label": "red CI gets a fixing round",
+      "is": {
+        "gt": [
+          "ciFixRounds",
+          0
+        ]
+      }
+    },
+    {
+      "id": "fixAfterOpen",
+      "label": "a failing check after the open gets a hold and a fixing round",
+      "is": {
+        "all": [
+          {
+            "is": "ciFix"
+          },
+          {
+            "gt": [
+              "draftCycles",
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "autoMergeEligible",
+      "label": "the gate can auto-merge",
+      "is": {
+        "all": [
+          {
+            "is": "bugUnit"
+          },
+          {
+            "is": "autoMerge"
+          },
+          {
+            "eq": [
+              "severity",
+              "Low"
+            ]
+          },
+          {
+            "eq": [
+              "confidence",
+              "high"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "approvalsNeeded",
+      "label": "approvals this severity needs",
+      "select": [
+        "severity",
+        {
+          "Low": "approvals.Low",
+          "Medium": "approvals.Medium",
+          "High": "approvals.High",
+          "Severe": "approvals.Severe"
+        }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "node": "run",
+      "when": {
+        "not": {
+          "eq": [
+            "entry",
+            "resume"
+          ]
+        }
+      }
+    },
+    {
+      "node": "resume",
+      "when": {
+        "eq": [
+          "entry",
+          "resume"
+        ]
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "run",
+      "label": "Start the run",
+      "kind": "harness",
+      "lane": null,
+      "layout": {
+        "row": 0,
+        "col": 1
+      },
+      "desc": "implement run (a ticket, or --epic for every ticket of an epic) refuses to start while another run is active here, recovers a dead run's daemons, fetches the tickets and plans the batch in Blocked-by order.",
+      "settings": [
+        "entry",
+        "pr",
+        "delivery"
+      ],
+      "doc": "ai-pipeline/implement.md#what-happens"
+    },
+    {
+      "id": "resume",
+      "label": "implement resume / requeue",
+      "kind": "harness",
+      "lane": null,
+      "layout": {
+        "row": 0,
+        "col": 0
+      },
+      "decision": "resume",
+      "desc": "Continues a run that stopped, from its saved phase, or (requeue) runs again a ticket a person resolved or reopened. A PR that did not open (pr-refused, gate-assessment-failed) replays the delivery from the analysis gate and push, even under needs-human. A stopped CI wait resumes there; when a hold is still recorded (hold-failed, release-unconfirmed, a held or draft PR) it is released once green, with the CI wait off too.",
+      "settings": [
+        "entry"
+      ],
+      "doc": "ai-pipeline/implement.md#resume-and-interrupted-runs"
+    },
+    {
+      "id": "claim",
+      "label": "Sync the board, claim the card",
+      "kind": "harness",
+      "lane": "In Progress",
+      "layout": {
+        "row": 1,
+        "col": 1
+      },
+      "decision": "claim",
+      "desc": "board sync, then the claim moves the card to In Progress from Backlog, Ready, Failed or In Progress (Pending Review and Done only with --force); a card another machine holds is skipped unless --takeover.",
+      "settings": [
+        "tracker"
+      ],
+      "doc": "ai-pipeline/board.md#the-state-machine"
+    },
+    {
+      "id": "entry",
+      "label": "One ticket or an epic?",
+      "kind": "harness",
+      "route": true,
+      "lane": "In Progress",
+      "layout": {
+        "row": 2,
+        "col": 1
+      },
+      "desc": "A ticket delivers its own PR; an epic run (implement.delivery epic) is delivered in units. --delivery story runs an epic's tickets one PR each, with no epic plan.",
+      "settings": [
+        "entry",
+        "delivery"
+      ],
+      "doc": "ai-pipeline/implement.md#delivery-modes"
+    },
+    {
+      "id": "reopenHold",
+      "label": "Hold the open PR",
+      "kind": "harness",
+      "lane": null,
+      "layout": {
+        "row": 2,
+        "col": 0
+      },
+      "desc": "After the claim, with --pr, a ticket whose PR is still open (reopened, sent back, or its last record names an open or unreadable PR: one host read at plan time, after the skip, resume and reopen routing, none under --dry-run) runs on that PR's branch: the PR is put on hold (preOpen.afterOpen) and the hold confirmed before any agent runs; a hold already confirmed is kept. The reopened label stays until then. Without --pr nothing is held. After a merge it becomes a follow-up branch and a new PR instead.",
+      "settings": [
+        "afterOpen"
+      ],
+      "doc": "ai-pipeline/review-gate.md#human-reopens",
+      "decision": "reopenHold"
+    },
+    {
+      "id": "requeue",
+      "label": "A person resolves or reopens it",
+      "kind": "person",
+      "lane": "Ready",
+      "layout": {
+        "row": 1,
+        "col": 0
+      },
+      "desc": "The person answers the questions on the Failed ticket and ticks Resolved, or reopens a delivered bug fix (or sends its PR back); board sync moves it to Ready and implement requeue (or run) claims it again, with the answers as binding decisions.",
+      "settings": [],
+      "doc": "ai-pipeline/escalations.md#questions-and-the-resolve-checkbox"
+    },
+    {
+      "id": "tracker",
+      "label": "Tracker",
+      "kind": "service",
+      "lane": null,
+      "layout": {
+        "row": 1,
+        "col": 3
+      },
+      "labelRef": "tracker",
+      "desc": "The ticket board, through the tracker adapter: lanes, ticket text, evidence, questions.",
+      "settings": [
+        "tracker"
+      ],
+      "doc": "configuration.md#code-host-tracker-and-ci",
+      "spine": false
+    },
+    {
+      "id": "epicPlan",
+      "label": "Epic plan",
+      "kind": "agent",
+      "agents": [
+        "implementer (orchestrator)"
+      ],
+      "lane": "In Progress",
+      "layout": {
+        "row": 3,
+        "col": 1
+      },
+      "decision": "epicPlan",
+      "when": {
+        "is": "epicPlanner"
+      },
+      "desc": "The orchestrator writes the epic's design note (contracts, journeys) and, for planned groups, the PR groups the harness validates; grouping ticket skips it.",
+      "settings": [
+        "grouping",
+        "prSplit"
+      ],
+      "doc": "ai-pipeline/implement.md#epic-delivery"
+    },
+    {
+      "id": "shape",
+      "label": "Delivery units",
+      "kind": "harness",
+      "lane": "In Progress",
+      "layout": {
+        "row": 4,
+        "col": 1
+      },
+      "when": {
+        "is": "epicRun"
+      },
+      "desc": "The units the epic is delivered in: one epic branch, or PR groups (one per story, planned groups, or bug groups) stacked on the groups they depend on.",
+      "settings": [
+        "grouping",
+        "prSplit",
+        "delivery"
+      ],
+      "doc": "ai-pipeline/implement.md#delivery-modes"
+    },
+    {
+      "id": "foundation",
+      "label": "Foundation pair",
+      "kind": "agent",
+      "agents": [
+        "pair-implementer",
+        "pair-verifier"
+      ],
+      "lane": "In Progress",
+      "layout": {
+        "row": 5,
+        "col": 2
+      },
+      "decision": "foundation",
+      "when": {
+        "is": "shapeEpic"
+      },
+      "desc": "When the design note names a foundation (shared contracts), one pair builds it on the epic branch before the stories.",
+      "settings": [],
+      "doc": "ai-pipeline/implement.md#epic-delivery"
+    },
+    {
+      "id": "plan",
+      "label": "Orchestrator plans",
+      "kind": "agent",
+      "agents": [
+        "implementer (orchestrator)"
+      ],
+      "lane": "In Progress",
+      "layout": {
+        "row": 6,
+        "col": 1
+      },
+      "decision": "plan",
+      "desc": "Keeps the ticket (self mode) or plans up to implement.maxSubtasks subtasks with owned files; the harness validates the plan. In an epic this runs for every ticket of the unit.",
+      "settings": [],
+      "doc": "ai-pipeline/implement.md#plan"
+    },
+    {
+      "id": "pairs",
+      "label": "Implementer",
+      "kind": "agent",
+      "agents": [
+        "pair-implementer",
+        "implementer (self mode, fixes)"
+      ],
+      "lane": "In Progress",
+      "layout": {
+        "row": 7,
+        "col": 1
+      },
+      "desc": "A pair-implementer writes each subtask in its own worktree (the orchestrator itself in self mode); review fixes, product bugs and PR check returns come back here.",
+      "settings": [],
+      "doc": "ai-pipeline/implement.md#what-happens"
+    },
+    {
+      "id": "harnessChecks",
+      "label": "Harness checks",
+      "kind": "harness",
+      "lane": "In Progress",
+      "layout": {
+        "row": 8,
+        "col": 1
+      },
+      "decision": "harnessChecks",
+      "desc": "After every implementer run: language-server errors, whitespace-only hunks, the repository's lint on changed lines and, with static analysis on, the analysis tools; a secret only in unpushed commits is folded out by the harness.",
+      "settings": [
+        "analysis",
+        "analysisBounces"
+      ],
+      "doc": "ai-pipeline/implement.md#static-analysis-in-the-pair-rounds"
+    },
+    {
+      "id": "verifier",
+      "label": "Pair verifier",
+      "kind": "agent",
+      "agents": [
+        "pair-verifier",
+        "pair-ui-verifier"
+      ],
+      "councilStages": [
+        "pairVerify",
+        "pairUiVerify"
+      ],
+      "lane": "In Progress",
+      "layout": {
+        "row": 9,
+        "col": 1
+      },
+      "decision": "verifier",
+      "desc": "A fresh read-only verifier (pair-ui-verifier on a test-stack slot for UI subtasks) or a council checks each round; approved subtasks are merged into the story branch.",
+      "settings": [
+        "council.pairVerify",
+        "council.pairUiVerify",
+        "maxPairRounds"
+      ],
+      "doc": "ai-pipeline/implement.md#ui-verification"
+    },
+    {
+      "id": "policy",
+      "label": "Policy engine",
+      "kind": "harness",
+      "lane": "In Progress",
+      "layout": {
+        "row": 10,
+        "col": 1
+      },
+      "decision": "policy",
+      "desc": "The architecture policy engine runs first, deterministically; a block goes back to the implementer.",
+      "settings": [],
+      "doc": "ai-pipeline/review.md#the-policy-step-engine-and-policy"
+    },
+    {
+      "id": "review",
+      "label": "Architecture review",
+      "kind": "agent",
+      "agents": [
+        "architecture-reviewer"
+      ],
+      "councilStages": [
+        "review"
+      ],
+      "lane": "In Progress",
+      "layout": {
+        "row": 11,
+        "col": 1
+      },
+      "decision": "review",
+      "desc": "A fresh architecture-reviewer (or a council) approves the code on disk; approval moves the card to Testing.",
+      "settings": [
+        "council.review",
+        "reviewMaxRounds"
+      ],
+      "doc": "ai-pipeline/review.md#the-policy-step-engine-and-policy"
+    },
+    {
+      "id": "testPlan",
+      "label": "Test plan",
+      "kind": "agent",
+      "agents": [
+        "test-planner",
+        "test-plan-verifier"
+      ],
+      "councilStages": [
+        "testPlan"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 12,
+        "col": 1
+      },
+      "decision": "testPlan",
+      "desc": "Feature verification workflow 1: the test plan, checked by test-plan-verifier (or a council); required cases from the PR check or the pairs are added.",
+      "settings": [
+        "council.testPlan"
+      ],
+      "doc": "ai-pipeline/feature-verification.md#workflow-1-story-to-test-plan"
+    },
+    {
+      "id": "fv",
+      "label": "Test automation",
+      "kind": "agent",
+      "agents": [
+        "test-automation",
+        "test-automation-verifier"
+      ],
+      "councilStages": [
+        "testAutomation"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 13,
+        "col": 1
+      },
+      "decision": "fv",
+      "desc": "Workflow 2: automated tests for every case, checked by test-automation-verifier (or a council); a test that finds a product bug sends the change back.",
+      "settings": [
+        "council.testAutomation",
+        "maxBugFixCycles"
+      ],
+      "doc": "ai-pipeline/feature-verification.md#workflow-2-implementation-to-automated-tests"
+    },
+    {
+      "id": "unit",
+      "label": "Merged into the unit branch",
+      "kind": "harness",
+      "lane": "Testing",
+      "layout": {
+        "row": 14,
+        "col": 2
+      },
+      "when": {
+        "is": "epicRun"
+      },
+      "desc": "Each verified ticket merges into its unit's branch (the epic branch or its group branch); the per-ticket PR check is skipped in units.",
+      "settings": [],
+      "doc": "ai-pipeline/implement.md#epic-delivery"
+    },
+    {
+      "id": "doneNoPr",
+      "label": "Run ends: done, no PR",
+      "kind": "record",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 14,
+        "col": 3
+      },
+      "end": true,
+      "desc": "Without --pr: outcome done, the ticket published, the card to Pending Review with its evidence; the branch stays local (an epic unit stays merged on its branch).",
+      "settings": [
+        "pr"
+      ],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    },
+    {
+      "id": "journeys",
+      "label": "Unit feature verification",
+      "kind": "agent",
+      "agents": [
+        "test-planner",
+        "test-automation",
+        "verifiers"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 15,
+        "col": 2
+      },
+      "decision": "journeys",
+      "when": {
+        "all": [
+          {
+            "is": "epicRun"
+          },
+          {
+            "is": "epicFeatureVerification"
+          }
+        ]
+      },
+      "desc": "The cross-story journeys, verified once per unit (a split feature epic: on the last journey group, stacked on the others; a bug group: only journeys wholly inside it); tests later tickets made stale are re-verified.",
+      "settings": [
+        "epicFeatureVerification"
+      ],
+      "doc": "ai-pipeline/implement.md#epic-delivery"
+    },
+    {
+      "id": "unitPrCheck",
+      "label": "Unit PR check",
+      "kind": "agent",
+      "agents": [
+        "pr-check critics",
+        "defender",
+        "judge",
+        "pr-check-fixer"
+      ],
+      "councilStages": [
+        "prCheck"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 16,
+        "col": 2
+      },
+      "when": {
+        "is": "unitPrCheck"
+      },
+      "desc": "Every ticket of the unit checked against the unit's diff in one run; fix mode lets pr-check-fixer fix upheld findings, and an escalated check stops the unit after the push.",
+      "settings": [
+        "epicPrCheck",
+        "council.prCheck"
+      ],
+      "doc": "ai-pipeline/pr-check.md#several-tickets-an-epic"
+    },
+    {
+      "id": "prCheck",
+      "label": "PR check",
+      "kind": "agent",
+      "agents": [
+        "pr-check critics",
+        "defender",
+        "judge"
+      ],
+      "councilStages": [
+        "prCheck"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 17,
+        "col": 1
+      },
+      "decision": "prCheck",
+      "when": {
+        "is": "ticketPrCheck"
+      },
+      "desc": "Critics (or council members), a defender and a judge debate the change against its ticket; the harness computes the score and routes each upheld finding by what would resolve it. Not waited for when the Stop hook's check is off (prCheck.hook.enabled false, or PR_CHECK_SKIP=1): delivery goes straight on.",
+      "settings": [
+        "council.prCheck",
+        "returnEnabled",
+        "maxReturns",
+        "minSeverity"
+      ],
+      "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation"
+    },
+    {
+      "id": "fixer",
+      "label": "pr-check-fixer",
+      "kind": "agent",
+      "agents": [
+        "pr-check-fixer"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 18,
+        "col": 0
+      },
+      "when": {
+        "is": "ticketPrCheck"
+      },
+      "desc": "Fixes findings confined to tests, docs, records, PR text or style, and production findings below minSeverity (implement.prCheck.fixUntil, bugFixUntil).",
+      "settings": [
+        "minSeverity"
+      ],
+      "doc": "ai-pipeline/pr-check.md#before-the-pr-exists",
+      "spine": false
+    },
+    {
+      "id": "parity",
+      "label": "Publish, CI parity, re-verify",
+      "kind": "harness",
+      "calls": [
+        "pr-check-fixer (parity failures)",
+        "feature verification (other tickets)"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 18,
+        "col": 1
+      },
+      "decision": "parity",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "not": {
+              "is": "shapeEpic"
+            }
+          }
+        ]
+      },
+      "desc": "The ticket is published and fetched back as CI reads it, what CI runs on the PR runs here first (failures go through a fixing round), and another ticket's verified plan or tests this change edited is verified again. For a single ticket, implement.ciParity false skips the parity run; a bug group's parity run still runs. The setting also skips the pre-push analysis gate, for every delivery.",
+      "settings": [],
+      "doc": "ai-pipeline/ci-parity.md"
+    },
+    {
+      "id": "analysisGate",
+      "label": "Pre-push analysis gate",
+      "kind": "harness",
+      "lane": "Testing",
+      "layout": {
+        "row": 19,
+        "col": 1
+      },
+      "decision": "analysisGate",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "analysis"
+          }
+        ]
+      },
+      "desc": "CI's analysis jobs (rendered only with static analysis on) run with CI's own script on a clean checkout of the head before anything is pushed; a secret the commit gate held still in the worktree stops the push. implement.ciParity false skips the gate too.",
+      "settings": [
+        "analysis"
+      ],
+      "doc": "ai-pipeline/analysis.md#ci"
+    },
+    {
+      "id": "analysisFix",
+      "label": "Analysis fixing round",
+      "kind": "agent",
+      "agents": [
+        "pr-check-fixer"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 20,
+        "col": 0
+      },
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "analysis"
+          }
+        ]
+      },
+      "desc": "One fixing round on the blocking findings; a secret only in unpushed commits is folded out by the harness.",
+      "settings": [],
+      "doc": "ai-pipeline/analysis.md#ci",
+      "spine": false
+    },
+    {
+      "id": "push",
+      "label": "Push the branch",
+      "kind": "harness",
+      "lane": "Testing",
+      "layout": {
+        "row": 20,
+        "col": 1
+      },
+      "decision": "push",
+      "when": {
+        "is": "pr"
+      },
+      "desc": "The branch is pushed once the records it carries are redacted and scanned; then the tickets are published.",
+      "settings": [],
+      "doc": "ai-pipeline/analysis.md#secrets-in-records-and-posts-redaction"
+    },
+    {
+      "id": "ownerQ",
+      "label": "Owner question or unfinished check?",
+      "kind": "harness",
+      "lane": "Testing",
+      "layout": {
+        "row": 21,
+        "col": 1
+      },
+      "decision": "ownerQ",
+      "when": {
+        "is": "pr"
+      },
+      "desc": "Checked after the push, before the CI proof: an owner question from the PR check, or a PR check that did not finish (or a unit check that escalated), opens no PR.",
+      "settings": [],
+      "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
+    },
+    {
+      "id": "branchCi",
+      "label": "CI proven on the branch head",
+      "kind": "harness",
+      "lane": "Testing",
+      "layout": {
+        "row": 22,
+        "col": 1
+      },
+      "decision": "branchCi",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "proveOnBranch"
+          }
+        ]
+      },
+      "desc": "Every pipeline a push of the branch runs must complete green on that exact SHA (a skipped run is not a pass, a retry-only pass is a finding); if the base moved it is merged in and the new head proven again.",
+      "settings": [
+        "ciWait",
+        "ciProvider",
+        "ciFixRounds"
+      ],
+      "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
+    },
+    {
+      "id": "ciFixRound",
+      "label": "CI fixing round",
+      "kind": "agent",
+      "agents": [
+        "pr-check-fixer"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 23,
+        "col": 0
+      },
+      "decision": "ciFixRound",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "proveOnBranch"
+          },
+          {
+            "is": "ciFix"
+          }
+        ]
+      },
+      "desc": "One fixing round on the failing checks (the PR check in fix mode, pushed), then the harness's own way out once (CI's analysis jobs here, the secret decision table), then the head is proven again.",
+      "settings": [
+        "ciFixRounds"
+      ],
+      "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
+    },
+    {
+      "id": "ciSystem",
+      "label": "CI system",
+      "kind": "service",
+      "lane": null,
+      "layout": {
+        "row": 26,
+        "col": 3
+      },
+      "labelRef": "ciProvider",
+      "desc": "The CI adapter reads the head's runs, statuses and logs.",
+      "settings": [
+        "ciProvider",
+        "ciCustomBranchPipelines"
+      ],
+      "doc": "hosts-and-trackers.md#ci-systems",
+      "spine": false
+    },
+    {
+      "id": "bug",
+      "label": "A bug fix?",
+      "kind": "harness",
+      "route": true,
+      "lane": "Testing",
+      "layout": {
+        "row": 24,
+        "col": 1
+      },
+      "when": {
+        "is": "pr"
+      },
+      "desc": "A bug ticket (type bug or a BUG-n key), or a bug group of a bug epic, is rated by the review gate; a feature PR, a feature epic or its groups are not.",
+      "settings": [
+        "ticket",
+        "entry"
+      ],
+      "doc": "ai-pipeline/review-gate.md#assessment"
+    },
+    {
+      "id": "triage",
+      "label": "Bug triage",
+      "kind": "agent",
+      "agents": [
+        "bug-triage"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 25,
+        "col": 1
+      },
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "bugUnit"
+          }
+        ]
+      },
+      "desc": "The read-only bug-triage agent rates each bug ticket (Impact, Complexity, Fix risk) from the branch's change; the harness computes Severity and Confidence. A resumed delivery reuses a saved rating. If the active gate cannot assess, no new PR opens. With the review gate off (implement.reviewGate.enabled false, or REVIEW_GATE=0) nothing is rated or published.",
+      "settings": [
+        "severity",
+        "confidence"
+      ],
+      "doc": "ai-pipeline/review-gate.md#assessment",
+      "decision": "triage"
+    },
+    {
+      "id": "headScan",
+      "label": "Static analysis of the head",
+      "kind": "harness",
+      "lane": "Testing",
+      "layout": {
+        "row": 26,
+        "col": 1
+      },
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "analysis"
+          }
+        ]
+      },
+      "desc": "The delivered head's own scan for the PR body (deterministic; a head already scanned is not scanned again).",
+      "settings": [
+        "analysis"
+      ],
+      "doc": "ai-pipeline/analysis.md#metrics-pr-body-disk",
+      "spine": false
+    },
+    {
+      "id": "evidence",
+      "label": "Demo video",
+      "kind": "harness",
+      "calls": [
+        "demo-narrator"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 27,
+        "col": 1
+      },
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "videoSection"
+          }
+        ]
+      },
+      "desc": "The changed e2e specs recorded in demo mode on a test-stack slot of this machine, narrated (demo-narrator, by narration scope) and subtitled, checked for secrets and stored for this head; a failed step is a note, never a hold.",
+      "settings": [
+        "demoVideo",
+        "scriptScope",
+        "changes"
+      ],
+      "doc": "ai-pipeline/pr-demo-video.md#how-it-works"
+    },
+    {
+      "id": "uiPair",
+      "label": "UI bug: before / after videos",
+      "kind": "harness",
+      "calls": [
+        "demo-narrator"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 28,
+        "col": 1
+      },
+      "decision": "uiPair",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "uiPair"
+          }
+        ]
+      },
+      "desc": "The bug's reproducing browser case recorded against the merge base (it must fail at its check) and on the fix (it passes), narrated as a pair.",
+      "settings": [
+        "requireBefore",
+        "scriptScope"
+      ],
+      "doc": "ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix"
+    },
+    {
+      "id": "apiEvidence",
+      "label": "Backend bug: request evidence",
+      "kind": "harness",
+      "calls": [
+        "demo-narrator (prose)"
+      ],
+      "lane": "Testing",
+      "layout": {
+        "row": 29,
+        "col": 1
+      },
+      "decision": "apiEvidence",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "backendEvidence"
+          }
+        ]
+      },
+      "desc": "The reproduction case's requests and responses recorded on the base and on the fix: only a Playwright assertion that fails after the block's first recorded response counts. A Reproduction comment on the ticket (one not posted is a minor finding and a note in the PR) and a Before / After section in the PR (a backend-only change films nothing). Card fields and numbers are masked in this evidence only, by JSON key, form key and check digit.",
+      "settings": [
+        "requireBefore"
+      ],
+      "doc": "ai-pipeline/pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix"
+    },
+    {
+      "id": "apiChanges",
+      "label": "API changes section",
+      "kind": "harness",
+      "lane": "Testing",
+      "layout": {
+        "row": 30,
+        "col": 1
+      },
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "apiSection"
+          }
+        ]
+      },
+      "desc": "One entry per HTTP endpoint added, changed or removed (route extractor or OpenAPI diff), with example calls the specs recorded; any change with backend code gets it, mixed frontend and backend included.",
+      "settings": [
+        "demoVideo",
+        "changes"
+      ],
+      "doc": "ai-pipeline/pr-demo-video.md#api-changes"
+    },
+    {
+      "id": "open",
+      "label": "Open the PR, or update the held one",
+      "kind": "harness",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 31,
+        "col": 1
+      },
+      "decision": "open",
+      "when": {
+        "is": "pr"
+      },
+      "desc": "The body is written whole and the PR opens once on the proven head (deliverFinished); on a CI system without branch pipelines it opens as a draft, confirmed by re-reading the PR, with the work-in-progress label as fallback. A PR already open and held (a re-delivery) gets its body refreshed instead: the same PR, never a second one.",
+      "settings": [
+        "host",
+        "ciProvider",
+        "ciWait"
+      ],
+      "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
+    },
+    {
+      "id": "codeHost",
+      "label": "Code host",
+      "kind": "service",
+      "lane": null,
+      "layout": {
+        "row": 30,
+        "col": 3
+      },
+      "labelRef": "host",
+      "desc": "The host adapter pushes, opens, holds and merges PRs.",
+      "settings": [
+        "host"
+      ],
+      "doc": "configuration.md#code-host-tracker-and-ci",
+      "spine": false
+    },
+    {
+      "id": "gatePublish",
+      "label": "Gate publishes the rating",
+      "kind": "harness",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 32,
+        "col": 1
+      },
+      "decision": "gatePublish",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "bugUnit"
+          }
+        ]
+      },
+      "desc": "The saved rating is published on the PR, the tickets and the board with --no-agent: no model call. An unreadable rating is published as not assessed (review, needs-human). A feature PR gets no rating. Skipped when the review gate is off.",
+      "settings": [],
+      "doc": "ai-pipeline/review-gate.md#assessment"
+    },
+    {
+      "id": "checks",
+      "label": "Wait for the PR's checks",
+      "kind": "harness",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 33,
+        "col": 1
+      },
+      "decision": "checks",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "ciWait"
+          }
+        ]
+      },
+      "desc": "The PR's own checks are waited for with no fixing agent; a check only a PR runs, or a moved base, can still fail here. With implement.ciWait false nothing is waited for and the run goes on as green.",
+      "settings": [
+        "ciWait",
+        "draftCycles",
+        "ciFixRounds"
+      ],
+      "doc": "ai-pipeline/implement.md#after-the-open"
+    },
+    {
+      "id": "hold",
+      "label": "Hold the PR",
+      "kind": "harness",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 34,
+        "col": 2
+      },
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "ciWait"
+          },
+          {
+            "is": "fixAfterOpen"
+          }
+        ]
+      },
+      "desc": "The PR goes back to draft, gets the work-in-progress label, or is closed (preOpen.afterOpen) before any agent works on it again; Bitbucket cannot reopen, so close-reopen becomes draft there. The hold is confirmed by re-reading the PR (up to 3 reads, 1 s apart); a hold that is not confirmed stops the run before any agent. A PR already confirmed on hold (draft-first, a re-delivery) keeps its hold.",
+      "settings": [
+        "afterOpen",
+        "draftCycles"
+      ],
+      "doc": "ai-pipeline/implement.md#after-the-open",
+      "decision": "hold"
+    },
+    {
+      "id": "holdFix",
+      "label": "CI fixing round on hold",
+      "kind": "agent",
+      "agents": [
+        "pr-check-fixer"
+      ],
+      "lane": "Pending Review",
+      "layout": {
+        "row": 35,
+        "col": 2
+      },
+      "decision": "holdFix",
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "ciWait"
+          },
+          {
+            "is": "fixAfterOpen"
+          }
+        ]
+      },
+      "desc": "One fixing round on the branch while the PR is held; still failing with cycles left, another round on the same hold, at most preOpen.draftCycles rounds in all.",
+      "settings": [
+        "draftCycles",
+        "ciFixRounds"
+      ],
+      "doc": "ai-pipeline/implement.md#after-the-open"
+    },
+    {
+      "id": "ready",
+      "label": "Release the hold, mark ready",
+      "kind": "harness",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 36,
+        "col": 2
+      },
+      "when": {
+        "is": "pr"
+      },
+      "desc": "Every hold not yet released (a draft-first open, a re-delivered or resumed PR, a fixing round) is released only when every expected check is green on the head, with the CI wait off too, each release confirmed by re-reading the PR; the run records ready only when all are confirmed.",
+      "settings": [
+        "afterOpen"
+      ],
+      "doc": "ai-pipeline/implement.md#after-the-open",
+      "decision": "ready"
+    },
+    {
+      "id": "runDone",
+      "label": "Run ends: outcome done",
+      "kind": "record",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 37,
+        "col": 1
+      },
+      "when": {
+        "is": "pr"
+      },
+      "desc": "The run reports done with the PR open; the card stays in Pending Review. Run outcome done is not the board's Done lane, which needs the merge.",
+      "settings": [],
+      "doc": "ai-pipeline/implement.md#after-the-open"
+    },
+    {
+      "id": "gate",
+      "label": "Review gate decides",
+      "kind": "harness",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 38,
+        "col": 1
+      },
+      "decision": "gate",
+      "when": {
+        "is": "pr"
+      },
+      "desc": "At the open and at every board sync. A bug PR auto-merges only when: every ticket assessed and Low, high confidence, no owner question, no human reopen, no delivery waiting for a person, the PR itself Low (no floor or bump), checks green, not already sent to people, unchanged since assessed, the delivery check ran on this head, and autoMerge.enabled. Otherwise approvals:N and needs-human. A feature PR waits under the host's own rules. With the review gate off, nothing is rated or auto-merged and the PR waits under the host's rules.",
+      "settings": [
+        "autoMerge",
+        "severity",
+        "confidence",
+        "approvals.Low",
+        "approvals.Medium",
+        "approvals.High",
+        "approvals.Severe"
+      ],
+      "doc": "ai-pipeline/review-gate.md#the-gate"
+    },
+    {
+      "id": "autoMerge",
+      "label": "Auto-merge",
+      "kind": "harness",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 39,
+        "col": 2
+      },
+      "when": {
+        "all": [
+          {
+            "is": "pr"
+          },
+          {
+            "is": "autoMergeEligible"
+          }
+        ]
+      },
+      "desc": "Merged through the host adapter, bound to the head the gate assessed (where the host can; Bitbucket re-reads the head before merging).",
+      "settings": [
+        "autoMerge",
+        "host"
+      ],
+      "doc": "ai-pipeline/review-gate.md#auto-merge"
+    },
+    {
+      "id": "approval",
+      "label": "A person reviews",
+      "kind": "person",
+      "lane": "Pending Review",
+      "layout": {
+        "row": 39,
+        "col": 1
+      },
+      "decision": "approval",
+      "when": {
+        "is": "pr"
+      },
+      "desc": "Approvals counted by the review-quorum check on the latest push (bug PRs), or the repository's own branch rules (feature PRs).",
+      "settings": [],
+      "doc": "ai-pipeline/review-gate.md#enforcement-the-review-quorum-check"
+    },
+    {
+      "id": "merged",
+      "label": "Merged: card to Done",
+      "kind": "harness",
+      "lane": "Done",
+      "layout": {
+        "row": 40,
+        "col": 1
+      },
+      "end": true,
+      "when": {
+        "is": "pr"
+      },
+      "desc": "The issues close with the merge and board sync moves the cards to the Done lane.",
+      "settings": [],
+      "doc": "ai-pipeline/board.md#board-sync"
+    },
+    {
+      "id": "sentBack",
+      "label": "Sent back: reopen recorded",
+      "kind": "harness",
+      "lane": "In Progress",
+      "layout": {
+        "row": 40,
+        "col": 2
+      },
+      "when": {
+        "is": "pr"
+      },
+      "desc": "board sync records a human reopen (changes requested, card moved back, issue reopened): severity rises, the gate stays with people, and requeue or a run starts the ticket again.",
+      "settings": [],
+      "doc": "ai-pipeline/review-gate.md#human-reopens"
+    },
+    {
+      "id": "skipped",
+      "label": "Skipped",
+      "kind": "exit",
+      "lane": null,
+      "layout": {
+        "row": 3,
+        "col": 3
+      },
+      "outcome": [
+        "skipped"
+      ],
+      "remains": {
+        "branch": "unchanged",
+        "ticket": "the card where it was (another machine holds it, it waits for a person, or it is already implemented)",
+        "pr": "none"
+      },
+      "continue": "--takeover for a card another machine holds, --force for an implemented ticket; a ticket waiting for a person runs once it is resolved.",
+      "desc": "The claim is refused or the ticket is skipped.",
+      "settings": [],
+      "doc": "ai-pipeline/board.md#starting-the-pipeline"
+    },
+    {
+      "id": "epicFailed",
+      "label": "Epic plan failed",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 4,
+        "col": 3
+      },
+      "outcome": [
+        "plan-rejected",
+        "foundation-failed"
+      ],
+      "remains": {
+        "branch": "the epic branch with whatever the foundation committed",
+        "ticket": "every ticket blocked by the epic plan, with the findings",
+        "pr": "none"
+      },
+      "continue": "A person fixes the epic or its tickets; implement resume continues the saved epic state.",
+      "desc": "The epic plan or its foundation failed: no ticket runs.",
+      "settings": [],
+      "doc": "ai-pipeline/implement.md#epic-delivery"
+    },
+    {
+      "id": "implFailed",
+      "label": "Escalation: implementation",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 8,
+        "col": 3
+      },
+      "outcome": [
+        "plan-rejected",
+        "pair-exhausted",
+        "blocked",
+        "no-changes",
+        "merge-conflict",
+        "limit-agent-runs",
+        "limit-wall-clock"
+      ],
+      "remains": {
+        "branch": "the story branch in its worktree, not pushed",
+        "ticket": "the findings and up to three questions from the escalation-questions agent; card in Failed",
+        "pr": "none"
+      },
+      "epic": "In an epic the unit gets no PR, tickets that depend on it are skipped, and independent units go on.",
+      "continue": "Answer the questions on the ticket and tick Resolved; board sync moves it to Ready and implement requeue (or run <KEY>) runs it with the decisions.",
+      "desc": "Planning or a pair could not finish.",
+      "settings": [
+        "maxPairRounds"
+      ],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    },
+    {
+      "id": "reviewFailed",
+      "label": "Review escalated",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 11,
+        "col": 3
+      },
+      "outcome": [
+        "review-escalated",
+        "unresolved"
+      ],
+      "remains": {
+        "branch": "the story branch, not pushed; the escalation note in the worktree",
+        "ticket": "the blocking findings and questions; card in Failed",
+        "pr": "none"
+      },
+      "epic": "In an epic the unit gets no PR; dependents are skipped.",
+      "continue": "Answer on the ticket and tick Resolved (or delete the escalation note after fixing by hand); requeue or run it again.",
+      "desc": "The review did not approve within its rounds, or the implementer runs ran out.",
+      "settings": [
+        "reviewMaxRounds"
+      ],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    },
+    {
+      "id": "fvFailed",
+      "label": "Feature verification failed",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 13,
+        "col": 3
+      },
+      "outcome": [
+        "fv-product-bug",
+        "fv-escalated",
+        "fv-blocked-on-plan",
+        "fv-crashed",
+        "fv-timed-out"
+      ],
+      "remains": {
+        "branch": "the story branch with the plan and tests so far (not verified), not pushed",
+        "ticket": "the bugs or the escalation; card in Failed",
+        "pr": "none"
+      },
+      "epic": "In an epic the unit gets no PR; dependents are skipped.",
+      "continue": "Answer on the ticket and Resolve; crashed and timed-out runs resume with implement resume.",
+      "desc": "The plan or tests did not verify, or product bugs remained after the bug-fix cycles.",
+      "settings": [
+        "maxBugFixCycles"
+      ],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    },
+    {
+      "id": "unitFailed",
+      "label": "Unit gets no PR",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 15,
+        "col": 3
+      },
+      "outcome": [
+        "stories-failed",
+        "epic-fv-<status>",
+        "fv-reverify-failed"
+      ],
+      "remains": {
+        "branch": "the unit branch with the tickets merged so far",
+        "ticket": "the failed tickets in Failed; the epic's evidence comment",
+        "pr": "none for this unit; an already open group PR stays on hold"
+      },
+      "continue": "Resolve the failed tickets; implement resume (or the epic run again) continues the unit and skips units already delivered.",
+      "desc": "A ticket of the unit, the unit's journeys or a stale-test re-verification failed.",
+      "settings": [
+        "epicFeatureVerification"
+      ],
+      "doc": "ai-pipeline/implement.md#how-an-epic-is-split-into-prs"
+    },
+    {
+      "id": "unresolved",
+      "label": "Unresolved after returns",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 17,
+        "col": 3
+      },
+      "outcome": [
+        "unresolved"
+      ],
+      "remains": {
+        "branch": "the story branch with the verified tests committed, not pushed",
+        "ticket": "the findings still upheld (or returned with nothing addressed); card in Failed",
+        "pr": "none"
+      },
+      "continue": "Answer on the ticket and Resolve; requeue runs it with the decision.",
+      "desc": "The PR check still upholds findings after maxReturns returns, or a return came back with nothing addressed.",
+      "settings": [
+        "maxReturns"
+      ],
+      "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation"
+    },
+    {
+      "id": "notDelivered",
+      "label": "Not delivered",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 18,
+        "col": 3
+      },
+      "outcome": [
+        "not-delivered"
+      ],
+      "remains": {
+        "branch": "pushed if the push got that far",
+        "ticket": "the reason; card in Failed",
+        "pr": "none (an open PR on hold stays on hold)"
+      },
+      "continue": "Fix the cause (another ticket's tests, the push, the base merge) and run the ticket again.",
+      "desc": "Re-verifying another ticket's tests failed, the push or base sync failed, or the open failed for a reason other than the text.",
+      "settings": [],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    },
+    {
+      "id": "blocked",
+      "label": "Blocked before the push",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 19,
+        "col": 3
+      },
+      "outcome": [
+        "blocked"
+      ],
+      "remains": {
+        "branch": "nothing pushed",
+        "ticket": "the analysis findings or the held secret's location (never its value); card in Failed",
+        "pr": "none"
+      },
+      "continue": "Remove the secret or fix the finding in the worktree, then run the ticket again.",
+      "desc": "CI's analysis jobs still fail after the fixing round, or a held secret is still in the worktree.",
+      "settings": [
+        "analysis"
+      ],
+      "doc": "ai-pipeline/analysis.md#decision-table-for-a-secret-finding"
+    },
+    {
+      "id": "needsDecision",
+      "label": "needs-decision",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 21,
+        "col": 3
+      },
+      "outcome": [
+        "needs-decision"
+      ],
+      "remains": {
+        "branch": "pushed",
+        "ticket": "published, the owner's question asked on it; card in Failed",
+        "pr": "none (an open PR on hold stays on hold)"
+      },
+      "continue": "The owner answers on the ticket and ticks Resolved; requeue runs it with the decision.",
+      "desc": "The PR check raised a question only the ticket's owner can answer.",
+      "settings": [],
+      "doc": "ai-pipeline/escalations.md#questions-and-the-resolve-checkbox"
+    },
+    {
+      "id": "prcIncomplete",
+      "label": "PR check incomplete",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 22,
+        "col": 3
+      },
+      "outcome": [
+        "pr-check-incomplete",
+        "pr-check-escalated"
+      ],
+      "remains": {
+        "branch": "pushed",
+        "ticket": "the findings; card in Failed",
+        "pr": "none"
+      },
+      "continue": "Resolve on the ticket; requeue or run again.",
+      "desc": "The PR check did not finish, or a unit's check ended escalated or with findings at fixUntil or worse.",
+      "settings": [
+        "epicPrCheck"
+      ],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    },
+    {
+      "id": "ciRed",
+      "label": "CI not green: no PR",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 23,
+        "col": 3
+      },
+      "outcome": [
+        "ci-red",
+        "ci-flaky",
+        "ci-unverified",
+        "ci-conflict",
+        "ci-escalated"
+      ],
+      "remains": {
+        "branch": "pushed, CI evidence on it",
+        "ticket": "the failing checks and what the fix round did; card in Failed",
+        "pr": "none"
+      },
+      "continue": "A person decides from the ticket's questions; requeue or run again after the fix.",
+      "desc": "CI on the branch head is red, passed only with retries, cannot be read, conflicts, or the fix round escalated.",
+      "settings": [
+        "ciFixRounds"
+      ],
+      "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
+    },
+    {
+      "id": "videoBlocked",
+      "label": "demo-video-blocked",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 28,
+        "col": 3
+      },
+      "outcome": [
+        "demo-video-blocked"
+      ],
+      "remains": {
+        "branch": "pushed and CI-proven",
+        "ticket": "why the bug could not be shown before the fix (DEMO-NO-REPRO / API-NO-REPRO); card in Failed",
+        "pr": "none"
+      },
+      "continue": "Fix the reproduction case (or turn requireBefore off) and run the ticket again.",
+      "desc": "requireBefore is on and the UI video pair or the backend request evidence could not show the bug on the base.",
+      "settings": [
+        "requireBefore"
+      ],
+      "doc": "ai-pipeline/pr-demo-video.md#bugs-before-and-after-the-fix"
+    },
+    {
+      "id": "gateAssessFailed",
+      "label": "gate-assessment-failed",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 25,
+        "col": 3
+      },
+      "outcome": [
+        "gate-assessment-failed"
+      ],
+      "remains": {
+        "branch": "pushed; CI-proven unless the proof was bypassed (draft-first or ciWait off)",
+        "ticket": "the finding GATE-ASSESS-FAILED; card in Failed",
+        "pr": "no new PR; a re-delivered PR stays open on hold"
+      },
+      "continue": "Fix the gate CLI or the triage agent (or turn the gate off). A PR that never opened: the next run or implement resume replays the delivery from the analysis gate and push, even under needs-human, and rates again before the open. A held re-delivery runs again on hold and updates the same PR.",
+      "desc": "The review gate is on and could not produce the bug-triage assessment before the open: no new PR opens. A re-delivered PR stays open on hold.",
+      "settings": [],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    },
+    {
+      "id": "prRefused",
+      "label": "pr-refused",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 31,
+        "col": 3
+      },
+      "outcome": [
+        "pr-refused"
+      ],
+      "remains": {
+        "branch": "pushed and CI-proven",
+        "ticket": "the refusal; card in Failed",
+        "pr": "none; the title and body are saved"
+      },
+      "continue": "implement resume runs the delivery again from the saved title and body: no implementation, review or test agent; the analysis gate, the CI proof, the demo-video step (narrator) and triage (when no rating was saved) can run again.",
+      "desc": "The code host refused the PR's text even with the shortest body.",
+      "settings": [
+        "host"
+      ],
+      "doc": "ai-pipeline/implement-reference.md#a-host-that-refuses-the-prs-text"
+    },
+    {
+      "id": "heldFailed",
+      "label": "On hold: a person decides",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 33,
+        "col": 3
+      },
+      "outcome": [
+        "ci-red",
+        "ci-flaky",
+        "ci-unverified",
+        "ci-conflict",
+        "ci-escalated"
+      ],
+      "remains": {
+        "branch": "pushed",
+        "ticket": "the CI findings; tickets in Failed",
+        "pr": "open; on hold when a hold was applied; the gate requires a person"
+      },
+      "continue": "A person fixes it on the branch or decides; implement resume --stopped continues a stopped CI wait.",
+      "desc": "A check failed after the open and no fixing round is left (every preOpen.draftCycles cycle used, or ciFixRounds 0), or CI could not be read or conflicts.",
+      "settings": [
+        "draftCycles",
+        "ciFixRounds"
+      ],
+      "doc": "ai-pipeline/implement.md#after-the-open"
+    },
+    {
+      "id": "holdFailed",
+      "label": "hold-failed",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 34,
+        "col": 3
+      },
+      "outcome": [
+        "hold-failed"
+      ],
+      "remains": {
+        "branch": "pushed",
+        "ticket": "the finding PR-HOLD-FAILED; card in Failed",
+        "pr": "open; it may already be in draft or labelled; no agent ran"
+      },
+      "continue": "Check the PR on the host, then tick Resolved: after the open the run resumes at the CI wait; a reopened ticket keeps its reopened label and is held again first.",
+      "desc": "The code host did not confirm the hold, so no agent works on the PR (also for a reopened ticket, an epic unit joined again, and a ticket whose last record left an open PR).",
+      "settings": [
+        "afterOpen"
+      ],
+      "doc": "ai-pipeline/implement.md#after-the-open"
+    },
+    {
+      "id": "releaseUnconf",
+      "label": "release-unconfirmed",
+      "kind": "exit",
+      "lane": "Failed",
+      "layout": {
+        "row": 36,
+        "col": 3
+      },
+      "outcome": [
+        "release-unconfirmed"
+      ],
+      "remains": {
+        "branch": "pushed, checks green",
+        "ticket": "the finding PR-RELEASE-UNCONFIRMED; card in Failed",
+        "pr": "open, possibly still on hold; no ready time recorded"
+      },
+      "continue": "Tick Resolved and the CI-wait resume releases every hold not yet released, or mark the PR ready by hand.",
+      "desc": "Checks were green but the code host did not confirm releasing the PR from hold.",
+      "settings": [
+        "afterOpen"
+      ],
+      "doc": "ai-pipeline/escalations.md#outcomes"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "resume",
+      "at": "resume",
+      "label": "Where did it stop?",
+      "outcomes": [
+        {
+          "id": "implementing",
+          "label": "in implementation or review",
+          "default": true
+        },
+        {
+          "id": "approved",
+          "label": "after the review approved"
+        },
+        {
+          "id": "refused",
+          "label": "pr-refused"
+        },
+        {
+          "id": "gate-failed",
+          "label": "gate-assessment-failed, no PR opened"
+        },
+        {
+          "id": "adopted",
+          "label": "PR opened, not recorded"
+        },
+        {
+          "id": "ci-wait",
+          "label": "waiting for the PR's CI"
+        },
+        {
+          "id": "held",
+          "label": "a hold still recorded (hold-failed, release-unconfirmed, a held PR)"
+        },
+        {
+          "id": "resolved",
+          "label": "a person resolved it, no PR open"
+        },
+        {
+          "id": "reopened",
+          "label": "reopened or resolved, its PR still open"
+        }
+      ]
+    },
+    {
+      "id": "reopenHold",
+      "at": "reopenHold",
+      "label": "Hold confirmed?",
+      "outcomes": [
+        {
+          "id": "confirmed",
+          "label": "confirmed",
+          "default": true
+        },
+        {
+          "id": "unconfirmed",
+          "label": "not confirmed"
+        }
+      ]
+    },
+    {
+      "id": "claim",
+      "at": "claim",
+      "label": "Claimed?",
+      "outcomes": [
+        {
+          "id": "claimed",
+          "label": "claimed",
+          "default": true
+        },
+        {
+          "id": "skipped",
+          "label": "refused or skipped"
+        }
+      ]
+    },
+    {
+      "id": "epicPlan",
+      "at": "epicPlan",
+      "label": "Plan valid?",
+      "outcomes": [
+        {
+          "id": "ok",
+          "label": "design note",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "plan failed"
+        }
+      ]
+    },
+    {
+      "id": "foundation",
+      "at": "foundation",
+      "label": "Foundation?",
+      "outcomes": [
+        {
+          "id": "ok",
+          "label": "none or built",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "failed"
+        }
+      ]
+    },
+    {
+      "id": "plan",
+      "at": "plan",
+      "label": "Plan accepted?",
+      "outcomes": [
+        {
+          "id": "planned",
+          "label": "self or subtasks",
+          "default": true
+        },
+        {
+          "id": "rejected",
+          "label": "rejected or blocked"
+        }
+      ]
+    },
+    {
+      "id": "harnessChecks",
+      "at": "harnessChecks",
+      "label": "Checks clean?",
+      "outcomes": [
+        {
+          "id": "clean",
+          "label": "clean",
+          "default": true
+        },
+        {
+          "id": "finding",
+          "label": "blocking finding"
+        }
+      ]
+    },
+    {
+      "id": "verifier",
+      "at": "verifier",
+      "label": "Verifier verdict?",
+      "outcomes": [
+        {
+          "id": "approved",
+          "label": "approved",
+          "default": true
+        },
+        {
+          "id": "changes",
+          "label": "verifier requests changes"
+        },
+        {
+          "id": "exhausted",
+          "label": "rounds and rewrite used"
+        }
+      ]
+    },
+    {
+      "id": "policy",
+      "at": "policy",
+      "label": "Policy?",
+      "outcomes": [
+        {
+          "id": "pass",
+          "label": "pass",
+          "default": true
+        },
+        {
+          "id": "block",
+          "label": "block"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "at": "review",
+      "label": "Review verdict?",
+      "outcomes": [
+        {
+          "id": "approved",
+          "label": "approved: card to Testing",
+          "default": true
+        },
+        {
+          "id": "changes",
+          "label": "changes requested"
+        },
+        {
+          "id": "escalated",
+          "label": "escalated"
+        }
+      ]
+    },
+    {
+      "id": "testPlan",
+      "at": "testPlan",
+      "label": "Plan verified?",
+      "outcomes": [
+        {
+          "id": "verified",
+          "label": "verified",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "not verified"
+        }
+      ]
+    },
+    {
+      "id": "fv",
+      "at": "fv",
+      "label": "Tests verdict?",
+      "outcomes": [
+        {
+          "id": "verified",
+          "label": "verified",
+          "default": true
+        },
+        {
+          "id": "product-bug",
+          "label": "product bug found by a test"
+        },
+        {
+          "id": "failed",
+          "label": "not verified"
+        }
+      ]
+    },
+    {
+      "id": "journeys",
+      "at": "journeys",
+      "label": "Journeys verified?",
+      "outcomes": [
+        {
+          "id": "verified",
+          "label": "verified",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "failed"
+        }
+      ]
+    },
+    {
+      "id": "prCheck",
+      "at": "prCheck",
+      "label": "Upheld findings?",
+      "outcomes": [
+        {
+          "id": "pass",
+          "label": "none",
+          "default": true
+        },
+        {
+          "id": "production",
+          "label": "production finding: to implementation",
+          "when": {
+            "is": "returnsOn"
+          }
+        },
+        {
+          "id": "tests",
+          "label": "test gap: to test planning",
+          "when": {
+            "is": "returnsOn"
+          }
+        },
+        {
+          "id": "light",
+          "label": "records, docs, style or minor: to the fixer"
+        },
+        {
+          "id": "unresolved",
+          "label": "returns spent or nothing addressed",
+          "when": {
+            "is": "returnsOn"
+          }
+        }
+      ]
+    },
+    {
+      "id": "parity",
+      "at": "parity",
+      "label": "Parity and re-verify?",
+      "outcomes": [
+        {
+          "id": "ok",
+          "label": "green",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "another ticket's tests fail"
+        }
+      ]
+    },
+    {
+      "id": "analysisGate",
+      "at": "analysisGate",
+      "label": "Analysis jobs?",
+      "outcomes": [
+        {
+          "id": "pass",
+          "label": "pass",
+          "default": true
+        },
+        {
+          "id": "finding",
+          "label": "analysis finding"
+        },
+        {
+          "id": "blocked",
+          "label": "still failing or held secret"
+        }
+      ]
+    },
+    {
+      "id": "push",
+      "at": "push",
+      "label": "Pushed?",
+      "outcomes": [
+        {
+          "id": "pushed",
+          "label": "pushed",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "push refused"
+        }
+      ]
+    },
+    {
+      "id": "ownerQ",
+      "at": "ownerQ",
+      "label": "Owner question?",
+      "outcomes": [
+        {
+          "id": "none",
+          "label": "no",
+          "default": true
+        },
+        {
+          "id": "question",
+          "label": "owner question"
+        },
+        {
+          "id": "incomplete",
+          "label": "PR check unfinished or escalated"
+        }
+      ]
+    },
+    {
+      "id": "branchCi",
+      "at": "branchCi",
+      "label": "CI on the head?",
+      "outcomes": [
+        {
+          "id": "green",
+          "label": "green",
+          "default": true
+        },
+        {
+          "id": "red",
+          "label": "CI red on the branch"
+        },
+        {
+          "id": "base-moved",
+          "label": "base moved"
+        }
+      ]
+    },
+    {
+      "id": "triage",
+      "at": "triage",
+      "label": "Assessed?",
+      "outcomes": [
+        {
+          "id": "assessed",
+          "label": "assessed",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "the gate cannot assess"
+        }
+      ]
+    },
+    {
+      "id": "ciFixRound",
+      "at": "ciFixRound",
+      "label": "Green after the fix?",
+      "outcomes": [
+        {
+          "id": "green",
+          "label": "green",
+          "default": true
+        },
+        {
+          "id": "red",
+          "label": "still red, flaky, unknown or escalated"
+        }
+      ]
+    },
+    {
+      "id": "uiPair",
+      "at": "uiPair",
+      "label": "Bug shown before the fix?",
+      "outcomes": [
+        {
+          "id": "shown",
+          "label": "shown",
+          "default": true
+        },
+        {
+          "id": "missing",
+          "label": "not reproduced on the base"
+        }
+      ]
+    },
+    {
+      "id": "apiEvidence",
+      "at": "apiEvidence",
+      "label": "Requests reproduce it?",
+      "outcomes": [
+        {
+          "id": "shown",
+          "label": "shown",
+          "default": true
+        },
+        {
+          "id": "missing",
+          "label": "not reproduced on the base"
+        }
+      ]
+    },
+    {
+      "id": "open",
+      "at": "open",
+      "label": "Opened?",
+      "outcomes": [
+        {
+          "id": "updated",
+          "label": "already open and held: body refreshed, same PR",
+          "default": true,
+          "when": {
+            "is": "heldPr"
+          }
+        },
+        {
+          "id": "opened",
+          "label": "opened",
+          "default": true,
+          "when": {
+            "not": {
+              "is": "heldPr"
+            }
+          }
+        },
+        {
+          "id": "refused",
+          "label": "host refuses the PR text",
+          "when": {
+            "not": {
+              "is": "heldPr"
+            }
+          }
+        },
+        {
+          "id": "failed",
+          "label": "open fails",
+          "when": {
+            "not": {
+              "is": "heldPr"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "gatePublish",
+      "at": "gatePublish",
+      "label": "Saved rating?",
+      "outcomes": [
+        {
+          "id": "saved",
+          "label": "saved before the open",
+          "default": true
+        },
+        {
+          "id": "missing",
+          "label": "not readable: not assessed, no agent"
+        }
+      ]
+    },
+    {
+      "id": "checks",
+      "at": "checks",
+      "label": "PR checks?",
+      "outcomes": [
+        {
+          "id": "green",
+          "label": "green",
+          "default": true
+        },
+        {
+          "id": "failed",
+          "label": "a check fails after the open"
+        },
+        {
+          "id": "unknown",
+          "label": "unknown or conflict"
+        }
+      ]
+    },
+    {
+      "id": "hold",
+      "at": "hold",
+      "label": "Hold confirmed?",
+      "outcomes": [
+        {
+          "id": "confirmed",
+          "label": "confirmed",
+          "default": true
+        },
+        {
+          "id": "unconfirmed",
+          "label": "not confirmed"
+        }
+      ]
+    },
+    {
+      "id": "holdFix",
+      "at": "holdFix",
+      "label": "Green on the new head?",
+      "outcomes": [
+        {
+          "id": "green",
+          "label": "green",
+          "default": true
+        },
+        {
+          "id": "again",
+          "label": "still failing, cycles left: another round on hold",
+          "when": {
+            "gt": [
+              "draftCycles",
+              1
+            ]
+          },
+          "cyclesLeft": "draftCycles"
+        },
+        {
+          "id": "failed",
+          "label": "still failing, every cycle used",
+          "cyclesUsed": "draftCycles"
+        }
+      ]
+    },
+    {
+      "id": "ready",
+      "at": "ready",
+      "label": "Release confirmed?",
+      "outcomes": [
+        {
+          "id": "confirmed",
+          "label": "confirmed",
+          "default": true
+        },
+        {
+          "id": "unconfirmed",
+          "label": "not confirmed"
+        }
+      ]
+    },
+    {
+      "id": "gate",
+      "at": "gate",
+      "label": "Gate action?",
+      "outcomes": [
+        {
+          "id": "auto-merge",
+          "label": "auto-merge",
+          "when": {
+            "is": "autoMergeEligible"
+          }
+        },
+        {
+          "id": "approvals",
+          "label": "approvals:{approvalsNeeded}, needs-human",
+          "when": {
+            "is": "bugUnit"
+          }
+        },
+        {
+          "id": "person",
+          "label": "feature PR: host rules",
+          "when": {
+            "not": {
+              "is": "bugUnit"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "approval",
+      "at": "approval",
+      "label": "Reviewer?",
+      "outcomes": [
+        {
+          "id": "merged",
+          "label": "approves and merges",
+          "default": true
+        },
+        {
+          "id": "sent-back",
+          "label": "reviewer sends it back"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "run",
+      "to": "claim"
+    },
+    {
+      "from": "resume",
+      "to": "pairs",
+      "outcome": "implementing",
+      "label": "implementer continues on the branch"
+    },
+    {
+      "from": "resume",
+      "to": "testPlan",
+      "outcome": "approved",
+      "label": "approved code: tests restart"
+    },
+    {
+      "from": "resume",
+      "to": "analysisGate",
+      "outcome": "refused",
+      "label": "delivery again, saved title and body"
+    },
+    {
+      "from": "resume",
+      "to": "analysisGate",
+      "outcome": "gate-failed",
+      "label": "rated again first"
+    },
+    {
+      "from": "resume",
+      "to": "checks",
+      "outcome": "adopted",
+      "label": "PR adopted"
+    },
+    {
+      "from": "resume",
+      "to": "checks",
+      "outcome": "ci-wait",
+      "label": "CI wait (--stopped)"
+    },
+    {
+      "from": "resume",
+      "to": "checks",
+      "outcome": "held",
+      "label": "hold released when green",
+      "set": {
+        "heldPr": true
+      }
+    },
+    {
+      "from": "resume",
+      "to": "requeue",
+      "outcome": "resolved",
+      "label": "a person resolved it"
+    },
+    {
+      "from": "resume",
+      "to": "requeue",
+      "outcome": "reopened",
+      "label": "reopened, its PR still open",
+      "set": {
+        "heldPr": true
+      }
+    },
+    {
+      "from": "reopenHold",
+      "to": "entry",
+      "outcome": "confirmed"
+    },
+    {
+      "from": "reopenHold",
+      "to": "holdFailed",
+      "outcome": "unconfirmed"
+    },
+    {
+      "from": "requeue",
+      "to": "claim",
+      "label": "board sync to Ready, then the claim"
+    },
+    {
+      "from": "claim",
+      "to": "tracker",
+      "type": "uses"
+    },
+    {
+      "from": "claim",
+      "to": "entry",
+      "outcome": "claimed",
+      "when": {
+        "not": {
+          "all": [
+            {
+              "is": "heldPr"
+            },
+            {
+              "is": "pr"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "from": "claim",
+      "to": "reopenHold",
+      "outcome": "claimed",
+      "when": {
+        "all": [
+          {
+            "is": "heldPr"
+          },
+          {
+            "is": "pr"
+          }
+        ]
+      },
+      "label": "its PR open, --pr: held first"
+    },
+    {
+      "from": "entry",
+      "to": "epicPlan",
+      "when": {
+        "is": "epicRun"
+      },
+      "label": "--epic: delivered in units"
+    },
+    {
+      "from": "entry",
+      "to": "plan",
+      "when": {
+        "is": "singleFlow"
+      },
+      "label": "one ticket"
+    },
+    {
+      "from": "claim",
+      "to": "skipped",
+      "outcome": "skipped"
+    },
+    {
+      "from": "epicPlan",
+      "to": "shape",
+      "outcome": "ok"
+    },
+    {
+      "from": "epicPlan",
+      "to": "epicFailed",
+      "outcome": "failed"
+    },
+    {
+      "from": "shape",
+      "to": "foundation"
+    },
+    {
+      "from": "foundation",
+      "to": "plan",
+      "outcome": "ok"
+    },
+    {
+      "from": "foundation",
+      "to": "epicFailed",
+      "outcome": "failed"
+    },
+    {
+      "from": "plan",
+      "to": "pairs",
+      "outcome": "planned"
+    },
+    {
+      "from": "plan",
+      "to": "implFailed",
+      "outcome": "rejected"
+    },
+    {
+      "from": "pairs",
+      "to": "harnessChecks"
+    },
+    {
+      "from": "harnessChecks",
+      "to": "verifier",
+      "outcome": "clean"
+    },
+    {
+      "from": "harnessChecks",
+      "to": "pairs",
+      "outcome": "finding",
+      "loop": {
+        "budget": "analysisBounces",
+        "text": "fix loop: lint 2, analysis {analysisBounces}; no review round spent"
+      }
+    },
+    {
+      "from": "verifier",
+      "to": "policy",
+      "outcome": "approved",
+      "label": "merged into the story branch"
+    },
+    {
+      "from": "verifier",
+      "to": "pairs",
+      "outcome": "changes",
+      "loop": {
+        "budget": "maxPairRounds",
+        "text": "loop, at most {maxPairRounds} pair rounds"
+      }
+    },
+    {
+      "from": "verifier",
+      "to": "implFailed",
+      "outcome": "exhausted"
+    },
+    {
+      "from": "policy",
+      "to": "review",
+      "outcome": "pass"
+    },
+    {
+      "from": "policy",
+      "to": "pairs",
+      "outcome": "block",
+      "loop": {
+        "budget": "reviewMaxRounds",
+        "text": "loop, a review round"
+      }
+    },
+    {
+      "from": "review",
+      "to": "testPlan",
+      "outcome": "approved",
+      "lane": "Testing"
+    },
+    {
+      "from": "review",
+      "to": "pairs",
+      "outcome": "changes",
+      "loop": {
+        "budget": "reviewMaxRounds",
+        "text": "loop, at most {reviewMaxRounds} review rounds"
+      }
+    },
+    {
+      "from": "review",
+      "to": "reviewFailed",
+      "outcome": "escalated"
+    },
+    {
+      "from": "testPlan",
+      "to": "fv",
+      "outcome": "verified"
+    },
+    {
+      "from": "testPlan",
+      "to": "fvFailed",
+      "outcome": "failed"
+    },
+    {
+      "from": "fv",
+      "to": "unit",
+      "outcome": "verified",
+      "when": {
+        "is": "epicRun"
+      },
+      "label": "a unit ticket: merged into the unit"
+    },
+    {
+      "from": "fv",
+      "to": "prCheck",
+      "outcome": "verified",
+      "when": {
+        "is": "ticketPrCheck"
+      },
+      "label": "verified"
+    },
+    {
+      "from": "fv",
+      "to": "doneNoPr",
+      "outcome": "verified",
+      "when": {
+        "all": [
+          {
+            "is": "singleFlow"
+          },
+          {
+            "not": {
+              "is": "pr"
+            }
+          }
+        ]
+      },
+      "label": "verified, no --pr: done, no PR"
+    },
+    {
+      "from": "fv",
+      "to": "pairs",
+      "outcome": "product-bug",
+      "lane": "In Progress",
+      "loop": {
+        "budget": "maxBugFixCycles",
+        "text": "loop, at most {maxBugFixCycles} bug-fix cycles; card to In Progress"
+      }
+    },
+    {
+      "from": "fv",
+      "to": "fvFailed",
+      "outcome": "failed"
+    },
+    {
+      "from": "unit",
+      "to": "journeys"
+    },
+    {
+      "from": "journeys",
+      "to": "unitPrCheck",
+      "outcome": "verified"
+    },
+    {
+      "from": "journeys",
+      "to": "unitFailed",
+      "outcome": "failed"
+    },
+    {
+      "from": "unitPrCheck",
+      "to": "parity",
+      "when": {
+        "is": "pr"
+      }
+    },
+    {
+      "from": "unitPrCheck",
+      "to": "doneNoPr",
+      "when": {
+        "not": {
+          "is": "pr"
+        }
+      }
+    },
+    {
+      "from": "prCheck",
+      "to": "parity",
+      "outcome": "pass",
+      "label": "no upheld finding"
+    },
+    {
+      "from": "prCheck",
+      "to": "pairs",
+      "outcome": "production",
+      "lane": "In Progress",
+      "loop": {
+        "budget": "maxReturns",
+        "text": "return, at most {maxReturns}; {minSeverity} or worse; card to In Progress"
+      }
+    },
+    {
+      "from": "prCheck",
+      "to": "testPlan",
+      "outcome": "tests",
+      "loop": {
+        "budget": "maxReturns",
+        "text": "return as required cases, at most {maxReturns}"
+      }
+    },
+    {
+      "from": "prCheck",
+      "to": "fixer",
+      "outcome": "light",
+      "label": "minor findings: pr-check-fixer"
+    },
+    {
+      "from": "prCheck",
+      "to": "unresolved",
+      "outcome": "unresolved"
+    },
+    {
+      "from": "fixer",
+      "to": "parity"
+    },
+    {
+      "from": "parity",
+      "to": "analysisGate",
+      "outcome": "ok"
+    },
+    {
+      "from": "parity",
+      "to": "notDelivered",
+      "outcome": "failed"
+    },
+    {
+      "from": "analysisGate",
+      "to": "push",
+      "outcome": "pass"
+    },
+    {
+      "from": "analysisGate",
+      "to": "analysisFix",
+      "outcome": "finding"
+    },
+    {
+      "from": "analysisGate",
+      "to": "blocked",
+      "outcome": "blocked"
+    },
+    {
+      "from": "analysisFix",
+      "to": "analysisGate",
+      "loop": {
+        "budget": null,
+        "text": "one fixing round, then the jobs again"
+      }
+    },
+    {
+      "from": "push",
+      "to": "ownerQ",
+      "outcome": "pushed"
+    },
+    {
+      "from": "push",
+      "to": "notDelivered",
+      "outcome": "failed"
+    },
+    {
+      "from": "push",
+      "to": "codeHost",
+      "type": "uses"
+    },
+    {
+      "from": "ownerQ",
+      "to": "branchCi",
+      "outcome": "none"
+    },
+    {
+      "from": "ownerQ",
+      "to": "needsDecision",
+      "outcome": "question"
+    },
+    {
+      "from": "ownerQ",
+      "to": "prcIncomplete",
+      "outcome": "incomplete"
+    },
+    {
+      "from": "branchCi",
+      "to": "bug",
+      "outcome": "green"
+    },
+    {
+      "from": "branchCi",
+      "to": "ciFixRound",
+      "outcome": "red",
+      "when": {
+        "is": "ciFix"
+      }
+    },
+    {
+      "from": "branchCi",
+      "to": "ciRed",
+      "outcome": "red",
+      "when": {
+        "not": {
+          "is": "ciFix"
+        }
+      },
+      "label": "ciFixRounds 0: a person decides"
+    },
+    {
+      "from": "branchCi",
+      "to": "branchCi",
+      "outcome": "base-moved",
+      "loop": {
+        "budget": null,
+        "text": "base merged in, the new head proven again"
+      }
+    },
+    {
+      "from": "branchCi",
+      "to": "ciSystem",
+      "type": "uses"
+    },
+    {
+      "from": "ciFixRound",
+      "to": "bug",
+      "outcome": "green"
+    },
+    {
+      "from": "ciFixRound",
+      "to": "ciRed",
+      "outcome": "red"
+    },
+    {
+      "from": "bug",
+      "to": "triage",
+      "when": {
+        "is": "bugUnit"
+      },
+      "label": "bug fix"
+    },
+    {
+      "from": "bug",
+      "to": "headScan",
+      "when": {
+        "not": {
+          "is": "bugUnit"
+        }
+      },
+      "label": "feature"
+    },
+    {
+      "from": "triage",
+      "to": "headScan",
+      "outcome": "assessed"
+    },
+    {
+      "from": "triage",
+      "to": "gateAssessFailed",
+      "outcome": "failed"
+    },
+    {
+      "from": "headScan",
+      "to": "evidence"
+    },
+    {
+      "from": "evidence",
+      "to": "uiPair"
+    },
+    {
+      "from": "uiPair",
+      "to": "apiEvidence",
+      "outcome": "shown"
+    },
+    {
+      "from": "uiPair",
+      "to": "videoBlocked",
+      "outcome": "missing",
+      "when": {
+        "is": "requireBefore"
+      }
+    },
+    {
+      "from": "uiPair",
+      "to": "apiEvidence",
+      "outcome": "missing",
+      "when": {
+        "not": {
+          "is": "requireBefore"
+        }
+      },
+      "label": "a note in the section"
+    },
+    {
+      "from": "apiEvidence",
+      "to": "apiChanges",
+      "outcome": "shown"
+    },
+    {
+      "from": "apiEvidence",
+      "to": "videoBlocked",
+      "outcome": "missing",
+      "when": {
+        "is": "requireBefore"
+      }
+    },
+    {
+      "from": "apiEvidence",
+      "to": "apiChanges",
+      "outcome": "missing",
+      "when": {
+        "not": {
+          "is": "requireBefore"
+        }
+      },
+      "label": "a note in the section"
+    },
+    {
+      "from": "apiChanges",
+      "to": "open"
+    },
+    {
+      "from": "open",
+      "to": "gatePublish",
+      "outcome": "opened",
+      "lane": "Pending Review"
+    },
+    {
+      "from": "open",
+      "to": "gatePublish",
+      "outcome": "updated",
+      "label": "same PR, body refreshed"
+    },
+    {
+      "from": "open",
+      "to": "prRefused",
+      "outcome": "refused"
+    },
+    {
+      "from": "open",
+      "to": "notDelivered",
+      "outcome": "failed"
+    },
+    {
+      "from": "open",
+      "to": "codeHost",
+      "type": "uses"
+    },
+    {
+      "from": "gatePublish",
+      "to": "checks",
+      "outcome": "saved"
+    },
+    {
+      "from": "gatePublish",
+      "to": "checks",
+      "outcome": "missing"
+    },
+    {
+      "from": "checks",
+      "to": "ready",
+      "outcome": "green",
+      "when": {
+        "any": [
+          {
+            "is": "draftFirst"
+          },
+          {
+            "is": "heldPr"
+          }
+        ]
+      },
+      "label": "a hold to release: ready when green"
+    },
+    {
+      "from": "checks",
+      "to": "runDone",
+      "outcome": "green",
+      "when": {
+        "not": {
+          "any": [
+            {
+              "is": "draftFirst"
+            },
+            {
+              "is": "heldPr"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "from": "checks",
+      "to": "hold",
+      "outcome": "failed",
+      "when": {
+        "is": "fixAfterOpen"
+      }
+    },
+    {
+      "from": "checks",
+      "to": "heldFailed",
+      "outcome": "failed",
+      "when": {
+        "not": {
+          "is": "fixAfterOpen"
+        }
+      }
+    },
+    {
+      "from": "checks",
+      "to": "heldFailed",
+      "outcome": "unknown"
+    },
+    {
+      "from": "hold",
+      "to": "holdFix",
+      "outcome": "confirmed"
+    },
+    {
+      "from": "hold",
+      "to": "holdFailed",
+      "outcome": "unconfirmed"
+    },
+    {
+      "from": "holdFix",
+      "to": "ready",
+      "outcome": "green"
+    },
+    {
+      "from": "holdFix",
+      "to": "holdFix",
+      "outcome": "again",
+      "loop": {
+        "budget": "draftCycles",
+        "text": "another round on hold, at most {draftCycles}"
+      },
+      "label": "cycles left: another round"
+    },
+    {
+      "from": "holdFix",
+      "to": "heldFailed",
+      "outcome": "failed",
+      "label": "draftCycles {draftCycles} used"
+    },
+    {
+      "from": "ready",
+      "to": "runDone",
+      "outcome": "confirmed"
+    },
+    {
+      "from": "ready",
+      "to": "releaseUnconf",
+      "outcome": "unconfirmed"
+    },
+    {
+      "from": "runDone",
+      "to": "gate"
+    },
+    {
+      "from": "gate",
+      "to": "autoMerge",
+      "outcome": "auto-merge"
+    },
+    {
+      "from": "gate",
+      "to": "approval",
+      "outcome": "approvals"
+    },
+    {
+      "from": "gate",
+      "to": "approval",
+      "outcome": "person"
+    },
+    {
+      "from": "autoMerge",
+      "to": "merged"
+    },
+    {
+      "from": "approval",
+      "to": "merged",
+      "outcome": "merged"
+    },
+    {
+      "from": "approval",
+      "to": "sentBack",
+      "outcome": "sent-back"
+    },
+    {
+      "from": "sentBack",
+      "to": "requeue",
+      "label": "requeue or run again, PR still open",
+      "set": {
+        "heldPr": true
+      }
+    }
+  ],
+  "presets": [
+    {
+      "id": "full",
+      "label": "Full-featured example",
+      "help": "A UI bug fix with --pr, a council at every stage, static analysis, demo video with requireBefore, auto-merge on.",
+      "values": {
+        "entry": "single",
+        "ticket": "ui-bug",
+        "changes": "both",
+        "pr": true,
+        "council.pairVerify": true,
+        "council.pairUiVerify": true,
+        "council.review": true,
+        "council.testPlan": true,
+        "council.testAutomation": true,
+        "council.prCheck": true,
+        "analysis": true,
+        "demoVideo": true,
+        "requireBefore": true
+      }
+    },
+    {
+      "id": "feature",
+      "label": "Single feature ticket, defaults",
+      "help": "Every setting at its default, plus --pr.",
+      "values": {
+        "entry": "single",
+        "ticket": "feature",
+        "pr": true
+      }
+    },
+    {
+      "id": "ui-bug",
+      "label": "UI bug fix",
+      "help": "A bug whose fix changes the frontend, with demo videos on.",
+      "values": {
+        "entry": "single",
+        "ticket": "ui-bug",
+        "changes": "frontend",
+        "pr": true,
+        "demoVideo": true
+      }
+    },
+    {
+      "id": "backend-bug",
+      "label": "Backend bug fix",
+      "help": "A bug whose fix changes only the backend, with demo videos on (request evidence, API changes).",
+      "values": {
+        "entry": "single",
+        "ticket": "backend-bug",
+        "changes": "backend",
+        "pr": true,
+        "demoVideo": true
+      }
+    },
+    {
+      "id": "feature-epic-story",
+      "label": "Feature epic, one PR per story",
+      "help": "--epic with --pr-split story.",
+      "values": {
+        "entry": "feature-epic",
+        "prSplit": "story",
+        "pr": true
+      }
+    },
+    {
+      "id": "bug-epic",
+      "label": "Bug epic",
+      "help": "--epic of mostly bugs: bug groups, each rated by the gate.",
+      "values": {
+        "entry": "bug-epic",
+        "ticket": "ui-bug",
+        "pr": true,
+        "demoVideo": true
+      }
+    },
+    {
+      "id": "resume",
+      "label": "Resume after a stop",
+      "help": "implement resume: pick where it stopped at the resume step.",
+      "values": {
+        "entry": "resume",
+        "ticket": "feature",
+        "pr": true
+      }
+    }
+  ],
+  "spineGroups": [
+    {
+      "id": "failed",
+      "label": "Failed: no PR, or the PR held; card to Failed with up to three questions",
+      "members": [
+        "skipped",
+        "epicFailed",
+        "implFailed",
+        "reviewFailed",
+        "fvFailed",
+        "unitFailed",
+        "unresolved",
+        "notDelivered",
+        "blocked",
+        "needsDecision",
+        "prcIncomplete",
+        "ciRed",
+        "gateAssessFailed",
+        "videoBlocked",
+        "heldFailed",
+        "holdFailed",
+        "releaseUnconf"
+      ],
+      "doc": "ai-pipeline/escalations.md"
+    }
+  ]
+}

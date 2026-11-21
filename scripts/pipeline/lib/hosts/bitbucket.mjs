@@ -117,6 +117,8 @@ export function createBitbucketHost(settings, deps = {}) {
     type: 'bitbucket',
     label: 'Bitbucket',
     capabilities: CAPABILITIES,
+    // Bitbucket Cloud cannot reopen a declined pull request (used by holdMode to avoid close-reopen).
+    reopenPr: false,
     hints: { codeOwnersFile: null, checked: 'the branch restrictions and merge checks', enforce: '"Minimum number of successful builds" and approvals as merge checks on the default branch', settings: 'Repository settings > Branch restrictions (and, on the Premium plan, "Prevent a merge with unresolved merge checks")', planDecision: 'the Premium plan for blocking merge checks, or accept advisory review', autoMerge: 'nothing (Bitbucket Cloud has no auto-merge; the review gate merges at the next board sync)' },
     webUrl: repo ? `${url}/${repo}` : url,
     async identity() {
@@ -155,6 +157,7 @@ export function createBitbucketHost(settings, deps = {}) {
           await api('PUT', PR(pr), { body: { title: data.title ?? current.title, ...data } });
         }
         if (state === 'closed') await api('POST', `${PR(pr)}/decline`);
+        if (state === 'open') throw new UnsupportedError('Bitbucket Cloud cannot reopen a declined pull request; use draft mode to hold and release pull requests');
         // Labels: Bitbucket has none on pull requests (capabilities.labels false); the gate keeps them in its notice.
       },
       async close(pr, { comment = null } = {}) {

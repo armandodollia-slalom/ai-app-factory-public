@@ -1,5 +1,7 @@
 # Linear (tracker)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `tracker.type: "linear"`. Tickets are issues of the team `tracker.project` (the team key), and the ticket id is the identifier (`ENG-123`). Epics are parent issues, lanes are the team's workflow states, and types are labels. The adapter is `scripts/board/lib/trackers/linear.mjs` (GraphQL, `https://api.linear.app/graphql`).
 
 ```json

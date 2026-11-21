@@ -1,6 +1,6 @@
 # Agent catalog
 
-Part of the [AI development pipeline](README.md). Each pipeline call starts a fresh headless process, so no agent sees another's reasoning, and every agent ends with an `AGENT_RESULT: {json}` line the stage parses.
+**Who reads this:** C (operators) and D. All 24 agents: what starts each one, what it sees and may touch, and where its prompt comes from. Each pipeline call starts a fresh headless process, so no agent sees another's reasoning, and every agent ends with an `AGENT_RESULT: {json}` line the stage parses.
 
 ## Where an agent's prompt comes from
 
@@ -15,8 +15,8 @@ An agent's prompt is built from three files, and only the first ships with the f
 - The base definitions say "the Project context" wherever a codebase-specific answer is needed. An agent without an addendum still runs: it falls back to `AGENTS.md`, `CONTRIBUTING.md`, the build files and the nearest existing code, and reports what it assumed.
 - The **prompt version** recorded in the metrics is the hash of all three files, so a change to the base, the addendum or the lessons starts a new version and `factory metrics` shows whether it helped.
 - `.factory/agents/<name>.agent.md` (note the `.agent.md`) replaces the base definition outright in that repository. Use it only as a stopgap for a fix that is waiting for a factory release.
-- Skeletons for the addenda are in `templates/agents/`; the `write-agent-addenda` skill (`skills/write-agent-addenda/SKILL.md`) describes how to fill them in for any codebase and what belongs in an addendum, in `.factory/config.json` or in a lesson. `examples/eshop/.factory/agents/` is a complete set for a .NET application.
-- `factory render` renders every agent to `.claude/agents/` so the same agents can be run from Claude Code (see [Agent definitions](README.md#agent-definitions-for-copilot-and-claude-code)).
+- Skeletons for the addenda are in `templates/agents/`; the [`write-agent-addenda`](../../skills/write-agent-addenda/SKILL.md) skill describes how to fill them in for any codebase and what belongs in an addendum, in `.factory/config.json` or in a lesson. `examples/eshop/.factory/agents/` is a complete set for a .NET application.
+- `factory render` renders every agent to `.claude/agents/` and `.github/agents/` so the same agents can be run from Claude Code and Copilot (see [Agent definitions](../internals.md#agent-definitions)).
 
 ## By stage
 
@@ -44,7 +44,7 @@ An agent's prompt is built from three files, and only the first ships with the f
 | `pr-check-defender` | [pr-check](pr-check.md) | PR check round | read-only | the round's findings, story, diff | concede, rebut or partial per finding |
 | `pr-check-judge` | [pr-check](pr-check.md) | PR check round | read-only | the full debate | upheld or dismissed per finding |
 | `pr-check-fixer` | [pr-check](pr-check.md) | PR check fix mode on the branch; the CI fixing round (before the open, or while an open PR is on hold) | writes code | upheld findings it is routed (records, PR text, docs, style, minors), or the failing CI checks with their logs | fixes (the PR check commits) |
-| `demo-narrator` | [pr-demo-video](pr-demo-video.md#narration-scripts) | the local demo video step, before the PR opens, once per PR for every headline demo (plus one retry for scripts that fail validation) | read-only; no tools needed | the ticket (title and acceptance criteria), each case's title and why, and each recording's step list (action, target name and role, page and heading before and after, what was seen, timing), all redacted; for a UI bug the before/after pair and what the screen showed where it went wrong | a script per video: segments of prose bound to ranges of recorded steps (the harness validates it, else the video keeps the automatic lines); for a backend bug, the wording of its reproduction steps (the recorded requests and responses are inserted by the harness) |
+| `demo-narrator` | [pr-demo-video](pr-demo-video.md#narration-scripts) | the local demo video step, before the PR opens, once per PR for the videos `video.script.scope` selects (headline demos by default), plus one retry for scripts that fail validation; and once (plus one retry) for a backend bug's reproduction steps | read-only; no tools needed | the ticket (title and acceptance criteria), each case's title and why, and each recording's step list (action, target name and role, page and heading before and after, what was seen, timing), all redacted; for a UI bug the before/after pair and what the screen showed where it went wrong | a script per video: segments of prose bound to ranges of recorded steps (the harness validates it, else the video keeps the automatic lines); for a backend bug, the wording of its reproduction steps (the recorded requests and responses are inserted by the harness) |
 | `escalation-questions` | [escalations](escalations.md) | `board fail`, when a ticket ends Failed | read-only | the escalation notes, findings and log tail | at most three decisions for a person, each with options and a recommendation |
 
 Read-only agents are enforced per CLI: Claude Code tool lists in `scripts/agents-claude.json`, Copilot `--deny-tool` flags and Codex's `read-only` sandbox in `scripts/pipeline/lib/agents.mjs`. Agents in `verify` mode (the UI verifier) may run shell commands but not edit files.

@@ -1,5 +1,7 @@
 # Delivery experiments
 
+**Who reads this:** C and D, comparing delivery modes on a real epic.
+
 Does delivering an epic on one branch (an epic plan, stories merged into the epic branch, one PR) cost less and produce better code than a branch and PR per story? `factory experiment` runs the same epic both ways from the same base commit, grades every result with the same tests and the same PR check, and reports the numbers side by side. See [implement](implement.md#delivery-modes) for the two modes. The feature-epic PR split (`--pr-split story|groups`) is not an experiment mode: an epic arm runs with the repository's `implement.epic.prSplit`, and no arm pushes or opens a PR.
 
 ```bash
@@ -53,7 +55,7 @@ When the arm finishes, its result is merged into the arm branch so every arm has
 | Upheld | Open findings of the grading PR check |
 | Done | Stories done / stories run |
 
-Under the table: each arm's [decision labels](implement.md#decision-log) (`over-provisioned`, `under-provisioned`, `bad-split`, `should-have-been-self`, `weak-verification`, `bad-grouping`) and its integration conflicts. `--json` gives every number, the bucketed tokens and the caveats.
+Under the table: each arm's [decision labels](implement-reference.md#decision-log) (`over-provisioned`, `under-provisioned`, `bad-split`, `should-have-been-self`, `weak-verification`, `bad-grouping`) and its integration conflicts. `--json` gives every number, the bucketed tokens and the caveats.
 
 ## Caveats
 

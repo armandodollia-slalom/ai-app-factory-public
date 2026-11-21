@@ -165,3 +165,87 @@ test('the pipeline\'s own files touch no system', async () => {
   const files = ['.factory/metrics/run-conditions.jsonl.d/feat__bug-40.jsonl', '.factory/metrics/arch-history/2026-11/x.json', '.factory/plans/BUG-40-x/_index.md', '.factory/plans/BUG-40-x/state.json', '.factory/stack/scenarios/bug-40/scenario.yaml', 'e2e/teststack/bug-40.spec.ts', 'src/Catalog.API/Apis/CatalogApi.cs', 'src/WebApp/Components/Pages/Catalog/Catalog.razor'];
   assert.deepEqual(systemsTouched(files, settings).names, ['catalog-api', 'webapp']);
 });
+
+test('D2: pipeline publishGate (noAgent: true) with no saved assessment never runs an agent and publishes needs-human', async () => {
+  const { readJsonl } = await import('../../pipeline/lib/util.mjs');
+  const { loadGateState } = await import('../lib/publish.mjs');
+  const path = await import('node:path');
+  const root = fixRepo({ files: { 'src/Basket.API/A.cs': 'a' } });
+  cacheTicket(root, 'BUG-3', { number: 3 });
+  cleanMetrics(root, ['BUG-3']);
+  const gh = fakeGh();
+  gh.addIssue(3);
+  const pr = gh.addPr(9, { checks: [{ name: 'ci', bucket: 'pass' }], headRefOid: git(root, 'rev-parse', 'HEAD') });
+  const config = gateConfigFor(root, { autoMerge: { enabled: true } });
+  let agentCalls = 0;
+  const r = publishGate(
+    config,
+    { pr: pr.url, keys: ['BUG-3'], base: 'main', assessment: null, noAgent: true },
+    { gh: gh.gh, runAgent: () => { agentCalls++; throw new Error('no agent may run after open'); } },
+  );
+  assert.equal(agentCalls, 0, 'publishGate with noAgent must never invoke runAgent');
+  assert.equal(r.decision.action, 'review');
+  assert.ok(r.decision.approvals >= 1);
+  assert.ok(pr.labels.includes('needs-human'), `expected needs-human label, got ${JSON.stringify(pr.labels)}`);
+  assert.match(pr.comments[0].body, /BUG-3 was not assessed \(no saved pre-open assessment/);
+  const [decision] = readJsonl(path.join(root, '.factory/metrics/decisions.jsonl'));
+  assert.equal(decision.decision, 'review');
+  assert.match(decision.errors.join('; '), /no saved pre-open assessment/);
+  assert.equal(loadGateState(config, pr.url).gate.action, 'review');
+});
+
+test('ADV-11 (D2): review-gate CLI parses --no-agent and publishes needs-human without invoking any agent when assessment is missing or unreadable', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'review-gate.mjs');
+  const root = fixRepo({ files: { 'src/Basket.API/A.cs': 'a' } });
+  git(root, 'remote', 'add', 'origin', 'https://github.com/acme/shop.git');
+  cacheTicket(root, 'BUG-3', { number: 3 });
+  cleanMetrics(root, ['BUG-3']);
+  fs.mkdirSync(path.join(root, '.factory'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({
+    board: { repo: 'acme/shop', projectNumber: 1 },
+    tickets: { repo: 'acme/shop' },
+    implement: { reviewGate: { enabled: true, autoMerge: { enabled: true } } },
+  }));
+  const head = git(root, 'rev-parse', 'HEAD');
+  const binDir = path.join(root, '.fake-bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const ghLog = path.join(root, 'gh.log');
+  const fakeGhBin = path.join(binDir, 'gh');
+  fs.writeFileSync(fakeGhBin, `#!/usr/bin/env node
+const fs = require('fs');
+const a = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(ghLog)}, a.join(' ') + '\\n');
+if (a[0] === 'pr' && a[1] === 'view') {
+  if (a.includes('comments')) { process.stdout.write(JSON.stringify({ comments: [] })); process.exit(0); }
+  if (a.includes('files')) { process.stdout.write(JSON.stringify({ files: [{ path: 'src/Basket.API/A.cs', additions: 1, deletions: 0, changeType: 'MODIFIED' }] })); process.exit(0); }
+  process.stdout.write(JSON.stringify({ number: 9, url: 'https://github.com/acme/shop/pull/9', title: 'BUG-3', body: '', state: 'OPEN', isDraft: false, headRefName: 'feat/bug-3', baseRefName: 'main', headRefOid: ${JSON.stringify(head)}, author: { login: 'dev' }, labels: [], mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', autoMergeRequest: null, createdAt: '2026-11-20T00:00:00Z', updatedAt: '2026-11-20T00:00:00Z', mergedAt: null, closedAt: null }));
+  process.exit(0);
+}
+if (a[0] === 'pr' && a[1] === 'checks') { process.stdout.write(JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass', link: '' }])); process.exit(0); }
+if (a[0] === 'api' && /\\/reviews$/.test(a[1] || '')) { process.stdout.write(''); process.exit(0); }
+if (a[0] === 'api' && /\\/commits$/.test(a[1] || '')) { process.stdout.write(''); process.exit(0); }
+if (a[0] === 'pr' && a[1] === 'comment') { process.stdout.write('https://github.com/acme/shop/pull/9#issuecomment-1\\n'); process.exit(0); }
+process.stdout.write('');
+`);
+  fs.chmodSync(fakeGhBin, 0o755);
+  const badAssess = path.join(root, 'corrupt.json');
+  fs.writeFileSync(badAssess, '{not-valid-json');
+  const res = spawnSync(
+    process.execPath,
+    [cli, 'publish', '--pr', 'https://github.com/acme/shop/pull/9', '--tickets', 'BUG-3', '--base', 'main', '--no-agent', '--assessment', badAssess, '--json'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, PIPELINE_ROOT: root, PATH: `${binDir}:${process.env.PATH}`, PIPELINE_AGENT_CMD: 'exit 99' },
+    },
+  );
+  assert.equal(res.status, 0, `expected exit 0, got ${res.status}: ${res.stdout}\n${res.stderr}`);
+  const out = JSON.parse(res.stdout.trim().split('\n').at(-1));
+  assert.equal(out.action, 'review');
+  assert.ok(out.approvals >= 1);
+  assert.match(fs.readFileSync(ghLog, 'utf8'), /--add-label[^\n]*needs-human/);
+});

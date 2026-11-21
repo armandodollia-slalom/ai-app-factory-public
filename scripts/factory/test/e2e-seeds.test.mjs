@@ -71,3 +71,15 @@ test('demo video off: no seeds; a custom e2e folder from the config is honoured'
   const root = repo(undefined, { '.factory/config.json': JSON.stringify({ e2e: { dir: 'tests/e2e' } }) });
   assert.ok(render(root, INSTALL).written.includes('tests/e2e/fixtures.ts'));
 });
+
+test('D15: graphify-build.sh and factory.mjs reference existing documentation pages', () => {
+  const graphify = fs.readFileSync(path.join(INSTALL, 'scripts/graphify-build.sh'), 'utf8');
+  assert.doesNotMatch(graphify, /docs\/copilot-setup\.md/);
+  assert.match(graphify, /docs\/ai-pipeline\/setup\.md/);
+  assert.ok(fs.existsSync(path.join(INSTALL, 'docs/ai-pipeline/setup.md')));
+
+  const factoryCli = fs.readFileSync(path.join(INSTALL, 'scripts/factory/factory.mjs'), 'utf8');
+  assert.doesNotMatch(factoryCli, /docs\/providers\/capabilities\.md/);
+  assert.match(factoryCli, /docs\/providers\/README\.md/);
+  assert.ok(fs.existsSync(path.join(INSTALL, 'docs/providers/README.md')));
+});

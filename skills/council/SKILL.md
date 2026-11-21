@@ -146,9 +146,11 @@ score.
    evidence, or escalate as an owner question. Never pick one silently.
 5. An upheld `rewrite` replaces the fix list for the regions it deletes: do
    not patch code that is about to go.
-6. A later round does not undo an earlier one: a scope objection to the fix
-   of a finding upheld in an earlier round is a note, and a blocking finding
-   that asks for no change is a note.
+6. A later round does not undo an earlier one silently. A scope objection to
+   the fix of a finding upheld in an earlier round stands until the blocking
+   members, asked fresh whether the agreed fix requires that behaviour, all
+   answer yes with evidence (adjudication); only then is it a note. A blocking
+   finding that asks for no change is a note.
 7. Summarise the useful findings, the disagreements and the next steps.
 8. Do not let repeated reviews widen the work. It is your job to fight to
    keep the scope to the ticket.

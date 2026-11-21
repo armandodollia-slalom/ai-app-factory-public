@@ -1,5 +1,7 @@
 # Jenkins (CI system)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `ci.provider: "jenkins"`. Jenkins builds any git host. The adapter is `scripts/pipeline/lib/ci/jenkins.mjs`. A Multibranch Pipeline job builds the repository's branches and pull requests: `PR-<n>` from the GitHub and Bitbucket branch sources, `MR-<n>` from GitLab's. The head's run is the build of the PR's job whose revision is the head: `SCMRevisionAction.pullHash`, else the git plugin's `lastBuiltRevision`.
 
 ```json

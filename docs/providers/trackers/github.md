@@ -1,5 +1,7 @@
 # GitHub Issues and Projects (tracker)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `tracker.type: "github"`, the default with a GitHub host. Tickets are issues, epics have sub-issues, the lanes are the Status field of a Projects (v2) board, the triage values are project fields, and attachments go to the `board-assets` branch. The adapter (`scripts/board/lib/trackers/github.mjs`) is the board stage's v0.2.68 code moved behind the tracker contract, and it makes the same `gh` calls.
 
 ```json
@@ -11,7 +13,7 @@
 
 **Credentials:** the `gh` login with the `project` scope. In GitLab CI or Azure Pipelines, a `GH_TOKEN` variable with Issues (read and write) and Projects (read and write).
 
-**Setup:** `factory board setup` creates the lanes, labels and fields and changes nothing that already exists. `factory board guide` prints these steps, and the `setup-board` skill walks through them.
+**Setup:** `factory board setup` creates the lanes, labels and fields and changes nothing that already exists. `factory board guide` prints these steps, and the [`setup-board`](../../../skills/setup-board/SKILL.md) skill walks through them.
 
 ## Capabilities
 

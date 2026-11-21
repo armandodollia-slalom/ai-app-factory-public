@@ -1,6 +1,6 @@
 # Board stage
 
-Part of the [AI development pipeline](README.md). Every story, bug, epic and research spike is an issue on one GitHub Project (the **story board**), whose default view shows the epics. An engineer starts the pipeline by hand for a story or a whole epic, and the card moves as the pipeline reaches each step: claimed, under test, back to the implementer on a product bug, ready for review, failed or done.
+**Who reads this:** B (setting the board up) and C (reading the lanes). Every story, bug, epic and research spike is a ticket on the repository's ticket board (tracker): on GitHub an issue on a Projects board, whose default view shows the epics; on Jira, Azure Boards, GitLab Issues or Linear a ticket in that product, with `tracker.lanes` mapping the lanes to its statuses ([tracker pages](../providers/README.md#pages); `factory board guide` prints the configured tracker's setup steps). This page is the only description of the lanes and how cards move. An engineer starts the pipeline by hand for a story or a whole epic, and the card moves as the pipeline reaches each step: claimed, under test, back to the implementer on a product bug, ready for review, failed or done.
 
 The issue is the story's **source of truth**: its body carries the complete story, and the pipeline reads it from there (see [Tickets](#tickets-the-issue-is-the-source-of-truth)).
 
@@ -36,7 +36,7 @@ The lane names below are the defaults (`board.columns`).
 | Failed | the **failed** event: any outcome of `factory implement run` other than done (`blocked`, `unresolved`, `plan-rejected`, `pair-exhausted`, `limit-*`, `fv-*`, a blocker that failed, a PR that could not be opened, ...). The card gets the `needs-human` label and a comment with the outcome, up to three questions for a human, the details (escalation notes, findings, branch, log) collapsed, and a **Resolved** checkbox ([escalations](escalations.md#questions-and-the-resolve-checkbox)) |
 | Done | `board sync`: closed story issues move to Done (also when the review gate auto-merged the PR). The PR body gets `Closes #<issue>`, so merging the PR closes the issue. (The project's built-in "Item closed" workflow does the same instantly if you turn it on under the project's Workflows; GitHub has no API for that.) |
 
-The board is informational: GitHub errors are logged and never block an agent or change a pipeline outcome.
+The board is informational: tracker errors are logged and never block an agent or change a pipeline outcome.
 
 ## The state machine
 
@@ -67,7 +67,7 @@ An event whose number is not above the last applied one is stale or a replay and
 
 ## Starting the pipeline
 
-Automatic pickup (`board pick`, which polled the board and ran the stories assigned to you) was removed; it will be reworked later. An engineer starts the pipeline by hand from an up-to-date checkout of the base branch:
+Nothing picks tickets up automatically. An engineer starts the pipeline by hand from an up-to-date checkout of the base branch:
 
 ```bash
 factory implement run --epic checkout --pr   # every story of an epic, one epic PR
@@ -84,7 +84,7 @@ factory board mine                           # the stories assigned to you
 `board sync` does the bookkeeping that belongs to no single run. `implement run` runs it at start; run it by hand any time.
 
 - Closed story issues move to Done, and their section on the epic's evidence comment shows Done.
-- Their late outcome is recorded for the [implement decision log](implement.md#decision-log): whether the PR merged, how many commits and lines humans added on the branch before merge, and which bug tickets name the story (`type: "late"` in `.factory/metrics/decision-outcomes.jsonl` of the checkout, left uncommitted). Only stories this machine implemented have a run record to compare with.
+- Their late outcome is recorded for the [implement decision log](implement-reference.md#decision-log): whether the PR merged, how many commits and lines humans added on the branch before merge, and which bug tickets name the story (`type: "late"` in `.factory/metrics/decision-outcomes.jsonl` of the checkout, left uncommitted). Only stories this machine implemented have a run record to compare with.
 - Failed story cards labeled `escalation-resolved` and not `needs-human` (a human answered the escalation questions) move to Ready. `--json` prints the keys moved (`requeued`) and every resolved ticket in Ready (`resolved`), which `implement requeue` runs.
 - The [review gate](review-gate.md)'s bookkeeping for bug-fix PRs: **human reopens** of triaged tickets (a card moved back to In Progress with no pipeline event behind it, a reopened issue, a "changes requested" review on a gated PR) are recorded (severity +1, `reopened` label, a `reopened` event, the reason under `## Decisions`), every open gated PR is evaluated again (a waiting PR auto-merges once its checks pass), and every closed gated PR gets a `pr-review` record for the [retro](review-gate.md#review-data-for-the-retro) (plus a `revert` record when its merge was reverted). `--json` lists the reopened tickets (`reopened`), which `implement requeue` re-runs ([human reopens](review-gate.md#human-reopens)).
 - Every epic card moves to the lane its stories call for.
@@ -95,7 +95,7 @@ factory board mine                           # the stories assigned to you
 When a story reaches Pending Review, the issue gets a comment with the PR link and:
 
 - **API stories** (`[BE - ...]` in the title): the requests and responses of the story's verified Playwright tests, when the repository has set a command for it in `board.evidence.playwright` (unset by default, in which case the comment points to the PR). The command is an argument list in which `{files}` becomes the test files that carry the story's case ids (`TC-<KEY>-`), `{casePrefix}` that prefix and `{output}` a results folder; it must run those tests against the test stack with tracing on and write Playwright's JSON report to the path in `PLAYWRIGHT_JSON_OUTPUT_NAME`. The stage reads the API calls (the `request` fixture; browser traffic is left out) from each trace and posts them grouped by test. Secrets (`token`, `password`, `secret`, `authorization`, `cookie` keys) are redacted, bodies and the comment are capped (`board.evidence`), and the full log stays in `.factory/state/evidence/<KEY>/api-evidence.md`. The test stack must be up (`factory teststack up`, see [test stack](../test-stack.md)), as it is for feature verification.
-- **UI stories** (`[FE - ...]`): the feature video, taken from the "Demo video" section the [PR demo video](pr-demo-video.md) workflow keeps in the PR description. The workflow runs after the PR opens, so the comment first says the video is pending; `board sync` posts it on the issue and links it from the epic once it is published.
+- **UI stories** (`[FE - ...]`): the feature video, taken from the "Demo video" section of the PR description, which the [demo video](pr-demo-video.md) step wrote before the PR opened.
 
 ## Epic evidence
 
@@ -143,11 +143,11 @@ Every story transition, `board sync` and `setup` recompute it, so moving an epic
 
 Mockups belong to a ticket: they are its assets on the `board-assets` branch, shown in its **Mockups** section (images inline, other files linked, pinned to one commit) and downloaded into its cache folder by `board fetch` (see [Assets](#assets)). Attach mockups to a new ticket with `board new --mockups <dir>`.
 
-Who sees them: the agents implementing a story read its own mockups (and, in an `implement run --epic`, the epic's) from the start, the UI verifier compares renders of every mockup screen and state with the running app each pair round, and the PR check's design lens holds the finished branch to them ([implement](implement.md#mockups), [PR check](pr-check.md#mockup-renders)). The [story guard](README.md#story-guard) keeps every other ticket's mockups closed. Keep the mockup folder's `README.md` listing the screens and their states: builders and verifiers use it to match each screen to a page.
+Who sees them: the agents implementing a story read its own mockups (and, in an `implement run --epic`, the epic's) from the start, the UI verifier compares renders of every mockup screen and state with the running app each pair round, and the PR check's design lens holds the finished branch to them ([implement](implement.md#mockups), [PR check](pr-check.md#mockup-renders)). The [story guard](../internals.md#guards) keeps every other ticket's mockups closed. Keep the mockup folder's `README.md` listing the screens and their states: builders and verifiers use it to match each screen to a page.
 
 ## Tickets: the issue is the source of truth
 
-Stories, bugs, epics and research spikes are GitHub issues on the ticket repository (`tickets.repo`, by default this checkout's GitHub `origin`), and the issue body holds the **complete** source Markdown. There is no story folder in the repository: every stage reads a ticket through one loader (`scripts/pipeline/lib/tickets.mjs`) from a local cache that `board fetch` (or the loader, on demand) fills from the issues.
+The ticket is the source of truth on every tracker; the rest of this section describes GitHub, where stories, bugs, epics and research spikes are issues on the ticket repository (`tickets.repo`, by default this checkout's GitHub `origin`), and the issue body holds the **complete** source Markdown. There is no story folder in the repository: every stage reads a ticket through one loader (`scripts/pipeline/lib/tickets.mjs`) from a local cache that `board fetch` (or the loader, on demand) fills from the issues.
 
 | Type | Key | Labels | Parent |
 | --- | --- | --- | --- |
@@ -247,7 +247,7 @@ factory board migrate --delete-local  # only after a passing verify of exactly t
 
 ## Setup
 
-Once per repository (the `setup-board` skill walks through it). Run it again after changing `board.columns`; it is idempotent.
+Once per repository (the [`setup-board`](../../skills/setup-board/SKILL.md) skill walks through it, for any tracker; `factory board guide` prints the steps for the configured one). The rest of this section is for GitHub Projects. Run it again after changing `board.columns`; it is idempotent.
 
 ```bash
 gh auth refresh -s project                       # Projects need the project scope
@@ -265,10 +265,12 @@ The board is active only when the configuration has a `board.projectNumber`, the
 
 ## Labels and workflows
 
+On GitHub. Other trackers run the same automations on a schedule ([hosts-and-trackers.md](../hosts-and-trackers.md#what-works-in-each-combination)).
+
 | Label | Set by | Meaning |
 | --- | --- | --- |
 | `needs-human` | `board fail`; the [review gate](review-gate.md) on a bug-fix PR | On an issue: the pipeline could not finish the ticket; the latest comment has the questions and the Resolved box. On a PR: the gate requires a person's approval |
-| `reopened` | `board sync` (the [review gate](review-gate.md#human-reopens)) | A person reopened a triaged bug fix; `implement requeue` re-runs it and removes the label when it starts (`board clear-reopened`). The reopen stays in the issue's `## Triage` |
+| `reopened` | `board sync` (the [review gate](review-gate.md#human-reopens)) | A person reopened a triaged bug fix; `implement requeue` re-runs it and removes the label (`board clear-reopened`) once the open PR's hold is confirmed, or when it starts if there is no open PR to hold or no `--pr`. The reopen stays in the issue's `## Triage` |
 | `approvals:N`, `auto-merged` (PRs) | the [review gate](review-gate.md) | How many approvals a bug-fix PR needs (`review-quorum` enforces it); a PR the gate merged |
 | `escalation-resolved` | `board-escalation-resolve` workflow (or a human) | A human answered the questions; `board sync` moves the card from Failed to Ready, the next run re-runs it and removes the label when it claims the card |
 
@@ -297,7 +299,7 @@ factory board event <KEY> claim|testing|product-bug|verified|failed|closed|reope
 factory board fail <KEY>                    # Failed + needs-human, questions and Resolved box from the run record
 factory board resolve-check <issue> [--actor <login>] [--comment <id>] [--label]   # run by the board-escalation-resolve workflow
 factory board clear-resolved <KEY>          # drop escalation-resolved (a re-run started; implement run does this)
-factory board clear-reopened <KEY>          # drop reopened (a re-run of a reopened bug fix started; implement run does this)
+factory board clear-reopened <KEY>          # drop reopened (implement run does this once the open PR is held, or at the start with no open PR to hold or no --pr)
 factory board move <KEY> backlog|ready|inProgress|testing|review|failed|done [--force]
 factory board review <KEY> [--pr <url>] [--epic-branch <branch>]   # Pending Review + evidence
 factory board epic-pr <epic issue> --pr <url> [--branch <name>] [--video <url>] [--group <id> [--title <text>] [--tickets K1,K2]]

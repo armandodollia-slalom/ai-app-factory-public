@@ -1,5 +1,7 @@
 # A client's commercial scanner
 
+**Who reads this:** B and C on a client project that licenses a scanner.
+
 Many clients already license a SAST or SCA product and want its findings to count. The factory takes such a scanner into its static analysis ([../ai-pipeline/analysis.md](../ai-pipeline/analysis.md)) as a first-class tool. Its findings go through the same baseline (only what the change introduces), the same fix loop, the same report and the same merge gate as the open-source tools'. It can replace those tools or run beside them, separately for each CI job.
 
 The factory bundles no vendor binary, rule or token. The client's licence, the client's CLI or service, and the client's token do the scanning.

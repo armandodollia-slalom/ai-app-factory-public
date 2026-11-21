@@ -262,3 +262,23 @@ test('OpenAPI URLs name stack ports as {port:<name>}, resolved to the slot in us
   assert.match(warnings[0], /names no stack port billing/);
   assert.deepEqual(expandOpenApiPorts(['http://localhost:{port:ordering}/openapi/v1.json'], null), [], 'no stack: a templated URL cannot be read');
 });
+
+test('ADV-13 (D5): pr-video CLI help text matches classifyFiles on frontend-only, backend-only, and mixed PRs', () => {
+  const feOnly = classifyFiles(['src/WebApp/Components/Pages/Cart.razor'], SHOP);
+  const beOnly = classifyFiles(['src/Ordering.API/Apis/OrdersApi.cs'], SHOP);
+  const mixed = classifyFiles(['src/Catalog.API/Apis/CatalogApi.cs', 'src/WebAppComponents/Catalog/CatalogListItem.razor'], SHOP);
+  assert.deepEqual({ fe: feOnly.api, be: beOnly.api, mixed: mixed.api }, { fe: false, be: true, mixed: true });
+  assert.equal(mixed.video && mixed.api, true, 'mixed PR runs both video and api summary');
+
+  const cli = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'pr-video.mjs');
+  const r = spawnSync(process.execPath, [cli], { encoding: 'utf8' });
+  const help = `${r.stdout}\n${r.stderr}`;
+  // Because classifyFiles sets api=true whenever backend=true (including mixed PRs where frontend=true),
+  // help text must state `api (backend changed)` and never claim mixed/frontend PRs suppress or remove it.
+  if (mixed.api && mixed.frontend) {
+    assert.doesNotMatch(help, /frontend not/i, 'scope help must match classifyFiles: api does not exclude frontend changes');
+    assert.doesNotMatch(help, /only for backend-only PRs/i, 'api help must match classifyFiles: mixed PRs also get API changes');
+    assert.doesNotMatch(help, /removes the section\s+when the PR also changes the frontend/i, 'api help must not contradict mixed.api === true');
+    assert.match(help, /api \(backend changed\)/i);
+  }
+});

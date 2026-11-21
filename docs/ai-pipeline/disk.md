@@ -1,5 +1,7 @@
 # Disk use and `factory prune`
 
+**Who reads this:** C (operators) running many tickets on one machine.
+
 A pipeline run leaves a lot on disk: every ticket has a worktree (its build output, `bin`/`obj`, test results, a test-stack
 state folder with the published services per stack slot), every stack build tags new images and leaves the previous
 ones untagged, and every `factory upgrade --install` adds an engine install under `~/.ai-app-factory/versions`. On a busy

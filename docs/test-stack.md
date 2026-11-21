@@ -1,5 +1,7 @@
 # Test stack
 
+**Who reads this:** B setting up the test stack (the [`setup-teststack`](../skills/setup-teststack/SKILL.md) skill does it), C debugging a stack slot.
+
 A reproducible Docker Compose deployment of the whole application. You put it into a known state from a **scenario file** that seeds the datastores directly. It is built for agents and automated tests: every command blocks until the stack is healthy and prints one JSON result line.
 
 The engine is language neutral. It needs Node 20 and Docker (or a compatible engine through `TESTSTACK_DOCKER`) and nothing from the application's toolchain. Everything it knows about a codebase comes from two sections of the app repository's `.factory/config.json`: `stack` (compose file, host ports, URLs, how images are built) and `teststack` (datastores, readiness, scenarios). The `setup-teststack` skill (`skills/setup-teststack/SKILL.md`) walks an agent through creating both for a new codebase. `examples/eshop/` holds a complete setup for a .NET application.

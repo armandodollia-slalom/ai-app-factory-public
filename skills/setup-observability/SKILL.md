@@ -87,7 +87,7 @@ on the strength of a push alone.
 `.factory/metrics/` is committed, with a union merge, so records travel with their branch and the review
 gate can read them in any checkout. The sink adds a copy outside the repository; it does not replace the
 committed files. Do not add `.factory/metrics/` to `.gitignore`: the implement run commits it, and
-`pipeline experiment` compares its arms by reading each branch's committed metrics. If the person asks to
+`factory experiment` compares its arms by reading each branch's committed metrics. If the person asks to
 stop committing metrics, tell them it is not supported yet.
 
 ## 5. Privacy, before the first push

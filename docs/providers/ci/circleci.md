@@ -1,5 +1,7 @@
 # CircleCI (CI system)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `ci.provider: "circleci"`. CircleCI builds GitHub, GitLab and Bitbucket Cloud repositories. The adapter is `scripts/pipeline/lib/ci/circleci.mjs`. The head's pipeline is the CircleCI pipeline whose `vcs.revision` is the head. The expected pipelines are its workflows, as `.circleci/config.yml` at that head declares them.
 
 ```json

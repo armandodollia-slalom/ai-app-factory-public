@@ -350,7 +350,8 @@ test('a refused open, then `implement resume`: the open-pending route is taken, 
   const logs = path.join(ctx.repo, '.factory/state/logs');
   const attempts = fs.readdirSync(logs).filter((f) => f.startsWith('implement-DEMO-1')).sort();
   const resumed = fs.readFileSync(path.join(logs, attempts.at(-1)), 'utf8');
-  assert.match(resumed, /resuming the delivery of feat\/demo-1-apply-coupon: the PR did not open earlier[\s\S]*no agent runs, the PR opens on the CI-proven head/, resumed);
+  assert.match(resumed, /resuming the delivery of feat\/demo-1-apply-coupon: the PR did not open earlier[\s\S]*skipping implementation and review to open on the CI-proven head \(delivery-stage agents may still run if needed\)/, resumed);
+  assert.doesNotMatch(resumed, /no agent runs, the PR opens on the CI-proven head/, 'D14: resume log must not falsely claim no agent can run');
   assert.doesNotMatch(resumed, /restarting feature verification|agent \S+ \(/, 'the general route and agents were not taken');
   assert.equal(second.usage.length, agentRows, 'no agent run on the resume');
   assert.equal(second.log.split('\n').filter((l) => / pr create /.test(l)).length, first.state.refusals + 1, 'one accepted open');

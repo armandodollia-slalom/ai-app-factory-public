@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { APP_FILE, INSTALL_ROOT, loadConfig, repoOverlay, repoRoot, splitTopology } from '../pipeline/lib/config.mjs';
+import { APP_FILE, INSTALL_ROOT, loadConfig, repoOverlay, repoRoot, splitTopology, videoScriptProblems } from '../pipeline/lib/config.mjs';
 import { agentTextProblems } from '../pipeline/lib/instruction-check.mjs';
 import { lintable } from '../pipeline/lib/lint.mjs';
 import { councilDoctorRows } from '../pipeline/lib/council.mjs';
@@ -158,10 +158,15 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
       rows.push(['council configuration', false, error.message]);
     }
   }
+  // Video script scope (single validator in pipeline/lib/config.mjs; reported here rather than aborting doctor).
+  const videoScriptIssues = videoScriptProblems(config ?? {});
+  if (videoScriptIssues.length) rows.push(['demo video script settings (video.script.scope)', false, videoScriptIssues.join('; ')]);
   // The PR opens finished (implement.preOpen): CI can prove a story branch's head before its PR exists, and every
   // delivered PR's run record shows no pipeline agent starting after the PR was ready (outside a hold).
   try {
-    const { storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
+    const { preOpenProblems, storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
+    const preOpenIssues = preOpenProblems(config ?? {}, { host: checkoutHost(root, config ?? {}) });
+    if (preOpenIssues.length) rows.push(['PR delivery settings (implement.preOpen)', false, preOpenIssues.join('; ')]);
     const full = loadConfig('implement', root);
     {
       // The CI adapter's capability; that the rendered definitions carry the branch triggers is `factory check`'s row
@@ -204,7 +209,12 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
       const c = JSON.parse(fs.readFileSync(file, 'utf8'));
       for (const m of [c.lint, c.lintFallback]) for (const ext of Object.keys(m ?? {})) mapped.add(ext);
     }
-    const lint = { ...(loadConfig('feature-verification', root).precheck ?? {}) };
+    let lint = { ...(config.precheck ?? {}) };
+    try {
+      lint = { ...(loadConfig('feature-verification', root).precheck ?? {}) };
+    } catch {
+      // invalid config already reported in the settings rows above
+    }
     const tracked = lintable({ precheck: lint }, spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', timeout: 60_000 }).stdout.split('\n').filter(Boolean));
     const missing = [...mapped].filter((ext) => !(lint.lint ?? {})[ext] && tracked.some((f) => f.endsWith(ext))).sort();
     rows.push(['linters cover every language the packs can lint', missing.length === 0, missing.length ? `${missing.join(', ')} file(s) are tracked but precheck.lint has no linter for them: add the pack's mapping (onboard-codebase skill)` : `precheck.lint: ${Object.keys(lint.lint ?? {}).sort().join(', ') || 'none'}`]);
@@ -251,7 +261,7 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
     const name = host?.label ?? 'The code host';
     // A host that cannot require named checks: the gate refuses to merge until the head's expected pipelines are green
     // (its own evidence, bound to the SHA), and doctor says the host itself cannot enforce it.
-    if (host && host.capabilities?.requiredChecks === false) warnings.push([`${name} requires review-quorum and the CI checks`, `${name} cannot require checks before a merge: the review gate itself refuses to merge until every expected pipeline of the head is green, bound to that SHA (docs/providers/capabilities.md)`]);
+    if (host && host.capabilities?.requiredChecks === false) warnings.push([`${name} requires review-quorum and the CI checks`, `${name} cannot require checks before a merge: the review gate itself refuses to merge until every expected pipeline of the head is green, bound to that SHA (docs/providers/README.md)`]);
     // productRows already reported the host's review-quorum rule (a host it checks through its REST adapter).
     else if (![...product.rows, ...product.warnings].some((r) => /review-quorum/.test(r[0]))) {
       const provided = (() => {

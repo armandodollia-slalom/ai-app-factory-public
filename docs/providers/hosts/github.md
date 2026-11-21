@@ -1,5 +1,7 @@
 # GitHub (code host)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `host.type: "github"`, the default for a `github.com` remote and for GitHub Enterprise Server when `host.url` names the server. The adapter (`scripts/pipeline/lib/hosts/github.mjs`) makes exactly the `gh` calls the factory made before adapters existed (v0.2.68). `gh` owns authentication, and `GH_TOKEN` in the environment selects another identity, such as the PR bot's installation token.
 
 ```json

@@ -48,8 +48,8 @@ import { isBugTicket } from './epic-plan.mjs';
 import { reviewGateAssess, reviewGatePublish } from './post-publish.mjs';
 import { severityAtLeast } from '../../pipeline/lib/severity.mjs';
 import { push as sinkPush, sinkSettings } from '../../pipeline/lib/sink.mjs';
-import { isReopened, openPrFor, placeReopened, syncFromRemote } from './reopen.mjs';
-import { headActivities, holdPr, preOpenMedia, preOpenSettings, proveBeforeOpen, readyAudit, recordHeadActivity, releasePr } from './pre-open.mjs';
+import { isReopened, openPrFor, placeReopened, prIsOpen, syncFromRemote } from './reopen.mjs';
+import { confirmPrState, headActivities, holdPr, preOpenMedia, preOpenSettings, proveBeforeOpen, readyAudit, recordHeadActivity, releasePr } from './pre-open.mjs';
 import { keyFolder } from '../../pr-video/lib/pr-video.mjs';
 
 // With a PR check council, the implementer answering a return says which lines answer which finding (council.mjs
@@ -68,16 +68,18 @@ const FV_TERMINAL = new Set(['verified', 'product-bug', 'escalated', 'blocked-on
 // them itself a few times.
 const INTERRUPTED = new Set(['error', 'fv-crashed', 'fv-not-started', 'fv-timed-out']);
 const RETRYABLE = new Set(['error', 'fv-not-started']);
-// A finished delivery whose PR the code host would not open (the host refused its text, or the open failed after CI
-// proved the head): every agent stage is done and the head is CI-proven, so a later run (or `implement resume`) only opens
-// the PR, with no agent. Records from before the pr-refused outcome say not-delivered with the host's failure.
+// A finished delivery whose PR could not open yet (the host refused its text, pre-open gate assessment failed, or the
+// open failed after CI proved the head): implementation, review and feature verification are done and the head is
+// CI-proven, so a later run (or `implement resume`) skips straight to delivery (delivery-stage agents such as the
+// analysis/CI fixer, unsaved bug triage, or demo narrator may still run if needed). Records from before the pr-refused
+// outcome say not-delivered with the host's failure.
 // Planning and the worker's start clear `outcome` and `reason` (the run is queued, then running): the disposition that made it
 // resumable at the open is kept in `pendingOpen` until the run ends, so the story still takes the open-pending route
 // (held-out C22: the resume took the general route and reset the first push time).
 const pendingDisposition = (rec) => (rec && !rec.outcome && rec.pendingOpen ? { ...rec, ...rec.pendingOpen } : rec);
 export const openPending = (rec0) => {
   const rec = pendingDisposition(rec0);
-  return Boolean(rec && rec.phase === 'pre-open' && rec.greenAt && !rec.pr && (rec.outcome === 'pr-refused' || (rec.outcome === 'not-delivered' && /\b(?:pr|pull request) creat(?:e|ion) failed\b/.test(rec.reason ?? ''))));
+  return Boolean(rec && rec.phase === 'pre-open' && rec.greenAt && !rec.pr && (rec.outcome === 'pr-refused' || rec.outcome === 'gate-assessment-failed' || (rec.outcome === 'not-delivered' && /\b(?:pr|pull request) creat(?:e|ion) failed\b/.test(rec.reason ?? ''))));
 };
 // What to keep through planning and start-up: the earlier run's outcome and reason when it waits only for its PR to open.
 export const keepPendingOpen = (rec) => (openPending(rec) ? { pendingOpen: rec.pendingOpen && !rec.outcome ? rec.pendingOpen : { outcome: rec.outcome, reason: rec.reason ?? null } } : { pendingOpen: null });
@@ -121,11 +123,13 @@ export function resetEscalatedFv(config, key, worktree) {
 
 // A re-run of a ticket a human resolved starts clean: the escalation-resolved label comes off (a later
 // failure asks again) and the old escalation notes go, so the next failure comment only shows new ones.
-export function startResolvedReruns(config, stories, { event = boardEvent } = {}) {
+export function startResolvedReruns(config, stories, { event = boardEvent, pr = true } = {}) {
   const started = [];
-  // A reopened bug fix (review gate) re-runs once: the label comes off; the reopen stays in its Triage.
+  // A reopened bug fix (review gate) re-runs once: for a follow-up (no open PR) the label comes off now; when an open PR
+  // must be put on hold first, the label stays until the hold is confirmed in the worker (so a hold failure keeps it).
+  // Without --pr the worker never takes the reopened path (and never clears the label), so it comes off now.
   for (const s of stories.filter((x) => x.reopened && !x.skip)) {
-    event(config.root, s.key, ['clear-reopened', s.key]);
+    if (!s.reopenedPr || !pr) event(config.root, s.key, ['clear-reopened', s.key]);
     log(`${s.key}: re-run of a reopened bug fix${s.reopenedPr ? ` on ${s.branch} (${s.reopenedPr})` : s.followUp ? ` as a follow-up on ${s.branch}` : ''}.`);
   }
   for (const s of stories.filter((x) => x.resolved && !x.skip)) {
@@ -145,7 +149,7 @@ export function startResolvedReruns(config, stories, { event = boardEvent } = {}
 // A ticket waiting for a person: the board's needs-human label without escalation-resolved.
 export const waitingForPerson = (config, s) => (s.labels ?? []).includes(config.board?.blockedLabel ?? 'needs-human') && !(s.labels ?? []).includes(config.board?.resolvedLabel ?? 'escalation-resolved');
 
-export function plan(config, inputs, { base = config.baseRef, force = false, placeReopenedRuns = true, reopenDeps = {}, resumeStopped = false } = {}) {
+export function plan(config, inputs, { base = config.baseRef, force = false, placeReopenedRuns = true, reopenDeps = {}, resumeStopped = false, checkPrState = true } = {}) {
   const stories = orderStories(collectStories(inputs));
   const byKey = new Map(stories.map((s) => [s.key, s]));
   for (const s of stories) {
@@ -186,7 +190,7 @@ export function plan(config, inputs, { base = config.baseRef, force = false, pla
     const ciRun = force || waiting || (s.abandoned && !s.reopened) ? null : loadRun(config, s.key);
     // A run `implement stop` ended at its CI wait is resumed there only by an explicit `implement resume` (council C12:
     // a run stopped after a hung gh call would otherwise be implemented again from the start).
-    const resumable = (o) => !o || ['error', 'skipped'].includes(o) || INTERRUPTED.has(o) || (resumeStopped && o === 'stopped');
+    const resumable = (o) => !o || ['error', 'skipped', 'release-unconfirmed', 'hold-failed'].includes(o) || INTERRUPTED.has(o) || (resumeStopped && o === 'stopped');
     if (['ci-wait', 'draft-back'].includes(ciRun?.phase) && ciRun.pr && resumable(ciRun.outcome) && ciRun.worktree && fs.existsSync(ciRun.worktree)) {
       s.skip = null;
       s.resume = true;
@@ -212,6 +216,25 @@ export function plan(config, inputs, { base = config.baseRef, force = false, pla
     s.base = deps.length ? byKey.get(deps[0]).branch : base;
     s.merge = deps.slice(1).map((k) => byKey.get(k).branch);
     if (s.reopened && !s.skip && placeReopenedRuns) placeReopened(config, s, reopenDeps);
+    // A prior run that left an open PR (e.g. hold-failed before any agent ran, even if the `reopened` label was
+    // cleared) still routes through reopenedPr so the worker must confirm the PR is on hold before any agent starts.
+    if (!s.skip && !s.ciResume && !s.reopenedPr && placeReopenedRuns) {
+      const priorRec = loadRun(config, s.key);
+      const priorPr = priorRec?.pr ?? priorRec?.reopenedPr ?? null;
+      if (priorPr && priorRec.outcome !== 'done' && !checkPrState) s.prUnchecked = priorPr;
+      else if (priorPr && priorRec.outcome !== 'done') {
+        const checkOpen = reopenDeps.prIsOpen ?? ((u) => prIsOpen(config, u));
+        // Fails closed: a PR whose state could not be read ('unknown') is treated as open, so the worker holds it first
+        // (and stops with hold-failed, no agent, when that hold cannot be confirmed either).
+        const open = checkOpen(priorPr);
+        if (open === true || open === 'unknown') {
+          s.reopenedPr = priorPr;
+          s.fromRemote = true;
+          if (priorRec.branch) s.branch = priorRec.branch;
+          if (priorRec.worktree) s.worktree = priorRec.worktree;
+        }
+      }
+    }
   }
   return stories;
 }
@@ -228,7 +251,7 @@ export function recordUnrun(config, r) {
 
 export function describePlan(stories) {
   return stories
-    .map((s, i) => `${String(i + 1).padStart(2)}. ${s.key.padEnd(10)} ${s.skip ? `skip: ${s.skip}` : `${s.branch} <- ${s.base}${s.merge.length ? ` + ${s.merge.join(', ')}` : ''}${s.ciResume ? `  (resume at the CI wait of ${s.ciResume})` : s.resume ? '  (resume)' : ''}${s.resolved ? '  (re-run with human decisions)' : ''}`}${s.blockedBy.length ? `  (blocked by ${s.blockedBy.join(', ')})` : ''}`)
+    .map((s, i) => `${String(i + 1).padStart(2)}. ${s.key.padEnd(10)} ${s.skip ? `skip: ${s.skip}` : `${s.branch} <- ${s.base}${s.merge.length ? ` + ${s.merge.join(', ')}` : ''}${s.ciResume ? `  (resume at the CI wait of ${s.ciResume})` : s.resume ? '  (resume)' : ''}${s.resolved ? '  (re-run with human decisions)' : ''}${s.prUnchecked ? `  (PR state not checked: ${s.prUnchecked})` : ''}`}${s.blockedBy.length ? `  (blocked by ${s.blockedBy.join(', ')})` : ''}`)
     .join('\n');
 }
 
@@ -322,8 +345,13 @@ export function startWorker(config, story, { pr, script }) {
     const prior = loadRun(config, story.key) ?? {};
     const attempt = attemptOf(prior);
     saveRun(config, story.key, { ...running, ...keepPendingOpen(prior), ...(attempt ? { attempts: [...(prior.attempts ?? []), attempt] } : {}) });
+  } else {
+    const prior = story.reopenedPr ? loadRun(config, story.key) ?? {} : null;
+    const reopenState = story.reopenedPr
+      ? { pr: story.reopenedPr, reopenedPr: story.reopenedPr, ...(prior?.pr === story.reopenedPr ? { holds: prior.holds ?? [], readyAt: prior.readyAt ?? null, openedAt: prior.openedAt ?? null } : {}) }
+      : {};
+    writeJson(runFile(config, story.key), { key: story.key, branch: story.branch, worktree: story.worktree, base: story.base, ...reopenState, ...running, updatedAt: nowIso() });
   }
-  else writeJson(runFile(config, story.key), { key: story.key, branch: story.branch, worktree: story.worktree, base: story.base, ...running, updatedAt: nowIso() });
   log(`${story.key}: started on ${story.branch} (log: ${path.relative(config.root, logPath)})`);
   const fd = fs.openSync(logPath, 'a');
   const env = { ...process.env };
@@ -658,11 +686,11 @@ async function implementStoryInner(config, opts, holder) {
       return afterOpen(config, wtResume, { ...storyDelivery({ key, branch, worktree, base: saved.base ?? base, isBug: Boolean(saved.bug), issueUrl: saved.issueUrl ?? null }), prUrl: adopted.pr, result: finish('done', null, { pr: adopted.pr, resumedAt: 'pre-open' }), readyAt: adopted.readyAt, holds: adopted.holds });
     }
     // The code host refused the open earlier (or it failed after CI proved the head): the delivery runs again from its saved
-    // title and body, with no agent. The head is proven again only if it or the base moved (proveBeforeOpen), and a bug
-    // fix's gate rating made before is reused.
+    // title and body, skipping implementation and review stages (delivery-stage agents such as the analysis fixer, CI fixer,
+    // bug triage if unsaved, or demo narrator may still run if needed).
     if (openPending(saved)) {
       const input = readJson(deliveryInputFile(worktree, wtResume, key), null) ?? rebuildDeliveryInput(wtResume, { key, worktree, issueUrl: saved.issueUrl ?? null, followUps: Array.isArray(saved.followUps) ? saved.followUps : [] });
-      log(`${key}: resuming the delivery of ${branch}: the PR did not open earlier (${String(saved.openRefused?.reason ?? saved.reason ?? '').slice(0, 160)}); no agent runs, the PR opens on the CI-proven head${input.rebuilt ? ' (its body rebuilt from the run records)' : ''}`);
+      log(`${key}: resuming the delivery of ${branch}: the PR did not open earlier (${String(saved.openRefused?.reason ?? saved.reason ?? '').slice(0, 160)}); skipping implementation and review to open on the CI-proven head (delivery-stage agents may still run if needed)${input.rebuilt ? ' (its body rebuilt from the run records)' : ''}`);
       holder.wt = wtResume;
       recordExternalCalls(wtResume, key);
       const ticketMeta = readJson(path.join(worktree, wtResume.stateDir ?? '.factory/state', 'board', key, 'meta.json'), {}) ?? {};
@@ -677,9 +705,20 @@ async function implementStoryInner(config, opts, holder) {
   const reopened = opts.reopenedPr && opts.pr ? opts.reopenedPr : null;
   if (reopened) {
     const prior = loadRun(config, key) ?? {};
-    const kept = prior.pr === reopened && (prior.holds ?? []).some((h) => !h.to) ? prior.holds : null;
-    const holds = kept ?? [...(prior.pr === reopened ? prior.holds ?? [] : []), holdOpenPr(applyEnv(prep.config), reopened, 'the ticket was reopened; agents work on it again')];
+    const kept = prior.pr === reopened && (prior.holds ?? []).some((h) => !h.to && h.ok !== false && h.releaseConfirmed !== false) ? prior.holds : null;
+    const hold = kept ? null : holdOpenPr(applyEnv(prep.config), reopened, 'the ticket was reopened; agents work on it again');
+    if (hold && hold.ok === false) {
+      const reason = `could not confirm putting reopened ${reopened} on hold (${hold.mode}); no agent ran (the PR may already be in draft or held on the host — check its state before resuming)`;
+      saveRun(config, key, { pr: reopened, preOpen: true, holds: [...(prior.pr === reopened ? prior.holds ?? [] : []), hold], reopenedPr: reopened, readyAt: prior.readyAt ?? null, openedAt: prior.openedAt ?? null, holdFailed: reason });
+      return finish('hold-failed', reason);
+    }
+    const holds = kept ?? [...(prior.pr === reopened ? prior.holds ?? [] : []), hold];
     saveRun(config, key, { pr: reopened, preOpen: true, holds, reopenedPr: reopened, readyAt: prior.readyAt ?? null, openedAt: prior.openedAt ?? null });
+    try {
+      boardEvent(config.root, key, ['clear-reopened', key]);
+    } catch {
+      // best effort; the hold is already confirmed
+    }
   }
   // The repository's install (dependencies, tools) in a new story worktree, as in a subtask worktree: in self
   // mode the story worktree is where the pair, the review and feature verification run (dogfood step 5: the
@@ -1193,7 +1232,7 @@ export async function deliverFinished(config, wt, o) {
   const stateDir = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check');
   const holds = [...(o.holds ?? [])];
   // The PR's title and body as the agent stages left them, before the delivery adds its evidence: what `implement resume`
-  // delivers again, with no agent, when the code host refused the open (outcome pr-refused).
+  // delivers again (skipping implementation, review and feature verification) when the open was refused or assessment failed.
   writeJson(deliveryInputFile(worktree, wt, id), { id, title, body: o.body, savedAt: nowIso() });
   // A change that did not finish never gets a PR: the branch is pushed, the findings are on the tickets. An open PR on
   // hold stays on hold for a person.
@@ -1242,10 +1281,28 @@ export async function deliverFinished(config, wt, o) {
   if (proof.syncFailed) return { ...result, outcome: 'not-delivered', reason: `no PR: ${proof.syncFailed}`, pr: existingPr };
   if (proof.delivery) return notFinished({ outcome: proof.delivery.outcome, reason: `before its PR: ${proof.delivery.reason}`, findings: proof.delivery.findings, delivery: proof.delivery }, `its CI on the branch is not green (${proof.delivery.reason})`);
   const greenAt = nowIso();
-  // The review gate's rating of a bug fix, before the PR (the gate's only model call); published at open without one.
+  save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, bug: Boolean(isBug), ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
+  // The review gate's rating of a bug fix, guaranteed before the PR opens (the gate's only model call); published at open
+  // without starting any agent. If the active gate cannot produce an assessment here, stop before opening the PR.
   const assessFile = path.join(stateDir, `${id}-gate-assessment.json`);
-  // A resumed delivery (the open was refused earlier) reuses the rating it made then: no model call on a resume.
-  const assessment = isBug ? (o.resumed && fs.existsSync(assessFile) ? readJson(assessFile, null) : null) ?? io.assess({ worktree, keys, base, out: assessFile }) : null;
+  // A resumed delivery reuses the saved rating when present; if no rating was saved yet (e.g. after gate-assessment-failed),
+  // io.assess runs before the PR opens.
+  let assessment = null;
+  let gateSkipped = false;
+  if (isBug) {
+    const savedAssessment = o.resumed && fs.existsSync(assessFile) ? readJson(assessFile, null) : null;
+    const assessed = savedAssessment ?? io.assess({ worktree, keys, base, out: assessFile });
+    if (assessed?.skipped) gateSkipped = true;
+    else if (!assessed) {
+      const reason = 'the review gate could not produce a bug-triage assessment before the PR opened; no PR opened (no agent may run after open)';
+      const failed = notFinished({ outcome: 'gate-assessment-failed', reason, findings: [{ id: 'GATE-ASSESS-FAILED', severity: 'major', title: 'Review gate pre-open assessment failed', detail: reason }] }, reason);
+      if (!existingPr) {
+        save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, bug: true });
+        return { ...failed, phase: 'pre-open', greenAt, bug: true };
+      }
+      return failed;
+    } else assessment = assessed;
+  }
   // The body, whole: CI evidence, the gate's assessment, the demo video and the API summary of the branch run. The
   // records name the head the PR opens on (council C11, Sol 3).
   const head = headSha(worktree);
@@ -1291,13 +1348,13 @@ export async function deliverFinished(config, wt, o) {
     // The PR opens finished: once, on the head CI proved, with its whole body.
     const opened = await o.open({ title, body, draft: draftFirst });
     if (opened.refused) {
-      // Every agent stage is done and CI proved this head: the delivery is kept, not lost. The record stays at pre-open with
-      // the refusal, and `implement resume` opens the PR later on this head (re-proven only if the base moved), no agent.
+      // Every implementation/review stage is done and CI proved this head: the delivery is kept, not lost. The record stays
+      // at pre-open with the refusal, and `implement resume` retries delivery on this head (delivery-stage agents may still run if needed).
       const refusal = { at: nowIso(), head, attempts: opened.attempts ?? [], records: opened.records ?? null, reason: opened.reason };
       save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, openRefused: refusal, ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
       appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'host-refusal', what: 'pr-open', head, accepted: false, attempts: refusal.attempts.length }]);
-      log(`${label}: ${opened.reason}; the branch ${branch} stays pushed and CI-proven on ${head.slice(0, 7)}: \`implement resume\` opens the PR`);
-      return { ...result, outcome: 'pr-refused', reason: `no PR: ${opened.reason}; the CI-proven head ${head.slice(0, 7)} is kept and \`implement resume\` opens the PR without running any agent`, pr: null, finalSha: head, greenAt, openRefused: refusal };
+      log(`${label}: ${opened.reason}; the branch ${branch} stays pushed and CI-proven on ${head.slice(0, 7)}: \`implement resume\` retries opening the PR`);
+      return { ...result, outcome: 'pr-refused', reason: `no PR: ${opened.reason}; the CI-proven head ${head.slice(0, 7)} is kept and \`implement resume\` retries opening the PR without re-running implementation or review (delivery-stage agents may still run if needed)`, pr: null, finalSha: head, greenAt, openRefused: refusal };
     }
     if (!opened.pushed || !opened.url) return { ...result, outcome: 'not-delivered', reason: `no PR: ${opened.reason}` };
     if (opened.reduced) {
@@ -1308,12 +1365,30 @@ export async function deliverFinished(config, wt, o) {
     openedAt = nowIso();
     if (process.env.PIPELINE_TEST_DIE_AT === 'after-pr-open') process.exit(137);
     recordHeadActivity(wt, prUrl, headSha(worktree), 'opened', { at: openedAt });
-    if (draftFirst) holds.push(opened.draft ? { mode: 'draft', label: preOpenSettings(wt).wipLabel, from: openedAt, why: 'its checks run only once the PR exists' } : io.hold(prUrl, { mode: 'label', why: 'its checks run only once the PR exists', at: openedAt }));
-    readyAt = draftFirst ? null : openedAt;
+    if (draftFirst) {
+      const wipLabel = preOpenSettings(wt).wipLabel;
+      const draftConfirmed = opened.draft && (io.confirmHold ? io.confirmHold(prUrl, { mode: 'draft', label: wipLabel }) !== false : true);
+      if (draftConfirmed) {
+        holds.push({ mode: 'draft', label: wipLabel, ok: true, from: openedAt, why: 'its checks run only once the PR exists' });
+      } else {
+        const why = 'its checks run only once the PR exists';
+        // A draft the host may have applied without confirming it: recorded (not trusted), so afterOpen releases it too.
+        if (opened.draft) holds.push({ mode: 'draft', label: wipLabel, ok: false, from: openedAt, why });
+        let h;
+        try {
+          h = io.hold(prUrl, { mode: 'label', why, at: openedAt });
+        } catch (error) {
+          h = { mode: 'label', label: wipLabel, ok: false, from: openedAt, why, error: String(error?.message ?? error) };
+        }
+        const ok = Boolean(h && h.ok !== false);
+        holds.push({ ...(h && typeof h === 'object' ? h : { mode: 'label', label: wipLabel, from: openedAt, why }), ok });
+      }
+    }
+    readyAt = draftFirst && holds.at(-1)?.ok !== false ? null : openedAt;
   }
   await o.onOpen?.(prUrl, { existing: Boolean(existingPr) });
-  if (isBug) {
-    io.publishGate({ worktree, pr: prUrl, keys, base, assessment: assessment ? assessFile : null });
+  if (isBug && !gateSkipped) {
+    io.publishGate({ worktree, pr: prUrl, keys, base, assessment: assessment ? assessFile : null, noAgent: true });
     recordHeadActivity(wt, prUrl, headSha(worktree), 'labeled');
   }
   save({ phase: 'ci-wait', pr: prUrl, branch, worktree, base, bug: Boolean(isBug), issues, questions: [], prCheckIncomplete: null, preOpen: true, firstPushAt, greenAt, openedAt, readyAt, holds, branchCi: branchCi ? { state: branchCi.state, head: branchCi.head ?? head, pipelines: branchCi.names ?? [], prOnly: branchCi.prOnly ?? [], rounds: branchCi.rounds ?? 0 } : null });
@@ -1329,11 +1404,21 @@ export function adoptOpenedPr(wt, branch, { io = deliveryIo(wt) } = {}) {
 }
 
 // An open PR that agents are about to work on again (a re-delivered or joined epic group, a resumed run that must do agent
-// work): it is put on hold first, so no agent runs while it is ready. Returns the hold record.
+// work): it is put on hold first, so no agent runs while it is ready. Always returns a hold record with an explicit boolean
+// `ok` (false when the host call threw or could not confirm the hold); callers must stop before starting agents when `!ok`.
 export function holdOpenPr(wt, pr, why, { io = deliveryIo(wt) } = {}) {
-  const h = io.hold(pr, { mode: preOpenSettings(wt).afterOpen, why });
-  log(`${pr} is on hold (${h.mode}) while agents work on it: ${why}`);
-  return h;
+  const mode = preOpenSettings(wt).afterOpen;
+  const label = preOpenSettings(wt).wipLabel;
+  let h;
+  try {
+    h = io.hold(pr, { mode, why });
+  } catch (error) {
+    h = { mode, label, ok: false, from: nowIso(), why, error: String(error?.message ?? error) };
+  }
+  const ok = Boolean(h && h.ok !== false);
+  const rec = { ...(h && typeof h === 'object' ? h : { mode, label, from: nowIso(), why }), ok };
+  log(ok ? `${pr} is on hold (${rec.mode}) while agents work on it: ${why}` : `could not confirm putting ${pr} on hold (${rec.mode}): ${why}`);
+  return rec;
 }
 
 // The effects the delivery has on the outside (the branch push, the CI gate, the host's PR, the gate's rating, the board),
@@ -1383,6 +1468,7 @@ export function deliveryIo(wt) {
       }
     },
     hold: (pr, { mode = po().afterOpen, why, at } = {}) => holdPr(host(), pr, { mode, label: po().wipLabel, why, at }),
+    confirmHold: (pr, { mode = po().afterOpen, label = po().wipLabel } = {}) => confirmPrState(host(), pr, { mode, label, held: true }),
     release: (pr, { mode, label }) => releasePr(host(), pr, { mode, label }),
     ownsPr: (pr) => host().ownsPr?.(pr) !== false,
     findOpenPr: (branch) => {
@@ -1423,30 +1509,71 @@ export async function afterOpen(config, wt, o) {
   const repo = io.repo();
   const common = { config: wt, ciOptions: { ciSettings: settings.reviewGate?.ci ?? {}, activities: (h) => headActivities(wt, prUrl, h) }, repo, pr: prUrl, branch, cwd: worktree, prCheckCli: PR_CHECK_CLI, targetArgs, base, env: o.env ?? fixEnv(worktree, base, keys[0]), seedFile: path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-ci-fix.json`), log: (m) => log(`${label}: ${m}`), ...(settings.ciWaitSec ? { timeoutSec: settings.ciWaitSec } : {}), ...(settings.ciPollSec != null ? { pollSec: settings.ciPollSec } : {}), ...(settings.ciSettleSec != null ? { settleSec: settings.ciSettleSec } : {}) };
   const saveWait = (extra = {}) => save({ phase: 'ci-wait', pr: prUrl, preOpen: true, readyAt, holds, ...extra });
-  const held = () => holds.length > 0 && !holds.at(-1).to;
-  const release = () => {
-    const h = holds.at(-1);
-    io.release(prUrl, { mode: h.mode, label: h.label ?? po.wipLabel });
+  // Held for a fixing round only when the last hold was confirmed and its release was not attempted: a hold whose release
+  // is unconfirmed may already be ready on the host, so it is held (and confirmed) again first.
+  const held = () => holds.length > 0 && !holds.at(-1).to && holds.at(-1).ok !== false && holds.at(-1).releaseConfirmed !== false;
+  let holdFailed = null;
+  let releaseFailed = null;
+  const release = (h) => {
+    let confirmed;
+    try {
+      confirmed = io.release(prUrl, { mode: h.mode, label: h.label ?? po.wipLabel }) !== false;
+    } catch {
+      confirmed = false;
+    }
+    if (!confirmed) {
+      h.releaseConfirmed = false;
+      h.releaseFailedAt = nowIso();
+      const reason = `the code host did not confirm releasing ${prUrl} from hold (${h.mode}); ready was not recorded and the ticket is not delivered-ready`;
+      releaseFailed = { state: 'release-unconfirmed', outcome: 'release-unconfirmed', reason, flaky: [], failing: [], fixerNotes: [], findings: [{ id: 'PR-RELEASE-UNCONFIRMED', severity: 'major', title: 'PR release from hold was not confirmed by the host', detail: reason }], issues };
+      log(`${label}: ${reason}`);
+      return false;
+    }
     h.to = nowIso();
+    h.releaseConfirmed = true;
     if (h.mode === 'draft') recordHeadActivity(wt, prUrl, headSha(worktree), 'ready_for_review', { at: h.to });
     if (h.mode === 'close-reopen') recordHeadActivity(wt, prUrl, headSha(worktree), 'reopened', { at: h.to });
-    readyAt = readyAt ?? h.to;
+    return true;
+  };
+  // On green every hold not yet released is released, confirmed or not (a release is idempotent and confirmed by a
+  // re-read): a hold the host applied without confirming it would otherwise leave a draft recorded as done.
+  const releaseAll = () => {
+    const open = holds.filter((h) => !h.to).reverse();
+    for (const h of open) if (!release(h)) return false;
+    readyAt = readyAt ?? open.at(-1).to;
     log(`${label}: ${prUrl} is ready again: every expected check is green on its head`);
+    return true;
   };
   const waitOnly = () => (repo && settings.ciWait !== false && io.ownsPr(prUrl) ? io.gate({ ...common, fixRounds: 0 }) : Promise.resolve({ state: 'success', failing: [], pending: [] }));
   let ci = await waitOnly();
-  let cycles = holds.filter((h) => h.cycle).length;
+  let cycles = holds.filter((h) => h.cycle && h.ok !== false).length;
   for (;;) {
-    if (ci.state === 'success' && held()) {
-      release();
+    if (ci.state === 'success' && holds.some((h) => !h.to)) {
+      releaseAll();
       saveWait();
       break;
     }
     if (!['failure', 'flaky'].includes(ci.state) || cycles >= po.draftCycles || ciFixRounds(settings) < 1) break;
     cycles += 1;
-    // Agents work on an open PR only while it is on hold.
-    if (!held()) holds.push({ ...io.hold(prUrl, { mode: po.afterOpen, why: `the PR's CI is not green: ${ciLine(ci)}` }), cycle: cycles });
-    else holds.at(-1).cycle = cycles;
+    // Agents work on an open PR only while it is confirmed on hold.
+    if (!held()) {
+      const why = `the PR's CI is not green: ${ciLine(ci)}`;
+      let h;
+      try {
+        h = io.hold(prUrl, { mode: po.afterOpen, why });
+      } catch (error) {
+        h = { mode: po.afterOpen, label: po.wipLabel, ok: false, from: nowIso(), why, error: String(error?.message ?? error) };
+      }
+      const confirmed = Boolean(h && h.ok !== false);
+      holds.push({ ...(h && typeof h === 'object' ? h : { mode: po.afterOpen, label: po.wipLabel, from: nowIso(), why }), ok: confirmed, cycle: cycles });
+      if (!confirmed) {
+        const reason = `could not confirm putting ${prUrl} on hold (${h?.mode ?? po.afterOpen}) before a CI fixing round (${ciLine(ci)}); no agent ran (the PR may already be in draft or held on the host — check its state before resuming)`;
+        holdFailed = { state: 'hold-failed', outcome: 'hold-failed', reason, flaky: ci.flaky ?? [], failing: ci.failing ?? [], fixerNotes: [], findings: [{ id: 'PR-HOLD-FAILED', severity: 'major', title: 'PR could not be put on hold before a CI fixing round', detail: reason }], issues };
+        log(`${label}: ${reason}`);
+        saveWait({ phase: 'ci-wait', holdFailed: reason });
+        break;
+      }
+    } else holds.at(-1).cycle = cycles;
     saveWait({ phase: 'draft-back' });
     log(`${label}: ${prUrl} is on hold (${holds.at(-1).mode}); one CI fixing round on the branch`);
     const before = headSha(worktree);
@@ -1455,7 +1582,8 @@ export async function afterOpen(config, wt, o) {
   }
   log(`${label}: ${ciLine(ci)}`);
   if (ci.flaky?.length) appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'flaky-tests', pr: prUrl, tests: ci.flaky, state: ci.state }]);
-  const delivery = deliveryDecision(ci, { issues });
+  const ciDelivery = deliveryDecision(ci, { issues });
+  const delivery = holdFailed ? mergeDecisions(holdFailed, ciDelivery) : releaseFailed ? mergeDecisions(releaseFailed, ciDelivery) : ciDelivery;
   const deliveryFile = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-delivery.json`);
   if (delivery) writeJson(deliveryFile, delivery);
   if (isBug) io.regate({ worktree, pr: prUrl, args: delivery ? ['--delivery', deliveryFile] : ['--delivery-clear'] });
@@ -1465,15 +1593,16 @@ export async function afterOpen(config, wt, o) {
   const auditKeys = o.auditKeys ?? keys;
   const audit = readyAudit({ keys: auditKeys, readyAt, holds }, io.usage());
   if (!audit.ok) appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'agent-after-ready', pr: prUrl, readyAt, runs: audit.after }]);
-  save({ phase: null, pr: prUrl, preOpen: true, readyAt, holds, readyAudit: audit });
+  const nextPhase = releaseFailed || holdFailed ? 'ci-wait' : null;
+  save({ phase: nextPhase, pr: prUrl, preOpen: true, readyAt, holds, readyAudit: audit, ...(releaseFailed ? { releaseConfirmed: false } : {}), ...(holdFailed ? { holdFailed: holdFailed.reason } : {}) });
   // The delivery's own figures (metrics): time from the first push of the branch to the PR, and to ready; holds; the audit.
   const rec = load() ?? {};
   const mins = (a, b) => (a && b ? Math.round((Date.parse(b) - Date.parse(a)) / 600) / 100 : null);
   const firstPushAt = rec.firstPushAt ?? result.firstPushAt ?? null;
   const openedAt = rec.openedAt ?? result.openedAt ?? null;
-  appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'pre-open', pr: prUrl, first_push_at: firstPushAt, opened_at: openedAt, ready_at: readyAt, first_push_to_open_min: mins(firstPushAt, openedAt), first_push_to_ready_min: mins(firstPushAt, readyAt), branch_ci: rec.branchCi ?? null, holds: holds.length, agents_after_ready: audit.after.length, ci: ci.state }]);
+  appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'pre-open', pr: prUrl, first_push_at: firstPushAt, opened_at: openedAt, ready_at: readyAt, first_push_to_open_min: mins(firstPushAt, openedAt), first_push_to_ready_min: mins(firstPushAt, readyAt), branch_ci: rec.branchCi ?? null, holds: holds.length, agents_after_ready: audit.after.length, ci: ci.state, ...(releaseFailed ? { release_confirmed: false } : {}), ...(holdFailed ? { hold_failed: true } : {}) }]);
   // The PR's head as delivered: a hold's CI fixing round may have pushed after the open.
-  const out = { ...result, finalSha: headSha(worktree), pr: prUrl, ci: ci.state, phase: null, readyAt, holds, readyAudit: { ok: audit.ok, after: audit.after.length } };
+  const out = { ...result, finalSha: headSha(worktree), pr: prUrl, ci: ci.state, phase: nextPhase, readyAt, holds, readyAudit: { ok: audit.ok, after: audit.after.length }, ...(releaseFailed ? { releaseConfirmed: false } : {}) };
   if (delivery) return { ...out, outcome: delivery.outcome, reason: delivery.reason, findings: delivery.findings, delivery };
   return out;
 }

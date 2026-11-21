@@ -1,6 +1,6 @@
 # Static analysis
 
-Opt-in. With no `analysis` section in `.factory/config.json`, nothing on this page runs and nothing the factory renders changes.
+**Who reads this:** B and C turning on static analysis, and anyone asking how secrets are kept out of records. Opt-in: with no `analysis` section in `.factory/config.json`, the tools on this page do not run (the redaction of records, [below](#secrets-in-records-and-posts-redaction), always runs).
 
 Agents are good at judgement and bad at noticing what a tool proves in a second: a secret in a commit, a package with a known vulnerability, a SQL string built from input. So the harness runs those tools itself, **before** any verifier or council member sits, and gives the provable findings straight back to the implementer. Members then spend their rounds on what only a model can judge. CI runs the same tools as required checks, so a pull request cannot merge past them.
 
@@ -20,7 +20,7 @@ Each slot writes **one report per commit** (`.factory/state/analysis/reports/<sh
 
 What the fix loop could not clear becomes a harness finding:
 
-- `source: "tool"`, `id: "tool:fp-<fingerprint>:<rule>"` (the fingerprint first and prefixed, so no rule name such as `generic-api-key` sits before a hex string; ids written before 0.2.85 as `tool:<rule>:<fingerprint>` are read through `canonicalFindingId`; stable across rounds: the fingerprint is the tool, rule, file and normalised line, not the line number), `lens` from the tool, `action: "fix"`;
+- `source: "tool"`, `id: "tool:fp-<fingerprint>:<rule>"` (the fingerprint first and prefixed, so no rule name sits right before a hex string; ids in the older form `tool:<rule>:<fingerprint>` are still read, through `canonicalFindingId`; stable across rounds: the fingerprint is the tool, rule, file and normalised line, not the line number), `lens` from the tool, `action: "fix"`;
 - `severity: "blocking"` only for rules or levels on the tool's `block` list; everything else is a minor note;
 - added after the council's merge, so it is **outside `blockOn`** (members cannot outvote it) and it **cannot be disputed** to a model (the harness drops an implementer's dispute of a `tool:` finding). Only a change that makes the tool stop reporting it ends it.
 
@@ -48,7 +48,7 @@ Pre-existing findings in touched code become `followUps` (one per tool and rule)
 
 #### Known test credentials
 
-An application's e2e tests sign in as seeded demo users, and the secret scanner flags their password in every new spec (each one is a new finding to the baseline). Declare such values once, as governance: `"analysis": { "secrets": { "allow": { "stopwords": ["Pass123$"] } } }`. Betterleaks then runs with its default rules plus one allowlist of exactly these values (`BETTERLEAKS_CONFIG_TOML`), locally and in CI; any other secret is still found.
+An application's e2e tests sign in as seeded demo users, and the secret scanner flags their password in every new spec (each one is a new finding to the baseline). Declare such values once, as governance: `"analysis": { "secrets": { "allow": { "stopwords": ["<the seeded test password>"] } } }`. Betterleaks then runs with its default rules plus one allowlist of exactly these values (`BETTERLEAKS_CONFIG_TOML`), locally and in CI; any other secret is still found.
 
 ### Decision table for a secret finding
 
@@ -66,16 +66,29 @@ Fake, by the table's rule: the finding is in a test file of the change (tests, s
 
 ## Secrets in records and posts (redaction)
 
-Nothing the harness or an agent writes or publishes may carry a secret, or look like one to a third-party scanner (owner requirement after an employer's scanner read a committed finding id, `tool:generic-api-key:<hex>`, as a posted API key). `scripts/pipeline/lib/redact.mjs` is the one boundary:
+No text record the harness writes, and nothing an adapter writes to a host, tracker or sink, may carry a secret, or look like one to a third-party scanner. `scripts/pipeline/lib/redact.mjs` is the one boundary. Images are not text records: video keyframes are copied unmasked and finished video frames are not scanned ([video checks](pr-demo-video.md#secrets-never-show)). Two different things happen there: **redaction** replaces what it detects in local records and output and never blocks; the **gates** on what leaves the machine (commit, push, every host, tracker and sink write) redact and then scan again, and only they block. Source files an agent edits are not records: with static analysis on, the secret scanner and the commit gate above cover them.
 
 - **What passes it:** every metrics shard, run record, decision, usage row, report, lesson, plan record, log line and the harness's console output (`writeJson`, `appendJsonl`, `writeText`, `appendText`, `log`, and a wrapper on stdout and stderr installed by `util.mjs`); every write operation of every host, tracker and sink adapter (the contract's `write` operations, wrapped where the adapter is created, so built-in and custom adapters alike); the agent prompt files.
 - **What it detects:** the pinned scanner's high-confidence rules (gitleaks / betterleaks rule ids: private keys, GitHub, GitLab, AWS, Slack, Stripe, Google, Anthropic, OpenAI and npm tokens, JWTs, storage keys, credentials in URLs and connection strings); the credential shape, a name ending in key, secret, token or password directly before a hex or base64-like value; the values of the token environment variables (`*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_API_KEY`, `*_CREDENTIALS` and any the config names in `*Env` settings); config values under credential-named settings; and every value detected earlier in the run, by the boundary or a scanner's parser. Only a SHA-256 of a seen value is kept (`<stateDir>/redact-seen.jsonl`, never committed or shipped).
+- **What it does not detect: payment card data.** The boundary has no card rule, so tickets, plans, decisions and PR text keep a card number they quote; it does not rewrite what agents read. Card fields and numbers are masked only in the backend request evidence, with limits ([card data](pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
 - **What it writes:** `[redacted:<rule>]` in place of the value. Values holding the placeholder marker `factoryfake` are test data and stay.
 - **Gates on what leaves the machine:** before the harness commits, staged records (`.factory/metrics/`, lessons, plans) are redacted in place and scanned (`record-gate.mjs`); before it pushes a story branch, the records the push carries are scanned; before a host, tracker or sink write, its arguments are redacted and scanned. Anything still detected throws `SecretGateError` and nothing is sent.
 - **Tool output:** a secret scanner's findings keep rule, file, line and fingerprint; the snippet is dropped, the message redacted, the `key` (a hash of the value) is used for the fingerprint and not recorded, and the matched value is remembered as a hash. The pinned scanner runs with `--redact`.
 - **Agents:** every agent and council member, on every CLI, gets the rule never to write a key, token, password or connection string anywhere, to refer to it by setting name or file and line, and to use a `factoryfake` placeholder in test data.
 - **What it leaves alone:** fingerprints, SHAs, finding ids, token counts, ticket keys and paths (none carries the credential shape), so baselines, the secret decision table and resume read the records as before.
 - **Proof:** `scripts/pipeline/test/canary-run.test.mjs` seeds canaries in the config, an agent's output, a tool finding and an environment variable, runs the real writers, gates and adapters, and asserts that no canary appears in anything committed, posted, logged or exported, and that the pinned scanner and the generic `(api-key|secret|token|password)[:=]<value>` pattern find nothing. `redaction-guard.test.mjs` fails when a writer or poster goes around the boundary.
+
+### Why records are scanned too
+
+![Yo dawg, I heard you like infosec, so I statically analyzed your static analyzer, so you can find API key leaks while finding API key leaks](../assets/static-analysis-meme.jpg)
+
+While the secret scanner was being tested on a public test repository, the information security team of the
+owner's employer reported an API key posted there. No secret had been pushed. The factory had committed its own
+metrics record of a secret-scan finding, and finding ids then had the form `tool:<rule>:<fingerprint>`, which for
+the generic API key rule reads like a key name followed by a value. An outside scanner had flagged the record of
+the tool that looks for secrets. Since then finding ids put the fingerprint first, everything the factory writes or
+publishes passes the boundary above, records are scanned again before commit and push, and every agent is told
+never to write a key or token.
 
 ## Suppressions
 
@@ -116,7 +129,7 @@ Per stack, enabled by file presence (`when`):
 | Pack | Tool | Licence | Notes |
 | --- | --- | --- | --- |
 | dotnet | `roslyn-security` | MIT | the SDK's security analyzers (CA2xxx, CA3xxx, CA5xxx) on a full rebuild with `AnalysisModeSecurity=All`, read from the build output; a solution build cannot write one SARIF `ErrorLog` per project from the command line without changing the repository's MSBuild files, which the factory does not do. Story level and PR check only (it rebuilds) |
-| dotnet | `nuget-audit` | MIT | `dotnet list package --vulnerable --include-transitive --format json`: a report separate from restore's NU1901–NU1904 warnings, so a `NoWarn` of those codes (the reference eShop has one in `Directory.Build.props`) does not silence it. `NuGetAuditSuppress` items still apply and are listed as suppressions. Added to the `dependencies` job |
+| dotnet | `nuget-audit` | MIT | `dotnet list package --vulnerable --include-transitive --format json`: a report separate from restore's NU1901–NU1904 warnings, so a `NoWarn` of those codes (the eShop sample has one in `Directory.Build.props`) does not silence it. `NuGetAuditSuppress` items still apply and are listed as suppressions. Added to the `dependencies` job |
 | typescript | `eslint-security` | Apache-2.0 | eslint-plugin-security (4.x; 3.x does not run on ESLint 10) from the repository's own `node_modules`, with the factory's ESLint and TypeScript parser; reported as not installed where the repository does not have it |
 | python | `bandit` | Apache-2.0 | declared, parser tested against recorded output; **not exercised end to end** |
 | go | `gosec` | Apache-2.0 | declared, SARIF; **not exercised end to end** |

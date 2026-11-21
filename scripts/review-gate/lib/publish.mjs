@@ -67,9 +67,15 @@ export function gatePr(config, a, { gh, prior = null, cwd = config.root, log = (
 // deps: { gh, runAgent, log }. Returns { assessment, decision, problems }.
 // `assessment`: one computed before the PR existed (`review-gate assess`, implement.preOpen): publishing it is
 // deterministic, no model runs once the PR is open; it is bound to the PR and its head here.
-export function publishGate(config, { pr, keys, cwd = config.root, base, assessment: before = null }, deps) {
+// `noAgent`: set by pipeline delivery so publishing on an open PR never starts a triage agent; if no saved assessment
+// is provided, publishes an unassessed result (`review` / `needs-human`) and records why.
+export function publishGate(config, { pr, keys, cwd = config.root, base, assessment: before = null, noAgent = false, missingReason = null }, deps) {
   const log = deps.log ?? (() => {});
-  const assessment = before ? { ...before, pr, number: prNumber(pr), assessedBeforeOpen: true } : assessPr(config, { pr, keys, cwd, base }, deps);
+  const assessment = before
+    ? { ...before, pr, number: prNumber(pr), assessedBeforeOpen: true }
+    : noAgent
+      ? assessPr(config, { pr, keys, cwd, base, skipTriage: true, skipReason: missingReason ?? 'no saved pre-open assessment (no agent may run after the PR opens)' }, deps)
+      : assessPr(config, { pr, keys, cwd, base }, deps);
   const problems = [];
   for (const t of assessment.tickets) {
     const p = recordTicket(config, deps.gh, assessment, t);

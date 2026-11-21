@@ -86,8 +86,8 @@ export function changedProtos(root, base) {
   return changedFiles(root, mergeBaseOf(root, base)).filter((f) => /\.proto$/i.test(f.file)).map((f) => f.file);
 }
 
-// Whether the changed files touch the frontend, the backend, or both. A PR gets a demo video only
-// when it changes the frontend, and an API summary only when it changes the backend and not the frontend.
+// Whether the changed files touch the frontend, the backend, or both. A PR gets a demo video
+// when it changes the frontend, and an API summary whenever it changes the backend (including mixed PRs).
 //   frontend  a file matching `project.frontendPaths` or the paths of a service with kind "frontend"
 //   backend   any other file under `prVideo.backendPaths`, or (when that is empty) in a service of
 //             another kind; never a file matching `prVideo.neutralPaths` (app wiring, shared defaults)

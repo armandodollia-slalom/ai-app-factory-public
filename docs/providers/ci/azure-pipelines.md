@@ -1,5 +1,7 @@
 # Azure Pipelines (CI system)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `ci.provider: "azure-pipelines"`, the default with an Azure DevOps host. The adapter is `scripts/pipeline/lib/ci/azure-pipelines.mjs`. The pipelines a pull request's head must run are the target branch's **Build validation** policies (each policy's build definition). The head's runs are the builds of the PR's merge ref whose `triggerInfo` names the head as `pr.sourceSha`: Azure builds the merge commit, so `sourceVersion` is not the head. Logs come from the build timeline.
 
 **Generated files:** one pipeline per `.azure-pipelines/factory-*.yml`, created once by hand, plus `.azure-pipelines/factory-analysis.yml` with analysis on. Secret variables reach a step only when mapped, and the generated steps map every name the config uses (a commercial scanner's token included). Keep "Make secrets available to builds of forks" off.

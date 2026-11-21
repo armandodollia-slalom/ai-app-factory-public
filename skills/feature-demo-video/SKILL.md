@@ -72,7 +72,7 @@ Whenever your change affects anything a user can see or do in a browser: new pag
 5. **Report it.** In your final summary to the user:
    - Embed each relevant video with Markdown using its absolute path, for example `![Add to cart](/path/to/repo/artifacts/e2e-videos/scenarios/add-to-cart--a-shopper-adds-a-product.webm)`.
    - Say what each video demonstrates and the scenario or data used.
-   - In a PR description, include the same list and the command to reproduce the videos. Commit the tests, never the videos. With the `demoVideo` feature, the pipeline records every changed spec that matches `prVideo.specPatterns` on this machine before the PR opens (never in CI) and adds the narrated videos to a **Demo video** section of the description, so a UI spec in the change is what puts a demo on it. Backend-only PRs get an **API changes** section instead.
+   - In a PR description, include the same list and the command to reproduce the videos. Commit the tests, never the videos. With the `demoVideo` feature, the pipeline records every changed spec that matches `prVideo.specPatterns` on this machine before the PR opens (never in CI) and adds the narrated videos to a **Demo video** section of the description, so a UI spec in the change is what puts a demo on it. A PR that changes backend code (with or without frontend code) also gets an **API changes** section ([pr-demo-video.md](../../docs/ai-pipeline/pr-demo-video.md#which-prs-get-what)).
 
 ## Demo API (`e2e/demo.ts`)
 

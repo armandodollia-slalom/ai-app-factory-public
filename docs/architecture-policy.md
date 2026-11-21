@@ -1,6 +1,6 @@
 # Architecture Policy Pack
 
-The Architecture Policy Pack checks a change against a repository's architecture rules without an LLM: secrets in source, a service connecting to another service's database, a domain module depending on infrastructure, and whatever else the repository declares. The [review stage](ai-pipeline/review.md) runs it before the LLM reviewer; a Git pre-commit hook and CI can run the same rules.
+**Who reads this:** B writing a policy for a codebase, C reading a policy block. The Architecture Policy Pack checks a change against a repository's architecture rules without an LLM: secrets in source, a service connecting to another service's database, a domain module depending on infrastructure, and whatever else the repository declares. The [review stage](ai-pipeline/review.md) runs it before the LLM reviewer; a Git pre-commit hook and CI can run the same rules.
 
 It has two parts that live in different places.
 
@@ -37,6 +37,92 @@ What the engine writes goes to the app repository, never to the install:
 ### No policy
 
 A repository without `<policy dir>/policy.yaml` has no architecture policy. This is a result, not an error: every entry point prints `no architecture policy configured`, returns `{"status": "not_configured", "decision": "NOT_CONFIGURED", "can_proceed": true}` where JSON is expected, and exits 0. The review stage then skips the policy step with a note and still runs the LLM review.
+
+## Running it
+
+`<factory>` is the factory install root (`$FACTORY_HOME` inside pipeline agents). Run from the app repository, or pass `--workspace`.
+
+```bash
+python3 -m pip install -r <factory>/architecture-policy/requirements.txt   # pyyaml, jsonschema
+
+ARCH=<factory>/architecture-policy/hooks/arch.py
+python3 $ARCH selfcheck                                   # is the policy valid? (schema, references, validator self-tests, profile vs. code)
+python3 $ARCH selfcheck --skip-workspace                  # the policy on its own, without the code (a draft, a template)
+python3 $ARCH validate --checkpoint code_review           # changed files against the merge base (--base <ref>)
+python3 $ARCH validate --checkpoint ci --format sarif     # whole repository
+python3 $ARCH validate --checkpoint code_review --files src/a.rs src/b.rs --no-evidence --no-history
+python3 $ARCH rules --files src/a.rs                      # which rules apply to a file
+python3 $ARCH rule SEC-001                                # one rule; also: pattern, examples, explain <finding-id>
+python3 $ARCH history --since-days 30                     # recorded failures; lessons --agent implementer
+python3 $ARCH docs                                        # render <policy dir>/architecture-rules.md (docs --check in CI)
+
+python3 <factory>/architecture-policy/agents/arch_review.py review '{"requester": {"agent": "implementer"}, "base": "origin/main"}'
+python3 <factory>/architecture-policy/agents/arch_review.py mcp     # the same operations as MCP tools (arch_review, arch_advise, ...)
+```
+
+Exit codes: 0 `PASS`, `WARN` or no policy; 1 `BLOCK`; 2 error; 3 `WARN` with `--strict`.
+
+Checkpoints: `pre_commit` (staged files, deterministic rules only), `code_review` (changed files, plus review requests for semantic rules), `testing` (test results and coverage as evidence), `ci` (whole repository). Each rule says where it runs and whether it blocks, warns or only reports.
+
+Adapters in `architecture-policy/hooks/adapters/` wrap these calls: `pre-commit.sh` for a Git hook, `ci.sh` and `ci.ps1` for a CI job (selfcheck, SARIF, exit code). They find the engine beside themselves; set `ARCH_ENGINE_DIR` if you copy one.
+
+Engine tests: `python3 -m unittest discover architecture-policy/tests`. They run the engine on the eShop example policy and on the starter template.
+
+## What a policy contains
+
+```text
+.factory/policy/
+  policy.yaml               manifest: categories, checkpoints, exception limits, history, where the other files are
+  profile.yaml              what the codebase looks like (or profiles/<id>/profile.yaml with default_profile: <id>)
+  rules/<category>.yaml     the rules, one file per category
+  patterns/<name>.yaml      approved patterns with examples, handed to agents with a finding
+  validators/registry.yaml  the engine's validators configured for this codebase, each with self-tests
+  exceptions/exceptions.yaml  time-boxed, approved waivers; the only way to waive a finding
+  evidence/.gitignore       ignores runs/ and history/
+  architecture-rules.md     optional rendered rule book (`arch.py docs`)
+```
+
+Every file is validated against `architecture-policy/architecture-rule.schema.json`. Rule categories, rule ID prefixes, project types, layers and service traits are the policy's own vocabulary; the schema fixes only their shape.
+
+The profile is where the stack lives:
+
+| Key | Purpose |
+| --- | --- |
+| `projects` | Each buildable unit: `name`, `path`, `type`, and optionally `service` and `layer` |
+| `services` | Each independently owned part: `id`, `owns_datastores`, `traits` |
+| `layer_dependencies` | Which layers a layer may reference (`same_service:<layer>`, `shared`, `*`) |
+| `forbidden_packages_by_layer` | Third-party packages a layer must not use |
+| `shared_datastore_names` | Datastores no single service owns |
+| `test_mapping` | Which test trees cover which source tree |
+| `project_manifests` | Globs of build manifests; selfcheck fails on one outside every project |
+| `comment_prefixes` | Line prefixes that mark a comment; none declared means text validators skip nothing |
+| `global_exclude` | Paths no rule looks at |
+
+Validator implementations the registry can configure:
+
+| Implementation | Checks | Main params |
+| --- | --- | --- |
+| `text_validators:forbidden_pattern` | A regex must not occur | `patterns[{regex, message, flags}]`, `file_globs`, `allow_files`, `ignore_comments`, `max_per_file` |
+| `text_validators:required_pattern` | A regex must occur in the file or its project | `require[{regex, message}]`, `trigger`, `file_globs`, `search_scope`, `project_globs` |
+| `project_validators:layer_dependencies` | `layer_dependencies` over manifests; every manifest is classified | `manifest_globs`, `reference_patterns` (named group `ref`; `kind: path` or `name`) |
+| `project_validators:service_isolation` | No project reference across services | same |
+| `project_validators:forbidden_packages` | `forbidden_packages_by_layer` | `manifest_globs`, `package_patterns` (named group `name`), `name_separators` |
+| `data_validators:database_ownership` | A service names only datastores it owns | `connection_patterns` (named group `name`) |
+| `data_validators:migration_immutability` | Existing migrations are not edited or deleted | `migration_globs`, `allow_globs` |
+| `change_validators:tests_accompany_changes` | `test_mapping`: source changes come with test changes | `ignore_globs` |
+| `evidence_validators:test_results` | Supplied JUnit XML or TRX results are green | none |
+| `evidence_validators:coverage_threshold` | Cobertura line coverage | `min_line_rate`, `exclude_project_types` |
+| `semantic_validators:semantic_review` | A rubric judged by an independent reviewer (LLM or human) | none; the rule carries the rubric |
+
+A policy cannot ship Python. A check the implementations above cannot express is a semantic rule, or a new generic implementation added to the engine.
+
+## Starting a policy
+
+- `templates/policy/` is a language-neutral starter: the manifest, a commented profile skeleton and six rules that work on any stack (no secrets in source, service and layer boundaries, generated files not hand-edited, compatible and tested public API changes, datastore ownership, tests with source changes). The profile-driven rules stay silent until the profile is filled. Copy it to `.factory/policy/`.
+- The [`author-architecture-policy`](../skills/author-architecture-policy/SKILL.md) skill is how an agent fills the profile and drafts rules for a codebase, measures false positives on merged pull requests and hands the draft to a person.
+- `examples/eshop/.factory/policy/` is a complete policy for a .NET services codebase (38 rules, 17 patterns, 28 validators).
+
+A policy change is a normal pull request in the app repository. `arch.py selfcheck` must pass, and CI should run it (`hooks/adapters/ci.sh` does).
 
 ## Who classifies a project
 
@@ -120,92 +206,6 @@ Patching the validator case by case would not end that. So there is nothing left
 - **Review gate:** floors a pull request that adds a project manifest at High (`floor.newProjects`), so a person sees the classification as they would see a profile line.
 
 The reviewer still checks that a new project's derived class matches what the project is. The factory makes the class follow from the project; it cannot judge whether the project was put in the right place.
-
-## Running it
-
-`<factory>` is the factory install root (`$FACTORY_HOME` inside pipeline agents). Run from the app repository, or pass `--workspace`.
-
-```bash
-python3 -m pip install -r <factory>/architecture-policy/requirements.txt   # pyyaml, jsonschema
-
-ARCH=<factory>/architecture-policy/hooks/arch.py
-python3 $ARCH selfcheck                                   # is the policy valid? (schema, references, validator self-tests, profile vs. code)
-python3 $ARCH selfcheck --skip-workspace                  # the policy on its own, without the code (a draft, a template)
-python3 $ARCH validate --checkpoint code_review           # changed files against the merge base (--base <ref>)
-python3 $ARCH validate --checkpoint ci --format sarif     # whole repository
-python3 $ARCH validate --checkpoint code_review --files src/a.rs src/b.rs --no-evidence --no-history
-python3 $ARCH rules --files src/a.rs                      # which rules apply to a file
-python3 $ARCH rule SEC-001                                # one rule; also: pattern, examples, explain <finding-id>
-python3 $ARCH history --since-days 30                     # recorded failures; lessons --agent implementer
-python3 $ARCH docs                                        # render <policy dir>/architecture-rules.md (docs --check in CI)
-
-python3 <factory>/architecture-policy/agents/arch_review.py review '{"requester": {"agent": "implementer"}, "base": "origin/main"}'
-python3 <factory>/architecture-policy/agents/arch_review.py mcp     # the same operations as MCP tools (arch_review, arch_advise, ...)
-```
-
-Exit codes: 0 `PASS`, `WARN` or no policy; 1 `BLOCK`; 2 error; 3 `WARN` with `--strict`.
-
-Checkpoints: `pre_commit` (staged files, deterministic rules only), `code_review` (changed files, plus review requests for semantic rules), `testing` (test results and coverage as evidence), `ci` (whole repository). Each rule says where it runs and whether it blocks, warns or only reports.
-
-Adapters in `architecture-policy/hooks/adapters/` wrap these calls: `pre-commit.sh` for a Git hook, `ci.sh` and `ci.ps1` for a CI job (selfcheck, SARIF, exit code). They find the engine beside themselves; set `ARCH_ENGINE_DIR` if you copy one.
-
-Engine tests: `python3 -m unittest discover architecture-policy/tests`. They run the engine on the eShop example policy and on the starter template.
-
-## What a policy contains
-
-```text
-.factory/policy/
-  policy.yaml               manifest: categories, checkpoints, exception limits, history, where the other files are
-  profile.yaml              what the codebase looks like (or profiles/<id>/profile.yaml with default_profile: <id>)
-  rules/<category>.yaml     the rules, one file per category
-  patterns/<name>.yaml      approved patterns with examples, handed to agents with a finding
-  validators/registry.yaml  the engine's validators configured for this codebase, each with self-tests
-  exceptions/exceptions.yaml  time-boxed, approved waivers; the only way to waive a finding
-  evidence/.gitignore       ignores runs/ and history/
-  architecture-rules.md     optional rendered rule book (`arch.py docs`)
-```
-
-Every file is validated against `architecture-policy/architecture-rule.schema.json`. Rule categories, rule ID prefixes, project types, layers and service traits are the policy's own vocabulary; the schema fixes only their shape.
-
-The profile is where the stack lives:
-
-| Key | Purpose |
-| --- | --- |
-| `projects` | Each buildable unit: `name`, `path`, `type`, and optionally `service` and `layer` |
-| `services` | Each independently owned part: `id`, `owns_datastores`, `traits` |
-| `layer_dependencies` | Which layers a layer may reference (`same_service:<layer>`, `shared`, `*`) |
-| `forbidden_packages_by_layer` | Third-party packages a layer must not use |
-| `shared_datastore_names` | Datastores no single service owns |
-| `test_mapping` | Which test trees cover which source tree |
-| `project_manifests` | Globs of build manifests; selfcheck fails on one outside every project |
-| `comment_prefixes` | Line prefixes that mark a comment; none declared means text validators skip nothing |
-| `global_exclude` | Paths no rule looks at |
-
-Validator implementations the registry can configure:
-
-| Implementation | Checks | Main params |
-| --- | --- | --- |
-| `text_validators:forbidden_pattern` | A regex must not occur | `patterns[{regex, message, flags}]`, `file_globs`, `allow_files`, `ignore_comments`, `max_per_file` |
-| `text_validators:required_pattern` | A regex must occur in the file or its project | `require[{regex, message}]`, `trigger`, `file_globs`, `search_scope`, `project_globs` |
-| `project_validators:layer_dependencies` | `layer_dependencies` over manifests; every manifest is classified | `manifest_globs`, `reference_patterns` (named group `ref`; `kind: path` or `name`) |
-| `project_validators:service_isolation` | No project reference across services | same |
-| `project_validators:forbidden_packages` | `forbidden_packages_by_layer` | `manifest_globs`, `package_patterns` (named group `name`), `name_separators` |
-| `data_validators:database_ownership` | A service names only datastores it owns | `connection_patterns` (named group `name`) |
-| `data_validators:migration_immutability` | Existing migrations are not edited or deleted | `migration_globs`, `allow_globs` |
-| `change_validators:tests_accompany_changes` | `test_mapping`: source changes come with test changes | `ignore_globs` |
-| `evidence_validators:test_results` | Supplied JUnit XML or TRX results are green | none |
-| `evidence_validators:coverage_threshold` | Cobertura line coverage | `min_line_rate`, `exclude_project_types` |
-| `semantic_validators:semantic_review` | A rubric judged by an independent reviewer (LLM or human) | none; the rule carries the rubric |
-
-A policy cannot ship Python. A check the implementations above cannot express is a semantic rule, or a new generic implementation added to the engine.
-
-## Starting a policy
-
-- `templates/policy/` is a language-neutral starter: the manifest, a commented profile skeleton and six rules that work on any stack (no secrets in source, service and layer boundaries, generated files not hand-edited, compatible and tested public API changes, datastore ownership, tests with source changes). The profile-driven rules stay silent until the profile is filled. Copy it to `.factory/policy/`.
-- The `author-architecture-policy` skill (`skills/author-architecture-policy/SKILL.md`) is how an agent fills the profile and drafts rules for a codebase, measures false positives on merged pull requests and hands the draft to a person.
-- `examples/eshop/.factory/policy/` is a complete policy for a .NET services codebase (38 rules, 17 patterns, 28 validators).
-
-A policy change is a normal pull request in the app repository. `arch.py selfcheck` must pass, and CI should run it (`hooks/adapters/ci.sh` does).
 
 ## Rule libraries in the language packs
 

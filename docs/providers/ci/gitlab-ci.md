@@ -1,5 +1,7 @@
 # GitLab CI (CI system)
 
+**Who reads this:** B and C using this product. Verified against fakes only unless the [status table](../README.md#verified-live-or-only-against-fakes) says otherwise.
+
 `ci.provider: "gitlab-ci"`, the default with a GitLab host. The adapter is `scripts/pipeline/lib/ci/gitlab-ci.mjs`. The expected pipeline of a head is GitLab's own pipeline for it (the merge request pipeline, or the branch pipeline), as "Pipelines must succeed" sees it. Runs, failed jobs' logs and retries come from the REST API v4.
 
 **Generated files:** `.gitlab/ci/factory-*.yml`, included from a managed block in `.gitlab-ci.yml` ([../../hosts-and-trackers.md](../../hosts-and-trackers.md#ci-systems)). Secrets are masked CI/CD variables, which every job sees as environment variables. The agent jobs skip merge requests from forks.

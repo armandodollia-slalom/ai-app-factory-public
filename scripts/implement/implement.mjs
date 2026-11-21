@@ -100,7 +100,7 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
   process.env.PIPELINE_DELIVERY = delivery;
   // feature verification leases its own stack slot per story when several run at once (scripts/feature-verification/lib/slots.mjs).
   process.env.IMPLEMENT_PARALLEL = String(parallel);
-  const stories = plan(config, inputs, { base, force, resumeStopped });
+  const stories = plan(config, inputs, { base, force, resumeStopped, checkPrState: !dryRun });
   if (!dryRun) {
     // The board: closed stories to Done and epics in step, then this machine claims the cards it runs.
     syncBoard(config.root);
@@ -108,7 +108,7 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
     // interrupted run moved it, so it is not claimed again (council C8: resume skipped it as 'in review').
     const claims = claimStories(config.root, stories.filter((s) => !s.skip && !s.ciResume).map((s) => s.key), { force, takeover });
     for (const key of skipRefused(stories, claims)) log(`${key}: ${stories.find((s) => s.key === key).skip}; skipped.`);
-    startResolvedReruns(config, stories);
+    startResolvedReruns(config, stories, { pr });
   }
   if (epicRun) {
     const { epic, only } = epicRun;
@@ -292,7 +292,7 @@ async function main() {
       if (!epicRun && delivery === 'epic' && given.length === positional.length) {
         // A reopened bug fix of a delivered bug epic joins its PR group again while that PR is open.
         const reopen = given.some((t) => isReopened(config, t));
-        const join = epicToJoin(config, given, { standalone: Boolean(flags.standalone), reopen, prOpen: (url) => prIsOpen(config, url) });
+        const join = epicToJoin(config, given, { standalone: Boolean(flags.standalone), reopen, prOpen: (url) => prIsOpen(config, url) === true });
         if (join) {
           const epic = loadTicket(config, join.state.epic, { fetch: false });
           if (epic) epicDir = config.abs(epic.dir);

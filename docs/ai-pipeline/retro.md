@@ -1,6 +1,8 @@
 # Retro
 
-Part of the [AI development pipeline](README.md). The retro turns what the agents logged into changes a
+**Who reads this:** C (operators) and D. How the agents' records become lessons and proposed factory changes.
+
+The retro turns what the agents logged into changes a
 person reviews: lessons for this repository's agents, and fixes to the factory itself.
 
 ```bash

@@ -17,7 +17,7 @@
 # them: tracked entries are never left deleted. Pruning happens only in --prune.
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 1
-command -v graphify >/dev/null 2>&1 || { echo "graphify not installed (see docs/copilot-setup.md)" >&2; exit 1; }
+command -v graphify >/dev/null 2>&1 || { echo "graphify not installed (see docs/ai-pipeline/setup.md)" >&2; exit 1; }
 
 if [ "${1:-}" = "--prune" ]; then
   shift

@@ -39,8 +39,8 @@ const USAGE = `Usage: node scripts/review-gate/review-gate.mjs <command> [option
   assess --tickets K1,K2 --base <ref> --out <file>
         Before the PR exists: the bug-triage rating and the gate's assessment of the branch's change, for
         publish --assessment (the only model call of the gate; implement.preOpen).
-  publish --pr <url> --tickets K1,K2 --base <ref> [--assessment <file>] [--json]
-                                assess a fix PR the pipeline just opened (run from its worktree)
+  publish --pr <url> --tickets K1,K2 --base <ref> [--assessment <file>] [--no-agent] [--json]
+                                publish the gate for a fix PR (run from its worktree; --no-agent never starts an agent)
   regate --pr <url> [--delivery <file>|--delivery-clear]
                                 evaluate one gated PR again and rewrite its notice with its current checks
   status [--pr <url>]           the gate state recorded on this machine
@@ -76,8 +76,19 @@ async function main() {
         return 0;
       }
       // --assessment <file>: the assessment `assess` computed before the PR opened (implement.preOpen): no model call now.
-      const assessment = typeof flags.assessment === 'string' ? JSON.parse(fs.readFileSync(path.resolve(flags.assessment), 'utf8')) : null;
-      const r = publishGate(config, { pr: flags.pr, keys, base: flags.base, assessment }, deps);
+      // --no-agent: pipeline delivery never starts a triage agent after open; missing/unreadable assessment -> needs-human.
+      const noAgent = Boolean(flags['no-agent']);
+      let assessment = null;
+      let missingReason = null;
+      if (typeof flags.assessment === 'string') {
+        try {
+          assessment = JSON.parse(fs.readFileSync(path.resolve(flags.assessment), 'utf8'));
+        } catch (error) {
+          if (!noAgent) throw error;
+          missingReason = `saved pre-open assessment could not be read (${error.message.split('\n')[0]})`;
+        }
+      }
+      const r = publishGate(config, { pr: flags.pr, keys, base: flags.base, assessment, noAgent, missingReason }, deps);
       if (flags.json) console.log(JSON.stringify({ pr: flags.pr, severity: r.assessment.severity.level, class: r.assessment.class, action: r.decision.action, approvals: r.decision.approvals, problems: r.problems }));
       else console.log(`${flags.pr}: severity ${r.assessment.severity.level ?? 'unknown'}, ${r.decision.action}${r.decision.action === 'review' ? ` (${r.decision.approvals} approval(s))` : ''}.`);
       return 0;

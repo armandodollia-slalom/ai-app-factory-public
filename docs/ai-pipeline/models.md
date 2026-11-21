@@ -1,15 +1,16 @@
 # Model allowlist
 
-The pipeline only calls the models its policy allows. The policy is `agent.allowedModels` and `agent.modelIds`: the engine's defaults are in `scripts/pipeline/config.json` of the factory install, and a repository overrides them in the `agent` section of its `.factory/config.json`. Every agent run checks its model through one function, `resolveModel` in `scripts/pipeline/lib/agents.mjs`, against the merged config before its CLI starts. `factory models` shows the engine's default policy per agent CLI and what the CLIs on your machine can serve, resolves model names and checks every model the engine's own configs name. It resolves through the same function, but it reads only the engine's defaults, not a repository's `.factory/config.json`: see [Changing the list](#changing-the-list).
+**Who reads this:** B and C, when choosing models or a CLI. The pipeline only calls the models its policy allows. The policy is `agent.allowedModels` and `agent.modelIds`: the engine's defaults are in `scripts/pipeline/config.json` of the factory install, and a repository overrides them in the `agent` section of its `.factory/config.json`. Every agent run checks its model through one function, `resolveModel` in `scripts/pipeline/lib/agents.mjs`, against the merged config before its CLI starts. `factory models` shows the engine's default policy per agent CLI and what the CLIs on your machine can serve, resolves model names and checks every model the engine's own configs name. It resolves through the same function, but it reads only the engine's defaults, not a repository's `.factory/config.json`: see [Changing the list](#changing-the-list).
 
-Default policy: **Claude Opus 5.5 and Claude Sonnet 5.5 on every CLI, plus Sol 6.1 on Copilot**, Sonnet 5.5 by default.
+Default policy: **Claude Opus 5.5 and Claude Sonnet 5.5 on Claude Code and Copilot CLI, Sol 6.1 on Copilot CLI and Codex**, Sonnet 5.5 by default (so a Codex run must ask for `sol`).
 
 ```json
 "agent": {
   "allowedModels": ["opus", "sonnet", "sol"],
   "modelIds": {
     "claude": { "opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5" },
-    "copilot": { "opus": "claude-opus-5.5", "sonnet": "claude-sonnet-5.5", "sol": "gpt-6.1-sol" }
+    "copilot": { "opus": "claude-opus-5.5", "sonnet": "claude-sonnet-5.5", "sol": "gpt-6.1-sol" },
+    "codex": { "sol": "gpt-6.1-sol" }
   },
   "strictModels": true,
   "models": { "default": "sonnet" }
@@ -62,7 +63,7 @@ Discovery tells you what the CLIs installed here can serve. It is cached per CLI
 
 ## Enforcement
 
-- **Every run.** `runAgent` and `runAgentAsync` resolve the model through `resolveModel(config, alias, cli)` before building the CLI command and pass the CLI's id with `--model`/`-m`. A model outside the policy, or a CLI without allowed ids (Codex), fails the run with that error. A custom `PIPELINE_AGENT_CMD` gets the alias unchecked against a CLI: it is a command you wrote, and the pipeline cannot see which model it calls.
+- **Every run.** `runAgent` and `runAgentAsync` resolve the model through `resolveModel(config, alias, cli)` before building the CLI command and pass the CLI's id with `--model`/`-m`. A model outside the policy, or an alias with no id for the run's CLI (any alias but `sol` on Codex), fails the run with that error. A custom `PIPELINE_AGENT_CMD` gets the alias unchecked against a CLI: it is a command you wrote, and the pipeline cannot see which model it calls.
 - **Config load.** `loadConfig` rejects an `agent.models.<role>` alias outside `allowedModels`, for the engine's defaults and the repository's `.factory/config.json` alike.
 - **Implement model classes.** `modelClasses` (defaults in the engine's `scripts/implement/config.json`) map small/medium/large to aliases (`sonnet`, `sonnet`, `opus`). The implement harness checks every class a plan needs for the role's CLI when the plan is accepted, so a disallowed model fails the plan, not a pair halfway through.
 - **PR check.** `prCheck.models.<cli>.<role>` (defaults in the engine's `scripts/pr-check/config.json`) are checked the same way (a CLI's own ids are accepted when an allowed alias maps to them).

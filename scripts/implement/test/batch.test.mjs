@@ -262,7 +262,8 @@ test('a run interrupted at its CI wait resumes there; a finished one is not run 
   // Council C12: ACCT-1's run hung in a gh call at its CI wait and was ended with `implement stop`. Nothing resumes it on
   // its own; `implement resume --stopped` continues it at the CI wait instead of implementing it again.
   record({ status: 'stopped', outcome: 'stopped', reason: 'stopped by implement stop', phase: 'ci-wait', pr: 'https://github.com/a/b/pull/174' });
-  assert.equal(plan(config, [dir])[0].ciResume, undefined, 'a stopped run is not resumed automatically');
+  // The PR-open read of plan() is injected: no test reaches the code host.
+  assert.equal(plan(config, [dir], { reopenDeps: { prIsOpen: () => false } })[0].ciResume, undefined, 'a stopped run is not resumed automatically');
   assert.equal(plan(config, [dir], { resumeStopped: true })[0].ciResume, 'https://github.com/a/b/pull/174');
 });
 
