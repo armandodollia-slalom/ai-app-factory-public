@@ -26,14 +26,15 @@ An agent's prompt is built from three files, and only the first ships with the f
 | `pair-implementer` | [implement](implement.md#what-happens) | implement harness, one per delegated subtask (never by hand) | writes and commits only the files the subtask owns, in its own worktree | the subtask spec, the codebase, the previous round's findings | the subtask's commits |
 | `pair-verifier` | [implement](implement.md#what-happens) | implement harness, every pair round | read-only | the subtask spec, its diff, build, unit test and diagnostics output | `APPROVED` or `CHANGES_REQUESTED` with findings |
 | `pair-ui-verifier` | [implement](implement.md#ui-verification) | implement harness, every round of a `verify: "ui"` subtask | runs shell commands and a browser against a leased stack slot; no source edits | the subtask spec, its diff, the running app, mockups and their renders | `APPROVED` or `CHANGES_REQUESTED` with findings citing screenshots |
-| `arch-review` | [review](review.md) | review stage (as `architecture-policy/agents/arch_review.py review`), before each LLM review; any agent on request | read-only | changed files, Architecture Policy Pack rules | `PASS`, `WARN` or `BLOCK` with rule findings |
+| `arch-review` | [review](review.md) | review stage (as `architecture-policy/agents/arch_review.py review`), before each LLM review; any agent on request. In the pipeline this step is the policy engine: deterministic, no model call | read-only | changed files, Architecture Policy Pack rules | `PASS`, `WARN` or `BLOCK` with rule findings |
 | `architecture-reviewer` | [review](review.md) | review stage | read-only | the story, the implementation diff, the repository's convention files | `APPROVED` or `CHANGES_REQUESTED` with findings |
 | `test-planner` | [feature-verification](feature-verification.md) | `factory fv plan`, or the feature verification stage after review approval | writes `.factory/plans/` | the story (and its diff when it changed) | test plan files |
 | `test-plan-verifier` | [feature-verification](feature-verification.md) | plan loop | read-only | the story and the plan | score 0-10 and gaps |
 | `test-automation` | [feature-verification](feature-verification.md) | the feature verification stage after review approval, or `factory fv automate` | writes tests in the application's test tree and `.factory/stack/scenarios/` | the verified plan, the implementation | tests, or `product-bug` |
 | `test-automation-verifier` | [feature-verification](feature-verification.md) | automation loop | read-only | case files, tests, scenario, keyframes | score 0-10 and gaps (with `root_stage`) |
-| `retro` | [feature-verification](feature-verification.md#auto-improvement) | `factory fv lessons` (weekly) | writes `.factory/lessons/`, plus the paths in `lessons.retro.allowedPaths` (addenda, docs; other edits are discarded) | aggregated metrics, the decision-log retro digest and existing lessons | updated lessons files and proposed changes (opened as a PR) |
-| `bug-triage` | [review-gate](review-gate.md) | review gate, once per published bug-fix PR | read-only | every ticket of the PR, the systems it touches, its diff | Impact, Complexity and Fix risk per ticket with reasons, floor categories, its confidence |
+| `retro` | [retro](retro.md) | `factory retro run` (by hand, or the retro CI job) | writes `.factory/lessons/`, plus the paths in `lessons.retro.allowedPaths` and, in a clone of the factory, `retro.factory.allowedPaths` (other edits are discarded) | aggregated metrics, the decision-log retro digest and existing lessons | updated lessons files (the repository's lessons PR, through the same delivery as every pipeline PR) and proposed factory changes (pushed as a branch for a person) |
+| `lessons-check` | [retro](retro.md) | the retro, after it edits lessons files | read-only | each lessons file and its agent's definition | the rules that contradict the definition (the harness removes them) |
+| `bug-triage` | [review-gate](review-gate.md) | review gate, once per bug-fix delivery, after CI is green on the branch and before the PR opens | read-only | every ticket of the PR, the systems it touches, its diff | Impact, Complexity and Fix risk per ticket with reasons, floor categories, its confidence |
 | `pr-check` | [pr-check](pr-check.md) | you (Copilot or Claude Code) | runs `factory pr-check run` | the PR or branch | summary of the report |
 | `pr-check-acceptance` | [pr-check](pr-check.md) | PR check round | read-only | story, diff | lens score and findings |
 | `pr-check-flow` | [pr-check](pr-check.md) | PR check round | read-only | story, diff | lens score and findings |
@@ -42,9 +43,37 @@ An agent's prompt is built from three files, and only the first ships with the f
 | `pr-check-video` | [pr-check](pr-check.md) | PR check round, when a video exists | read-only | video frames, story | lens score and findings |
 | `pr-check-defender` | [pr-check](pr-check.md) | PR check round | read-only | the round's findings, story, diff | concede, rebut or partial per finding |
 | `pr-check-judge` | [pr-check](pr-check.md) | PR check round | read-only | the full debate | upheld or dismissed per finding |
-| `pr-check-fixer` | [pr-check](pr-check.md) | PR check fix mode | writes code | upheld findings | fixes (the PR check commits) |
+| `pr-check-fixer` | [pr-check](pr-check.md) | PR check fix mode on the branch; the CI fixing round (before the open, or while an open PR is on hold) | writes code | upheld findings it is routed (records, PR text, docs, style, minors), or the failing CI checks with their logs | fixes (the PR check commits) |
+| `demo-narrator` | [pr-demo-video](pr-demo-video.md#narration-scripts) | the local demo video step, before the PR opens, once per PR for every headline demo (plus one retry for scripts that fail validation) | read-only; no tools needed | the ticket (title and acceptance criteria), each case's title and why, and each recording's step list (action, target name and role, page and heading before and after, what was seen, timing), all redacted; for a UI bug the before/after pair and what the screen showed where it went wrong | a script per video: segments of prose bound to ranges of recorded steps (the harness validates it, else the video keeps the automatic lines); for a backend bug, the wording of its reproduction steps (the recorded requests and responses are inserted by the harness) |
+| `escalation-questions` | [escalations](escalations.md) | `board fail`, when a ticket ends Failed | read-only | the escalation notes, findings and log tail | at most three decisions for a person, each with options and a recommendation |
 
-Read-only agents are enforced per CLI: Claude Code tool lists in `scripts/agents-claude.json`, Copilot `--deny-tool` flags and Codex's `read-only` sandbox in `scripts/pipeline/lib/agents.mjs`.
+Read-only agents are enforced per CLI: Claude Code tool lists in `scripts/agents-claude.json`, Copilot `--deny-tool` flags and Codex's `read-only` sandbox in `scripts/pipeline/lib/agents.mjs`. Agents in `verify` mode (the UI verifier) may run shell commands but not edit files.
+
+## Council members
+
+A [council](council.md) is not a separate agent definition. When `council.stages.<stage>` lists members, each member runs the stage's own verifier definition (`pair-verifier`, `pair-ui-verifier`, `architecture-reviewer`, `test-plan-verifier`, `test-automation-verifier`, or a PR check critic named after the member), with the council skill (`skills/council/SKILL.md`) and its lens added to the prompt, on the member's own CLI and model:
+
+| Stage key | Replaces | Member CLIs |
+| --- | --- | --- |
+| `pairVerify` | `pair-verifier` | `claude`, `codex`, `copilot`, or `custom` (a command that reads the prompt on stdin) |
+| `pairUiVerify` | `pair-ui-verifier` | the same |
+| `review` | `architecture-reviewer` (the policy engine still runs first) | the same |
+| `testPlan` | `test-plan-verifier` | the same |
+| `testAutomation` | `test-automation-verifier` | the same |
+| `prCheck` | the PR check critics (the defender and judge stay) | the same |
+
+Each member is read-only on every CLI, as above. When a later scope objection to a fix needs settling, the blocking members sit once more, fresh and read-only, in an adjudication sitting.
+
+## Per CLI
+
+| CLI | How the pipeline starts an agent | Notes |
+| --- | --- | --- |
+| Claude Code (`claude`, default) | `-p --output-format json`, the agent's tool list from `scripts/agents-claude.json` | the default for every role |
+| Copilot CLI (`copilot`) | `--allow-tool` / `--deny-tool` flags per access mode | `PIPELINE_AGENT_CLI=copilot`, or per role or member |
+| Codex (`codex`) | `exec --json` with a `read-only` or `workspace-write` sandbox | per role or member, for example a second reviewer model |
+| a custom command | `PIPELINE_AGENT_CMD`, or a member's `cmd`; the prompt on stdin | reports usage through `PIPELINE_USAGE_FILE` ([costs](costs.md#how-usage-is-captured)) |
+
+Which models each CLI may use is the model policy ([models.md](models.md)): by default `opus` and `sonnet` on Claude Code and Copilot, and `sol` on Copilot and Codex.
 
 ## Models
 
@@ -56,6 +85,10 @@ Unset models use the agent CLI's default. The files below are the factory's defa
 | `agent.models.implementer` in `scripts/implement/config.json` | `implementer` |
 | `agent.models.reviewer` in `scripts/review/config.json` | `architecture-reviewer` |
 | `agent.models.bugTriage` in `scripts/implement/config.json` | `bug-triage` (`opus`) |
+| `agent.models.escalationQuestions` in `scripts/board/config.json` | `escalation-questions` (`sonnet`) |
+| `video.script.model`, else `agent.models.narrator`, else `agent.models.automation` | `demo-narrator` (by default the test-automation model) |
+| `implement.roles.<role>.cli`, `modelClass` and `env` in `scripts/implement/config.json` | the orchestrator, pair implementers, verifiers and UI verifiers (model classes `small`, `medium`, `large` map to models in `modelClasses`) |
+| `council.members[]` | each council member's CLI, model and effort |
 | `agent.models.verifier`, `agent.models.audit` in `scripts/feature-verification/config.json` | feature verification verifiers; the stricter calibration auditor |
 | `prCheck.models.<cli>.<role>` in `scripts/pr-check/config.json`, or `PR_CHECK_MODEL_<ROLE>` | PR check critics, defender, judge and fixer (see [pr-check.md](pr-check.md#models)) |
 

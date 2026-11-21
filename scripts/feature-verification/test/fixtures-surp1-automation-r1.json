@@ -1,0 +1,40 @@
+{
+ "source": "dogfood C23 SURP-1 test automation round 1, council items (decisions.jsonl.d)",
+ "gaps": [
+  {
+   "case": null,
+   "category": "wrong-assertion",
+   "detail": "The case expects the URL path /item/{id} with id 1..101. The test asserts it, but no keyframe shows the URL: the 'Landed on ...' caption set at line ~208 is absent from 04-highlight-product-page-of-item-65.png, 05 and 06-final, which show only the heading 'Sprint PRO Carbon Cycling Helmet'. Item 65 appears only in the keyframe file name.",
+   "file": "e2e/teststack/surp-1.spec.ts",
+   "member": "model:opus"
+  },
+  {
+   "case": null,
+   "category": "wrong-assertion",
+   "detail": "The case expects URL path /item/5. No keyframe after the click shows /item/5: the 'Landed on' caption is missing from 05-highlight-blizzard-rider-snowboard.png and 06. Also, 02-highlight-surprise-me-with-b-r-ski-boarding.png has the 'Surprise me' link hidden under the sticky header (only 'Clear all filters' is visible), so the highlighted element is out of view.",
+   "file": "e2e/teststack/surp-1.spec.ts",
+   "member": "model:opus"
+  },
+  {
+   "case": null,
+   "category": "wrong-assertion",
+   "detail": "The case expects the URL path /item/77, /item/80 or /item/87. The landing keyframes 04-highlight-nomad-2-person-tent-an-xe-product.png and 05 show the heading 'Nomad 2-Person Tent' (brand XE) but no caption or URL, so the id is never visible.",
+   "file": "e2e/teststack/surp-1.spec.ts",
+   "member": "model:opus"
+  },
+  {
+   "case": null,
+   "category": "wrong-assertion",
+   "detail": "The case expects /item/{id} with id in the Navigation set. 05-highlight-compass-pro-a-320-professional-compass-a-navigatio.png shows the heading but no caption or URL. The 'Page 2: ...?page=2' caption is also missing from 02-highlight-the-last-two-navigation-products.png, although its pager shows page 2 active.",
+   "file": "e2e/teststack/surp-1.spec.ts",
+   "member": "model:opus"
+  },
+  {
+   "case": null,
+   "category": "wrong-assertion",
+   "detail": "The frames show different products, but only iteration 1 visibly identifies its /item/22 path. Iterations 2\u201310 lack their path captions, and the final distinct-ID summary is absent. Preserve the measured paths and final ID summary in the captured evidence.",
+   "file": "artifacts/keyframe.png",
+   "member": "model:sol"
+  }
+ ]
+}

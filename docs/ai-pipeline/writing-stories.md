@@ -41,6 +41,14 @@ Part of the [AI development pipeline](README.md). The pipeline only knows what t
 - **Name exact copy.** Labels, messages and formats in Outputs are checked word for word by the acceptance and design critics.
 - **Stay in scope.** The implementer builds exactly the acceptance criteria and lists nice-to-haves in its report instead.
 
+## What a bug ticket ends up containing
+
+Write a bug as the symptom a user or client sees. Before its fix's PR opens, the pipeline adds the evidence, recorded on the test stack, never written from memory:
+
+- **A bug a browser shows**: the PR's demo video section opens with its *Before the fix* video (the reproduction recorded on the code the fix starts from) and its *After the fix* video ([pr-demo-video.md](pr-demo-video.md#bugs-before-and-after-the-fix)).
+- **A bug in a service's answer**: the ticket gets one **Reproduction** comment (edited in place on every delivery): the preconditions in words, then numbered steps, each request as a copyable block (method, path, the headers that matter, body) with the response the service gave before the fix and one line on what is wrong with it; the PR gets the same requests with the responses before and after the fix ([pr-demo-video.md](pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
+- A bug with both gets both. When the reproduction does not fail on the code the fix starts from, the ticket gets no reproduction and the PR says why.
+
 ## Mockups (frontend stories)
 
 Attach mockups to the story with `factory board new --mockups <folder>`: a folder named `<KEY>-<name>` with a `README.md` (the screens and any review changes) and the `.dc.html` design canvas files and images. They go on the `board-assets` branch, show in the issue's Mockups section, and land in `.factory/state/board/<KEY>/mockups/` when the story is fetched. When a mockup exists, the PR check's design critic treats it as the reference for layout, components, states and copy; otherwise it uses the story's Outputs and the application's existing design system (named in the design critic's addendum, `.factory/agents/pr-check-design.md`). A mockup folder for the key also marks the story as frontend.

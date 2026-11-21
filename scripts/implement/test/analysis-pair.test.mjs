@@ -133,7 +133,7 @@ test('after the fix budget a blocking tool finding reaches the round as a source
   const impl = agents.calls.filter((c) => c.name === 'pair-implementer');
   // Round 1, its bounce, round 2, and round 2's bounce for MEH (every provable finding is bounced; only BAD blocks).
   assert.equal(impl.length, 4);
-  assert.match(impl[2].task, /tool:BAD-RULE:[0-9a-f]{16}/);
+  assert.match(impl[2].task, /tool:fp-[0-9a-f]{16}:BAD-RULE/);
   assert.match(impl[3].task, /\[fix\] fake MEH-RULE/);
   const sr = JSON.parse(fs.readFileSync(path.join(env.repo, '.factory/metrics/subtask-runs.jsonl'), 'utf8').trim().split('\n').pop());
   const round1 = sr.rounds[0];
@@ -154,7 +154,7 @@ test('with a council: a blocking tool finding stands although every member appro
     'pair-implementer': [
       writeIn(API, 'BAD\n'),
       async (o) => {
-        toolId = /tool:BAD-RULE:[0-9a-f]{16}/.exec(o.task)?.[0];
+        toolId = /tool:fp-[0-9a-f]{16}:BAD-RULE/.exec(o.task)?.[0];
         write(o.cwd, API, 'BAD\n');
         return done({ disputes: [{ finding: toolId, kind: 'nit', reason: 'the tool is wrong' }] });
       },

@@ -20,17 +20,20 @@ Escalations are written by the review (`review`), by feature verification (`plan
 
 ```mermaid
 flowchart TD
-  O[Outcome or escalation] --> B{Which one?}
-  B -->|blocked| B1[Answer the open question in the story,<br/>or merge the blocker]
-  B -->|no-changes| N1[Check the log: already implemented,<br/>or the story is too vague]
-  B -->|review-escalated / unresolved| R1[Read the findings; fix by hand<br/>or decide the architecture question]
-  B -->|fv-product-bug| P1{Is the test right?}
-  P1 -->|yes, code is wrong| P2[Fix the code; the review and the tests re-run]
-  P1 -->|no, story or plan is wrong| P3[Fix the story; re-plan]
-  B -->|fv-escalated / fv-blocked-on-plan| Q1[Read the gaps; usually an ambiguous story]
-  B -->|fv-crashed / fv-timed-out / error| C1[Read the log; re-run the step]
-  B -->|pr-check escalated| PC1[Read the report; fix, or accept<br/>the finding as out of scope]
-  B1 --> RR[Re-run the story]
+  O["Outcome or escalation"] --> B{"Which one?"}
+  B -->|"blocked"| B1["Answer the open question in the story,<br/>merge the blocker, or remove the held secret"]
+  B -->|"no-changes"| N1["Check the log: already implemented,<br/>or the story is too vague"]
+  B -->|"review-escalated, unresolved"| R1["Read the findings, fix by hand<br/>or decide the architecture question"]
+  B -->|"fv-product-bug"| P1{"Is the test right?"}
+  P1 -->|"yes, code is wrong"| P2["Fix the code, the review and the tests re-run"]
+  P1 -->|"no, story or plan is wrong"| P3["Fix the story, re-plan"]
+  B -->|"fv-escalated, fv-blocked-on-plan"| Q1["Read the gaps, usually an ambiguous story"]
+  B -->|"fv-crashed, fv-timed-out, error"| C1["Read the log, re-run the step"]
+  B -->|"pr-check-escalated, pr-check-incomplete"| PC1["Read the report, fix, or accept<br/>the finding as out of scope"]
+  B -->|"needs-decision"| D1["Answer the questions on the ticket"]
+  B -->|"CI red or flaky on the branch or PR"| CI1["Read the failing checks,<br/>fix on the branch"]
+  B -->|"pr-refused"| PR1["implement resume opens the PR,<br/>no agent runs"]
+  B1 --> RR["Re-run the story"]
   N1 --> RR
   R1 --> RR
   P2 --> RR
@@ -38,6 +41,8 @@ flowchart TD
   Q1 --> RR
   C1 --> RR
   PC1 --> RR
+  D1 --> RR
+  CI1 --> RR
 ```
 
 | Outcome | What happened | What to do |
@@ -60,24 +65,24 @@ Agents never ask questions while a ticket runs: they make a documented choice, o
 
 ```mermaid
 sequenceDiagram
-  participant P as Pipeline (your machine)
-  participant I as GitHub issue
+  participant P as Pipeline on your machine
+  participant I as Ticket on the board
   participant H as You
-  participant A as Action (board-escalation-resolve)
-  P->>P: ticket ends Failed (board fail)
+  participant A as Tracker automation
+  P->>P: ticket ends Failed, board fail
   P->>P: escalation-questions agent: 0-3 questions from the notes, findings and log
   P->>I: Failed lane, needs-human, comment with questions + Resolved box
-  H->>I: tick one option per question (Other: reply "Qn: ...")
-  H->>I: tick Resolved (edits the comment)
-  I->>A: issue_comment edited
+  H->>I: tick one option per question, or reply "Qn: ..."
+  H->>I: tick Resolved
+  I->>A: comment edited, or the next tracker sweep
   alt an answer is missing
     A->>I: untick Resolved, reply with what is missing
   else complete
-    A->>I: needs-human -> escalation-resolved, answers under ## Decisions, confirm
+    A->>I: needs-human to escalation-resolved, answers under Decisions, confirm
   end
-  P->>I: board sync (implement run / implement requeue): Failed -> Ready
+  P->>I: board sync at implement run or implement requeue: Failed to Ready
   P->>P: re-run with the decisions as binding requirements
-  P->>I: Pending Review, or Failed again (round 2: new questions, Decisions kept)
+  P->>I: Pending Review, or Failed again with new questions, Decisions kept
 ```
 
 1. **Questions step.** `board fail` reads the escalation notes the run left (`.factory/state/escalations/<KEY>-*.md`, in the ticket worktree), its findings and the end of its log, and asks the `escalation-questions` agent (model `agent.models.escalationQuestions`, default `sonnet`, checked by `factory models check`) for at most three questions (`board.questions.maxQuestions`) only a human can answer, each with two or three options, one recommended. Mechanical failures (`error`, `fv-crashed`, `fv-timed-out`, `fv-not-started`, an agent provider outage, a skipped dependent) get no questions. If the call fails, the comment goes out without questions; `board fail` never fails because of this step. A replayed `board fail` (same event id) posts nothing and asks nothing.

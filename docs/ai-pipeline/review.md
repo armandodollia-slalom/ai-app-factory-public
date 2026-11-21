@@ -4,12 +4,13 @@ Part of the [AI development pipeline](README.md). Once the implementation agent 
 
 ```mermaid
 flowchart LR
-  I[Implementation agent] -->|turn ends, after pipeline done<br/>code agents only| G[arch-review agent<br/>Architecture Policy Pack]
-  G -->|BLOCK<br/>Stop hook blocks with rule findings| I
-  G -->|PASS / WARN<br/>or no policy configured| R[architecture-reviewer<br/>fresh process, read-only]
-  R -->|CHANGES_REQUESTED<br/>Stop hook blocks with findings| I
-  R -->|APPROVED| A[review.approvedHash set<br/>later stages run]
-  R -.->|5 rounds without approval| E[Escalation for a human]
+  I["Implementation agent"] -->|"turn ends, after pipeline done<br/>code agents only"| G["Policy engine arch-review<br/>Architecture Policy Pack, no LLM"]
+  G -->|"BLOCK<br/>Stop hook blocks with rule findings"| I
+  G -->|"PASS or WARN<br/>or no policy configured"| R["architecture-reviewer, fresh and read-only,<br/>or a council"]
+  R -->|"CHANGES_REQUESTED<br/>Stop hook blocks with findings"| I
+  R -->|"test-only finding"| T["handed to feature verification"]
+  R -->|"APPROVED"| A["review.approvedHash set<br/>later stages run"]
+  R -.->|"round limit without approval"| E["Escalation for a human"]
 ```
 
 - Each round has two steps:

@@ -46,7 +46,8 @@ test('GitHub Actions: render writes the same workflow and action files, byte for
   // demo video workflows, which deliberately changed in round C16 (implement.preOpen: they also run on story-branch pushes
   // and a PR's run reuses the push run), and the graphify cache prune workflow, whose default branch now reaches its run
   // step through env (as every ref name does) and which, since owner requirement C18, pushes a branch instead of opening a
-  // pull request; those entries are the current render, checked below.
+  // pull request; those entries are the current render, checked below. The demo video workflow is gone since the final
+  // round (videos are produced on the machine that runs the pipeline).
   for (const [name, features] of [['all', ALL], ['default', {}]]) {
     const root = repo({}, { remote: 'https://github.com/acme/shop.git', pin: { version: '0.0.0', tools: ['claude'], features, owners: ['@acme'] } });
     render(root, INSTALL);
@@ -188,7 +189,7 @@ test('GitLab CI: every rendered file parses, includes resolve to rendered files,
   const { files, jobs } = gitlabJobs(root);
   const rendered = Object.keys(readManifest(root).files).filter((p) => p.startsWith('.gitlab/ci/'));
   assert.deepEqual(files.slice(1).sort(), rendered.sort(), 'the root include reaches every rendered file and nothing else');
-  assert.deepEqual(Object.keys(jobs).sort(), ['factory-feature-verification', 'factory-gate', 'factory-graphify-cache-prune', 'factory-lint', 'factory-pr-check', 'factory-pr-demo-video', 'factory-retro', 'factory-tracker', 'review-quorum']);
+  assert.deepEqual(Object.keys(jobs).sort(), ['factory-feature-verification', 'factory-gate', 'factory-graphify-cache-prune', 'factory-lint', 'factory-pr-check', 'factory-retro', 'factory-tracker', 'review-quorum']);
   for (const [name, job] of Object.entries(jobs)) {
     assert.equal(job.stage, 'test', `${name}: a stage every pipeline has`);
     assert.match(job.image, /^node:20/, name);
@@ -199,7 +200,7 @@ test('GitLab CI: every rendered file parses, includes resolve to rendered files,
     assert.ok(job.before_script.join('\n').includes('FACTORY_TOKEN'), `${name}: a private factory through FACTORY_TOKEN`);
   }
   const mr = (j) => jobs[j].rules.some((r) => r.if.includes('"merge_request_event"'));
-  for (const j of ['factory-gate', 'factory-lint', 'factory-feature-verification', 'review-quorum', 'factory-pr-demo-video', 'factory-pr-check']) assert.ok(mr(j), `${j} runs on merge request pipelines`);
+  for (const j of ['factory-gate', 'factory-lint', 'factory-feature-verification', 'review-quorum', 'factory-pr-check']) assert.ok(mr(j), `${j} runs on merge request pipelines`);
   for (const [j, key] of [['factory-retro', 'retro'], ['factory-tracker', 'tracker'], ['factory-graphify-cache-prune', 'graphify-cache-prune']]) assert.ok(jobs[j].rules.every((r) => r.if.includes('"schedule"') && r.if.includes(`$FACTORY_JOB == "${key}"`)), `${j} is scheduled`);
   assert.match(jobs['factory-pr-check'].rules[0].if, /CI_MERGE_REQUEST_LABELS =~ .*ai-pr-check/);
   assert.ok(jobs['factory-pr-check'].before_script.join('\n').includes('@anthropic-ai/claude-code'), 'the PR check installs the agent CLI');
@@ -253,7 +254,7 @@ test('Azure Pipelines: every rendered file parses, templates resolve to rendered
   render(root, INSTALL);
   const rendered = Object.keys(readManifest(root).files).filter((p) => p.startsWith('.azure-pipelines/'));
   const pipelines = rendered.filter((p) => !p.includes('/templates/'));
-  assert.deepEqual(pipelines.map((p) => path.basename(p)).sort(), ['factory-graphify-cache-prune.yml', 'factory-pr-check.yml', 'factory-pr-demo-video.yml', 'factory-pr.yml', 'factory-retro.yml', 'factory-review-quorum.yml', 'factory-tracker.yml']);
+  assert.deepEqual(pipelines.map((p) => path.basename(p)).sort(), ['factory-graphify-cache-prune.yml', 'factory-pr-check.yml', 'factory-pr.yml', 'factory-retro.yml', 'factory-review-quorum.yml', 'factory-tracker.yml']);
   const used = new Set();
   for (const file of rendered) {
     const doc = parseDocument(read(root, file));
@@ -317,7 +318,7 @@ test('every provider renders the same set of jobs, and the setup equivalents', (
   };
   // One name per job across providers.
   const canon = (n) => n.replace(/^factory-/, '').replace(/^feature-verification-check$/, 'feature-verification').replace(/^board-epic-assign$|^board-escalation-resolve$|^tracker-sweep$/, 'tracker').replace(/^pr-demo-video$/, 'demo-video').replace(/^pr$/, 'gate').replace(/^agent-cli$/, 'setup-agent-cli').replace(/^setup$/, 'setup-factory');
-  const want = ['demo-video', 'feature-verification', 'gate', 'graphify-cache-prune', 'lint', 'pr-check', 'retro', 'review-quorum', 'setup-agent-cli', 'setup-factory', 'tracker'];
+  const want = ['feature-verification', 'gate', 'graphify-cache-prune', 'lint', 'pr-check', 'retro', 'review-quorum', 'setup-agent-cli', 'setup-factory', 'tracker'];
   const configs = { 'github-actions': {}, 'gitlab-ci': GITLAB_CONFIG, 'azure-pipelines': AZURE_CONFIG };
   for (const [provider, config] of Object.entries(configs)) {
     const root = repo({}, { config: { ...config, ci: { provider } } });

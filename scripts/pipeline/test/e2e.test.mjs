@@ -58,7 +58,9 @@ const fv = (args, opts) => cli('scripts/feature-verification/feature-verificatio
 const retro = (args, opts) => cli('scripts/retro/retro.mjs', args, opts);
 const pipeline = (args, opts) => cli('scripts/pipeline/pipeline.mjs', args, opts);
 
-async function waitFor(predicate, timeoutMs = 30_000) {
+// A ceiling, not an expectation: a background run that is slow on a loaded machine (a full suite run, other stacks)
+// makes the test slower, never fails it. 30 s timed out under load in full runs (0.2.88 release, and again at 0.2.90).
+async function waitFor(predicate, timeoutMs = 600_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (predicate()) return;

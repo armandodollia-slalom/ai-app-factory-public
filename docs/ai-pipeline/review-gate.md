@@ -1,21 +1,22 @@
 # Review gate for bug-fix PRs
 
-Part of the [AI development pipeline](README.md). The gate starts only **after the pipeline publishes a fix PR**: a single-ticket bug PR (`implement run FIX-7 --pr`) or a bug-epic group PR ([PR groups](implement.md#bug-epics-pr-groups)). Implementation, verifier pairs, architecture review, feature verification, the PR check and the grouping of bugs run exactly as before; feature stories and feature epics are never gated.
+Part of the [AI development pipeline](README.md). The gate rates **bug fixes**: a single-ticket bug PR (`implement run FIX-7 --pr`) or a bug-epic group PR ([PR groups](implement.md#bug-epics-pr-groups)). Its triage agent runs once the branch's CI is green, before the PR exists ([Assessed before the PR opens](#assessed-before-the-pr-opens)); at the open the rating is published with no model call, and the merge decision follows the PR's checks. Implementation, verifier pairs, architecture review, feature verification, the PR check and the grouping of bugs run exactly as before; feature stories and feature epics are never gated. Merges go through the code host's adapter ([providers](../providers/README.md)), so the same gate works on every supported host.
 
-A group PR is gated once, by the run that opens it, with **every ticket merged into the group**, including tickets an earlier run merged (a group can finish across restarts). A later run that re-delivers the group with its existing PR does not gate it again; a reopened ticket joining the open PR re-gates it with all the group's tickets.
+A group PR is gated once, by the run that delivers it, with **every ticket merged into the group**, including tickets an earlier run merged (a group can finish across restarts). A later run that re-delivers the group with its existing PR does not gate it again; a reopened ticket joining the open PR re-gates it with all the group's tickets.
 
 The code is in `scripts/review-gate/`; its settings are `implement.reviewGate` and `implement.autoMerge` in `scripts/implement/config.json`, and the board field names are `board.fields` in `scripts/board/config.json`.
 
 ```mermaid
 flowchart LR
-  P[implement run opens a fix PR] --> A[bug-triage agent<br/>Impact, Complexity, Fix risk per ticket]
-  A --> H[harness: systems touched, Severity,<br/>Confidence from pipeline records]
-  H --> R[(issue ## Triage, board fields,<br/>bug-triage decision)]
-  H --> G{gate}
-  G -->|PR Low, every ticket high confidence,<br/>no reopens, checks green| M[auto-merge<br/>gh pr merge --squash --match-head-commit]
-  G -->|checks still running| W[wait; board sync checks again]
-  G -->|anything else| V[approvals:N + needs-human,<br/>reviewers, notice; card stays in Pending Review]
-  V --> Q[review-quorum check<br/>counts distinct approvals on the latest push]
+  B["Bug fix: every agent stage done,<br/>CI green on the branch head"] --> A["bug-triage agent, before the PR<br/>Impact, Complexity, Fix risk per ticket"]
+  A --> H["harness: systems touched, Severity,<br/>Confidence from pipeline records"]
+  H --> O["PR opens once<br/>rating published, no model call"]
+  O --> R[("ticket Triage section, board fields,<br/>bug-triage decision")]
+  O --> G{"gate"}
+  G -->|"PR Low, every ticket high confidence,<br/>no reopens, checks green, delivery check run"| M["auto-merge through the host adapter<br/>bound to the assessed head"]
+  G -->|"checks still running"| W["wait, board sync checks again"]
+  G -->|"anything else"| V["approvals:N + needs-human,<br/>reviewers, notice, card stays in Pending Review"]
+  V --> Q["review-quorum check<br/>counts distinct approvals on the latest push"]
 ```
 
 ## Assessment
@@ -41,6 +42,8 @@ Right after the runner opens the PR, it runs `factory review-gate publish --pr <
 | `.factory/state/review-gate/pr-<n>.json` | This machine's copy of the assessment (`review-gate status`) |
 
 The agent's usage is recorded like every other run (stage `bug-triage` in `token-usage.jsonl`, see [costs](costs.md)).
+
+A bug-fix PR's body also shows the bug itself: for a bug visible in the browser, the demo video section opens with its **Before the fix** and **After the fix** videos under the ticket (the reproduction recorded against the merge base, then the same flow on the fix), before any other video; a bug in a service's answer gets a **Before the fix / After the fix** section with the requests of its reproduction and the responses before and after the fix, and a **Reproduction** comment on its ticket ([pr-demo-video.md](pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
 
 ## The gate
 
@@ -83,11 +86,11 @@ A PR the gate clears is merged with `gh pr merge --squash --match-head-commit <t
 How the merge happens (`mergePr`, `scripts/review-gate/lib/github.mjs`):
 
 - GitHub reports nothing pending (`CLEAN`, `HAS_HOOKS`, `UNSTABLE`): the gate merges at once (`gh pr merge --squash`).
-- Something is pending (checks restarted after the base moved, `BLOCKED`, `BEHIND`, a mergeability GitHub is still computing): the PR **waits** (`approvals:0`, notice "waiting for GitHub to clear the merge"), and the next `board sync` checks the head again and merges it. GitHub's own auto-merge (`gh pr merge --auto`) is **not** used by default: once armed, GitHub merges whatever head the branch has when the ruleset's required checks pass, including a head pushed after the gate's decision whose CI has not run (council C9). `implement.autoMerge.native: true` turns it back on; the gate then disarms it (`--disable-auto`) every time it evaluates a head it does not clear to merge.
+- Something is pending (checks restarted after the base moved, `BLOCKED`, `BEHIND`, a mergeability GitHub is still computing): the PR **waits** (`approvals:0`, notice "waiting for GitHub to clear the merge"), and the next `board sync` checks the head again and merges it. GitHub's own auto-merge (`gh pr merge --auto`) is **not** used by default: once armed, GitHub merges whatever head the branch has when the ruleset's required checks pass, including a head pushed after the gate's decision whose CI has not run `implement.autoMerge.native: true` turns it back on; the gate then disarms it (`--disable-auto`) every time it evaluates a head it does not clear to merge.
 
 ### What "the checks pass" means
 
-Green is never "nothing is red" (council C9: a fast check that passed while the application workflows had not registered let a Low PR merge before its CI ran). The gate, `board sync`, `pr-check ci-gate` and implement's CI wait all read the same evidence (`lib/expected-ci.mjs`):
+Green is never "nothing is red" (a fast check that passes while the application workflows have not registered yet would let a Low PR merge before its CI ran). The gate, `board sync`, `pr-check ci-gate` and implement's CI wait all read the same evidence (`lib/expected-ci.mjs`):
 
 - **The head's expected workflows,** derived from the workflow files **at that head**: every workflow a `pull_request` (or `pull_request_target`) event for this PR triggers, after its `types`, `branches`, `branches-ignore`, `paths` and `paths-ignore` filters. A workflow whose `types` leave out `opened` (one on `labeled` or `synchronize` only) is not required, because it never runs on a PR's first head; if it runs, it must pass. The review-quorum workflow is not CI.
 - **Each expected workflow has a run for that head that completed** with `success`, `skipped` or `neutral`. A workflow with no run yet, a run still going, an unreadable workflow file, evidence the gate cannot read, or a head that moved since the assessment: not green. A repository with no pull-request workflow is never green (`implement.reviewGate.ci.allowNoWorkflows: true` changes that).
@@ -98,7 +101,7 @@ Green is never "nothing is red" (council C9: a fast check that passed while the 
 
 ### The hard guard: required checks
 
-`factory review-gate enforce` writes one ruleset on the default branch that requires `review-quorum` **and the CI checks** (council C9: with `review-quorum` alone GitHub merged a head whose CI had not run). The checks are `implement.reviewGate.requiredChecks`, or by default the jobs of every pull-request workflow that runs for every pull request (no `paths` or `branches` filter, `opened` among its types; a reusable workflow's jobs as "<caller job> / <job>"). A check that does not run for some PRs is never required, or GitHub would block those PRs forever. `factory doctor` warns when the ruleset requires fewer than these.
+`factory review-gate enforce` writes one ruleset on the default branch that requires `review-quorum` **and the CI checks** (with `review-quorum` alone GitHub would merge a head whose CI has not run). The checks are `implement.reviewGate.requiredChecks`, or by default the jobs of every pull-request workflow that runs for every pull request (no `paths` or `branches` filter, `opened` among its types; a reusable workflow's jobs as `<caller job> / <job>`). A check that does not run for some PRs is never required, or GitHub would block those PRs forever. `factory doctor` warns when the ruleset requires fewer than these.
 
 ## Re-evaluation
 
@@ -189,7 +192,7 @@ The bug-triage agent rates a bug fix before its PR exists (`review-gate assess -
 
 ## Which checks a head owes
 
-The expected pipelines are owed by the events that happened to the head (council C10). This is the CI evidence every CI adapter inherits (`scripts/pipeline/lib/ci/evidence.mjs`):
+The expected pipelines are owed by the events that happened to the head. This is the CI evidence every CI adapter inherits (`scripts/pipeline/lib/ci/evidence.mjs`):
 
 - **Before the PR**, a push of the story branch owes the pipelines its push trigger runs. A pipeline only a PR runs is listed as such and is what is pending at the open. A skipped run is never a pass here.
 - **On the PR**, a head owes a pipeline for the activities it went through: `opened` for the first head, `synchronize` for a replacement head, `ready_for_review`, `labeled`, `reopened`. The pipeline records them in its head ledger (`.factory/state/review-gate/heads-pr-<n>.json`) as it performs them; a head it did not push is a `synchronize`. So a `synchronize`-only workflow is owed by a replacement head (its absence is pending, never green), and not by the first one. A PR the pipeline did not open has no ledger and owes every pipeline of `opened`, `synchronize` and `reopened` (fail closed: a person decides).

@@ -3,6 +3,7 @@
 // `factory lint` failed on whitespace in an implementation line nothing had linted). The registry below
 // lists every job of templates/ci/github-actions/workflows; docs/ai-pipeline/ci-parity.md lists the same, and a test keeps
 // the three in step.
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { INSTALL_ROOT, loadConfig } from '../../pipeline/lib/config.mjs';
@@ -32,10 +33,6 @@ export const CI_PARITY = {
   },
   'feature-verification-check.yml': { check: { prePr: 'the parity run: factory fv check --changed-from <base> (this workflow is what gate.yml calls)', run: (base) => [['fv', 'check', '--changed-from', base]] } },
   'pr-check.yml': { check: { prePr: 'the PR check stage before the PR opens (fix mode)', run: null } },
-  'pr-demo-video.yml': {
-    record: { prePr: 'feature verification runs the stack specs that record the videos', run: null },
-    cleanup: { prePr: null, why: 'removes published videos after the PR closes', run: null },
-  },
   'review-quorum.yml': { 'review-quorum': { prePr: null, why: 'counts approvals from people; the review gate sets how many', run: null } },
   'board-epic-assign.yml': { sync: { prePr: null, why: 'not a pull request check (issue events)', run: null } },
   'board-escalation-resolve.yml': { resolve: { prePr: null, why: 'not a pull request check (issue comments)', run: null } },
@@ -102,7 +99,7 @@ export function parityGate({ cwd, base, targetArgs, seedFile, prCheckCli, env = 
   if (!failed.length) return { results, fixRun: null };
   log(`CI checks that would fail on the PR: ${failed.map((r) => r.check).join('; ')}; fixing them first`);
   fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-  fs.writeFileSync(seedFile, JSON.stringify({ score: 8, lensScores: {}, upheldFindings: findingsOf(results) }, null, 2));
+  writeText(seedFile, JSON.stringify({ score: 8, lensScores: {}, upheldFindings: findingsOf(results) }, null, 2));
   // The fixer fixes the failing checks; the checks themselves, run again below, are the verification. No critic round
   // follows a fix that touched only tests, the pipeline's records or docs: the PR check already judged the code, and a
   // full round after a mechanical fix cost a bug about $2.30 (council C3, cost). A fix that changed production code gets

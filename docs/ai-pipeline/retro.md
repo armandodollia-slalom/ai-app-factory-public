@@ -33,7 +33,7 @@ the retro was part of feature verification.)
    | Fix | Where it goes | Paths the agent may edit |
    | --- | --- | --- |
    | A rule that holds for this codebase | this repository's lessons pull request | `.factory/lessons/`, and `lessons.retro.allowedPaths` (default `.factory/agents/`, `.factory/policy/`) |
-   | A root cause every codebase would hit | a pull request against the factory | `agents/`, `docs/`, `templates/`, `skills/` in the factory checkout (`retro.factory.allowedPaths`) |
+   | A root cause every codebase would hit | a branch pushed to the factory's repository, for a person to open the pull request | `agents/`, `docs/`, `templates/`, `skills/` in the factory checkout (`retro.factory.allowedPaths`) |
    | The review gate's approvals table | this repository's pull request, written by the harness (never the agent) to `.factory/config.json` | |
 
    Edits anywhere else are discarded before the commit.
@@ -65,7 +65,7 @@ installed from a git checkout, the run clones it into that worktree's ignored st
 | `enabled` | `true` | `false`: factory-level findings are only listed as proposals |
 | `source` | the pin's `source`, else the install's `origin` | the repository the proposal branch is pushed to |
 | `allowedPaths` | `agents/`, `docs/`, `templates/`, `skills/` | what the agent may edit there |
-| `evidence` | `summary` | what the factory pull request says about the app: the agent's one-line reason per file, or `none` |
+| `evidence` | `summary` | what the factory proposal says about the app: the agent's one-line reason per file, or `none` |
 
 The decision log is never copied to the factory. A factory fix reaches the app when a release that
 contains it is pinned: `factory upgrade <version>`, then `factory render`.

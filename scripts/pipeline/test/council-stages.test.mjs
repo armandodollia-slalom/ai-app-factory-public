@@ -13,6 +13,7 @@ import { readJsonl, writeJson } from '../lib/util.mjs';
 import { councilArchitectureReview, reviewDisputesFile } from '../../review/lib/review.mjs';
 import { councilVerifier } from '../../feature-verification/lib/verify.mjs';
 import { councilLenses, scoreRound } from '../../pr-check/lib/loop.mjs';
+import { isResolvesQuestion, RESOLVES_ANSWER } from './fixtures/resolves-question.mjs';
 
 const members = [
   { name: 'opus', cli: 'claude', model: 'opus', lens: 'correctness' },
@@ -47,7 +48,7 @@ test('review council: merged findings, the members\' own scores, and a dispute r
   const finding = { severity: 'blocking', category: 'security', file: 'a.js', line: 1, issue: 'any user reads any order', fix: 'filter by owner' };
   const tasks = {};
   const round1 = { opus: out({ verdict: 'CHANGES_REQUESTED', score: 5, findings: [finding] }), sol: out({ verdict: 'CHANGES_REQUESTED', score: 4, findings: [{ ...finding, line: 2 }] }), tests: out({ verdict: 'APPROVED', score: 9, findings: [] }) };
-  const r1 = await councilArchitectureReview(config, story, 1, { runMember: async (m, task) => ((tasks[m.name] = task), round1[m.name]) });
+  const r1 = await councilArchitectureReview(config, story, 1, { runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : ((tasks[m.name] = task), round1[m.name]) });
   assert.equal(r1.verdict, 'CHANGES_REQUESTED');
   assert.equal(r1.findings.filter((f) => f.severity === 'blocking').length, 1);
   assert.match(r1.findings[0].issue, /any user reads any order \[raised by opus, sol\]/);
@@ -55,7 +56,7 @@ test('review council: merged findings, the members\' own scores, and a dispute r
   // The implementer disputes it (implement/lib/feedback.mjs writes this file); only opus and sol rule on it.
   writeJson(reviewDisputesFile(config, 'SHOP-1'), { open: [{ id: 'review-r1-1', issue: r1.findings[0].issue, kind: 'out-of-scope', reason: 'no AC' }], overruled: [], state: { 'review-r1-1': { disputes: 1, reasserts: 0 } } });
   const round2 = { opus: out({ verdict: 'APPROVED', score: 9, findings: [], disputes: [{ finding: 'review-r1-1', decision: 'accepted' }] }), sol: out({ verdict: 'APPROVED', score: 9, findings: [], disputes: [{ finding: 'review-r1-1', decision: 'accepted' }] }), tests: out({ verdict: 'APPROVED', score: 10, findings: [] }) };
-  const r2 = await councilArchitectureReview(config, story, 2, { runMember: async (m, task) => ((tasks[m.name] = task), round2[m.name]) });
+  const r2 = await councilArchitectureReview(config, story, 2, { runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : ((tasks[m.name] = task), round2[m.name]) });
   assert.match(tasks.opus, /Implementer disputes of your last findings[\s\S]*review-r1-1 \(out-of-scope\)/);
   assert.match(tasks.sol, /review-r1-1 \(out-of-scope\)/);
   assert.doesNotMatch(tasks.tests, /review-r1-1 \(out-of-scope\)|Implementer disputes of your last findings/);

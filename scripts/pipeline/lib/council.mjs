@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { COUNCIL_DEFAULTS, COUNCIL_LENSES, COUNCIL_STAGES, seatedNames } from './council-config.mjs';
 import { logDecision } from './decisions.mjs';
 import { metricsFile, readMetricsLocal } from './state.mjs';
-import { appendJsonl, log as defaultLog, nowIso, parseFrontMatter, readJson, run, sha, writeJson } from './util.mjs';
+import { appendJsonl, log as defaultLog, extractResult, nowIso, parseFrontMatter, readJson, run, sha, writeJson } from './util.mjs';
+import { resolvesGiven, resolvesOf } from './finding-route.mjs';
 
 export { COUNCIL_STAGES, COUNCIL_LENSES };
 export const COUNCIL_FILE = 'council-rounds.jsonl';
@@ -90,6 +91,7 @@ export function memberTask(task, { council, member, round, disputes = '', earlie
     '',
     '- `score`: 0-10 for the change against the ticket, through your lens. Leave it out only when you cannot score, and say why in `summary`.',
     '- on every finding: `lens`, `severity` (`blocking`, `major` or `minor`; major blocks like blocking where the contract above knows only blocking and minor), `action` (`fix`, `delete-test` or `rewrite`) and `evidence` (file and line, a command and its output, or a screenshot). Keep a finding\'s `id` whenever you raise it again.',
+    '- on every finding: `resolves`, what would resolve it: `code` (the production change), `tests` (a missing automated test, or one to remove), `plan` (a test-plan case) or `records` (PR text, records, docs, video); `code and tests` for a finding that needs both. The harness sends it where that work is done: a test gap never goes to the implementer.',
     '- a `delete-test` finding (severity `major`) names the test in `test`, its file in `file`, and in `evidence` the bug that would still be caught without it.',
     '- a `rewrite` finding lists what to delete in `deletes` (files, or `file:start-end` regions the branch added or changed), the new approach in `approach` (five lines or fewer), `why` it is better for this ticket, and the acceptance lines it `covers`.',
     '- `followUps`: `[{"title": "...", "reason": "..."}]` for real problems outside the ticket; they are not findings.',
@@ -185,7 +187,10 @@ export async function runCouncil({ council, run: runMember, parse, taskFor, retr
       const why = unavailableReason(res);
       if (why) return { ...base, attempts: Math.max(tries, 1), status: 'unavailable', reason: why, res, seconds: Math.round((Date.now() - t0) / 1000) };
       const parsed = res?.factoryGuard ? null : parse(res?.output ?? '', m);
-      if (parsed) return { ...base, attempts: Math.max(tries, 1), status: 'ok', ...parsed, findings: (parsed.findings ?? []).map((f) => normalizeFinding(f, m)), res, seconds: Math.round((Date.now() - t0) / 1000) };
+      if (parsed) {
+        const filled = await fillResolves(parsed.findings ?? [], { member: m, run: runMember, stage: council.stage, log });
+        return { ...base, attempts: Math.max(tries, 1), status: 'ok', ...parsed, findings: filled.findings.map((f) => normalizeFinding(f, m)), ...(filled.reasked ? { resolvesReasked: filled.reasked } : {}), res, seconds: Math.round((Date.now() - t0) / 1000) };
+      }
       log(`council ${council.stage}: ${m.name} returned no parsable result (attempt ${i + 1})`);
     }
     return { ...base, attempts: Math.max(tries, 1), status: 'failed', reason: 'no parsable result', res, seconds: Math.round((Date.now() - t0) / 1000) };
@@ -212,6 +217,45 @@ export async function runCouncil({ council, run: runMember, parse, taskFor, retr
     }
   }
   return { results };
+}
+
+// Every member fills `resolves` on every finding (what would resolve it; finding-route.mjs routes by it). A result with
+// findings that lack it is rejected and the member is asked once, with a short classification-only task, to name it for
+// those findings; what is still missing after that is inferred from the finding (its words, action and files) and
+// marked `resolvesInferred`, so the records say which values a member gave and which the harness guessed.
+const keyOf = (f, i) => String(f?.id ?? f?.case ?? `F${i + 1}`);
+export async function fillResolves(findings, { member, run: runMember, stage = '', log = defaultLog }) {
+  const missing = findings.map((f, i) => [f, i]).filter(([f]) => !resolvesGiven(f).length);
+  if (!missing.length) return { findings, reasked: null };
+  log(`council ${stage}: ${member.name} left \`resolves\` out on ${missing.length} finding(s); asking once`);
+  const task = [
+    `Your result was rejected: ${missing.length} finding(s) have no \`resolves\` field. Do not review again and do not read files: classify only.`,
+    'For each finding below, name what would resolve it: `code` (the production change), `tests` (a missing automated test, or one to remove), `plan` (a test-plan case), `records` (PR text, records, docs, video), or `code and tests` for a finding that needs both.',
+    '',
+    ...missing.map(([f, i]) => `- ${keyOf(f, i)}: ${String(f.issue ?? f.title ?? f.text ?? f.detail ?? f.reason ?? '').slice(0, 400)}${f.fix ? ` (fix: ${String(f.fix).slice(0, 300)})` : ''}${f.file ? ` [${f.file}]` : ''}`),
+    '',
+    'End with one line: AGENT_RESULT: {"resolves": {"<id>": "<value>", ...}}',
+  ].join('\n');
+  let answer = {};
+  try {
+    const res = await runMember(member, task, { purpose: 'resolves' });
+    const r = extractResult(res?.output ?? '');
+    if (r && typeof r.resolves === 'object' && r.resolves) answer = r.resolves;
+  } catch (error) {
+    if (error?.councilFatal || error?.outcome) throw error;
+  }
+  let given = 0;
+  const out = findings.map((f, i) => {
+    if (resolvesGiven(f).length) return f;
+    const a = answer[keyOf(f, i)];
+    if (a && resolvesGiven({ resolves: a }).length) {
+      given++;
+      return { ...f, resolves: a, resolvesAsked: true };
+    }
+    return { ...f, resolves: resolvesOf(f), resolvesInferred: true };
+  });
+  if (given < missing.length) log(`council ${stage}: ${member.name} still left \`resolves\` out on ${missing.length - given} finding(s); inferred and marked`);
+  return { findings: out, reasked: { missing: missing.length, given, inferred: missing.length - given } };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -351,7 +395,7 @@ export function hasEvidence(f, root = null) {
   return false;
 }
 
-export function mergeCouncil(council, results, { protect = null, feedback = [], violation = null, changed = null, earlier = null, root = null } = {}) {
+export function mergeCouncil(council, results, { protect = null, feedback = [], violation = null, changed = null, earlier = null, root = null, adjudications = null } = {}) {
   const ok = results.filter((r) => r.status === 'ok');
   const okBlocking = ok.filter((r) => r.member.blocking);
   const unavailable = results.filter((r) => r.status === 'unavailable');
@@ -431,21 +475,48 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     }
     // A blocking finding that asks for no change can never be resolved: it is a note (dogfood C16 held-out: "fix: none
     // required; keep it" stood as the only blocking finding of a review round and the story ended unresolved).
-    if (out.severity !== 'minor' && out.action === 'fix' && asksNoChange(out)) {
+    // It must not hide a request: every blocking item of the cluster asks for no change (a second member asking for one
+    // keeps it), nothing after the "none" asks for a change, and a scope objection is a request to take the behaviour
+    // out whatever its fix says (it gets a concrete instruction instead; council C12, Sol 1).
+    const blockingItems = c.items.filter((f) => blockingNames.has(f.member) && f.severity !== 'minor');
+    const ownFix = fixOf(out);
+    const scope = (blockingItems.length ? blockingItems : [out]).every(isScopeObjection);
+    if (out.severity !== 'minor' && scope && (!fixOf(out) || asksNoChange(out))) {
+      out.fix = `Take out the behaviour at ${out.file ?? 'the place the finding names'}${out.line ? `:${out.line}` : ''} that no ticket line asks for, or dispute the finding by quoting the ticket line that asks for it.`;
+    }
+    if (out.severity !== 'minor' && !scope && out.action === 'fix' && (blockingItems.length ? blockingItems : [out]).every((f) => (f.action ?? 'fix') === 'fix' && asksNoChange(f))) {
       out.severity = 'minor';
       out.upheldBy = [];
       out.notUpheld = `the finding asks for no change ("${fixOf(out).slice(0, 120)}"); a blocking finding must name a change`;
       out.noChange = true;
     }
-    // A later round objects to the fix of a finding the council upheld in an earlier round (rule 3's scope objection on
-    // lines the change made since then): the earlier ruling stands and the objection is a note, settled by the harness
-    // instead of ending the story unresolved. A defect in how the fix was done is not a scope objection and still blocks.
+    // A later round objects to the fix of a finding the council upheld in an earlier round (a scope objection on lines
+    // the fixer declared, and the harness sealed, for that one finding). The harness never decides by itself that the
+    // remedy required the behaviour (council C11 and C12, Sol 1: a declaration proves authorship, not necessity): the
+    // objection stands and is a candidate for adjudication. Only when every blocking member, asked fresh whether the
+    // agreed remedy requires this behaviour, answers yes with evidence (`adjudications`, from adjudicate()) is it a
+    // note crediting that finding. Otherwise it stands with a concrete instruction: take out what the adjudication did
+    // not accept, keep what carries out the earlier finding's agreed fix.
     const sanction = out.severity !== 'minor' ? sanctionedBy(out, earlier) : null;
     if (sanction) {
-      out.severity = 'minor';
-      out.upheldBy = [];
-      out.sanctionedBy = sanction.map((u) => u.id);
-      out.notUpheld = `the change it objects to answers ${sanction.map((u) => `${u.id} (upheld in round ${u.round}${fixOf(u) ? `; agreed fix: ${fixOf(u).slice(0, 160)}` : ''})`).join('; ')}; a change an upheld finding requires is in scope`;
+      const [u] = sanction;
+      const key = adjudicationKey(out, u);
+      const ruled = adjudications && Object.hasOwn(adjudications, key) ? adjudicationOutcome(council, adjudications[key]) : null;
+      const record = ruled && { key, earlier: u.id, earlierText: str(u.text).slice(0, 300), earlierFix: fixOf(u).slice(0, 300), file: out.file, line: out.line ?? null, outcome: ruled.accepted ? 'covered' : 'stands', acceptedBy: ruled.yes, rejectedBy: ruled.no, missing: ruled.missing, ambiguous: ruled.ambiguous, answers: ruled.answers };
+      if (ruled?.accepted) {
+        out.severity = 'minor';
+        out.upheldBy = [];
+        out.sanctionedBy = [u.id];
+        out.adjudication = record;
+        out.notUpheld = `every blocking member (${ruled.yes.join(', ')}) accepted, on adjudication, that the agreed fix of ${u.id} (upheld in round ${u.round}${fixOf(u) ? `: ${fixOf(u).slice(0, 160)}` : ''}) requires this behaviour; a change an upheld finding requires is in scope`;
+      } else if (ruled) {
+        out.adjudication = record;
+        const why = [ruled.no.length ? `${ruled.no.join(', ')} said no` : '', ruled.missing.length ? `no answer from ${ruled.missing.join(', ')}` : '', ruled.ambiguous.length ? `no clear yes with evidence from ${ruled.ambiguous.join(', ')}` : ''].filter(Boolean).join('; ');
+        const asked = !ownFix || asksNoChange({ fix: ownFix }) ? '' : ` (${ownFix.slice(0, 200)})`;
+        out.fix = `The council's adjudication did not accept that ${u.id}'s agreed fix requires the behaviour at ${out.file}:${out.line} (${why}). Take out that behaviour${asked}, and keep the change that carries out ${u.id}'s agreed fix: ${fixOf(u).slice(0, 300) || str(u.text).slice(0, 300)}.`;
+      } else {
+        out.adjudicate = { key, finding: { id: u.id, text: str(u.text), fix: fixOf(u), file: u.file ?? null, line: u.line ?? null, round: u.round, stage: u.stage ?? null, step: u.step ?? null }, declared: u.declared ?? null };
+      }
     }
     // Two members ask opposite things of the same test: neither position is picked silently.
     if (actions.includes('delete-test') && actions.includes('fix')) {
@@ -489,6 +560,23 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     }
   }
   const standing = merged.filter((f) => f.severity !== 'minor' && !f.supersededBy);
+  // The council contradicting itself on the same lines: a finding the adjudication already limited (an objection to its
+  // fix stood, and the implementer was told to take that part out) is demanded again. One owner question with both
+  // positions; never another fix cycle.
+  for (const f of standing) {
+    if (f.adjudicate || f.adjudication) continue;
+    const r = (earlier?.rejected ?? []).filter((x) => !(str(f.id) && str(f.id) === str(x.objection.id))).find((x) => (str(f.id) && str(f.id) === str(x.earlier.id)) || (f.file && x.earlier.file && relPath(f.file) === relPath(x.earlier.file) && similar(f.text, x.earlier.text, 0.5)));
+    if (!r) continue;
+    contradictions.push({
+      subject: `the council contradicts itself on ${r.earlier.id} (${r.objection.file}${r.objection.line ? `:${r.objection.line}` : ''})`,
+      id: f.id ?? r.earlier.id,
+      escalate: true,
+      positions: [
+        { member: `council, round ${r.earlier.round ?? '?'}${f.members?.length ? ` and now ${f.members.join('+')}` : ''}`, action: `requires ${r.earlier.id}: ${r.earlier.fix || r.earlier.text}`, evidence: str(f.text) || r.earlier.text },
+        { member: `council, objection upheld on adjudication${r.objection.rejectedBy?.length ? ` (no: ${r.objection.rejectedBy.join(', ')})` : ''}`, action: `take out the behaviour at ${r.objection.file}:${r.objection.line}`, evidence: r.objection.text },
+      ],
+    });
+  }
   for (const f of merged) if (f.severity === 'minor' || f.supersededBy) notes.push(f);
   for (const r of feedback) for (const f of r.findings ?? []) notes.push({ ...normalizeFinding(f, r.member), severity: 'minor', feedback: true });
 
@@ -521,7 +609,10 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     // Contradictions with an earlier round's upheld finding, settled by the harness (never an owner question).
     // Findings rule 4 turned into questions (no evidence): asked, recorded, never fixed.
     questions: merged.filter((f) => f.noEvidence).map((f) => ({ id: f.id ?? null, members: f.members, text: f.text, file: f.file ?? null })),
-    earlierRound: merged.filter((f) => f.sanctionedBy).map((f) => ({ id: f.id ?? null, subject: f.text, file: f.file ?? null, line: f.line ?? null, earlier: f.sanctionedBy, resolution: 'the earlier upheld finding stands; this objection is a note' })),
+    earlierRound: merged.filter((f) => f.sanctionedBy).map((f) => ({ id: f.id ?? null, subject: f.text, file: f.file ?? null, line: f.line ?? null, earlier: f.sanctionedBy, acceptedBy: f.adjudication?.acceptedBy ?? [], resolution: 'every blocking member accepted on adjudication that the earlier finding\'s fix requires it; this objection is a note' })),
+    // Scope objections on lines declared for an earlier upheld finding, not yet adjudicated: they stand until adjudicate() asks.
+    adjudicate: merged.filter((f) => f.adjudicate && f.severity !== 'minor').map((f) => ({ ...f.adjudicate, objection: { id: f.id ?? null, text: str(f.text), fix: fixOf(f), file: f.file, line: f.line ?? null, members: f.members, evidence: str(f.evidence) } })),
+    adjudicated: merged.filter((f) => f.adjudication).map((f) => f.adjudication),
     rewrites,
     disputes: mergeRulings(ok, merged),
     followUps: [...ok.flatMap((r) => (r.followUps ?? []).filter((u) => str(u?.title)).map((u) => ({ title: str(u.title), reason: str(u.reason), member: r.member.name }))), ...merged.filter((f) => f.outsideChange).map((f) => ({ title: String(f.text ?? f.issue ?? f.id).split('\n')[0].slice(0, 160), reason: f.notUpheld, member: (f.members ?? [])[0] ?? null }))],
@@ -541,8 +632,10 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
 
 const fixOf = (f) => str(f?.fix) || str(f?.suggestion) || str(f?.recommendation) || str(f?.remedy);
 const NO_CHANGE = /^\s*(?:none|nothing|n\/a|no(?:\s+(?:code\s+)?(?:change|fix|action)s?)?)(?:\s+(?:is\s+|are\s+)?(?:required|needed|necessary))?\s*(?:[.;:,!(—-]|$)/i;
-// Whether a finding's own fix asks for nothing.
-export const asksNoChange = (f) => NO_CHANGE.test(fixOf(f)) && fixOf(f) !== '';
+// Whether a finding's own fix asks for nothing: "none required" with no request after it ("None required; remove the
+// limit" asks for a change; council C12, Sol 1 adversarial list).
+const CHANGE_VERB = /\b(?:remove|delete|drop|revert|undo|add|change|replace|rename|move|restore|reject|validate|rewrite|return|throw|guard|handle|update|use|make|limit|cap|take\s+out|fix)\b/i;
+export const asksNoChange = (f) => fixOf(f) !== '' && NO_CHANGE.test(fixOf(f)) && !CHANGE_VERB.test(fixOf(f).replace(NO_CHANGE, ''));
 // The scope objection rule 3 asks for ("no ticket line asks for it"), by the member's `kind` or its wording.
 const SCOPE = /\bno\s+(?:line\s+of\s+the\s+)?(?:ticket|story|subtask|acceptance)(?:\s+(?:line|criterion|criteria|requirement)s?)?\s+(?:asks?|names?|requires?|mentions?|calls?|covers?)\b|\b(?:not|never)\s+(?:asked|required|requested)\s+(?:for\s+)?by\s+(?:the|any)\s+(?:ticket|story|subtask)\b|\bout(?:side)?\s+(?:of\s+)?(?:the\s+)?(?:ticket'?s?\s+)?scope\b|\bscope\s+creep\b/i;
 export const isScopeObjection = (f) => str(f?.kind).toLowerCase() === 'scope' || SCOPE.test(`${str(f?.text)} ${str(f?.issue)} ${str(f?.title)}`);
@@ -567,6 +660,137 @@ function sanctionedBy(f, earlier) {
   return one ? [one] : null;
 }
 
+// The key that ties an objection to the earlier finding it is adjudicated against (stable across the re-merge).
+const adjudicationKey = (f, u) => `${relPath(f.file)}:${f.line ?? ''}|${u.key ?? u.id}`;
+const ANSWER = (a) => {
+  const v = str(a).toLowerCase().replace(/[.!]$/, '');
+  return v === 'yes' || v === 'no' ? v : null;
+};
+// The adjudication of one objection: covered only when every blocking member of the stage's council answered exactly
+// "yes" with evidence, once. A "no", a missing answer (an unavailable or failed member, or no answer for this objection),
+// anything but a plain yes or no, a yes without evidence, or two different answers from one member: the objection stands.
+// blockOn is honoured by asking only the blocking members and needing all of them: a single blocking member can uphold a
+// finding under "any", so a single one can keep an objection standing; under "majority" or "all" the objection was
+// already upheld by that many, and accepting it as covered still takes every one (the strict side of every rule).
+export function adjudicationOutcome(council, answers = []) {
+  const names = council.members.filter((m) => m.blocking).map((m) => m.name);
+  const yes = [];
+  const no = [];
+  const missing = [];
+  const ambiguous = [];
+  for (const n of names) {
+    const mine = (answers ?? []).filter((a) => a?.member === n);
+    const values = [...new Set(mine.map((a) => ANSWER(a.answer)))];
+    if (!mine.length) missing.push(n);
+    else if (values.length !== 1 || values[0] === null) ambiguous.push(n);
+    else if (values[0] === 'no') no.push(n);
+    else if (!mine.every((a) => str(a.evidence).length >= 10)) ambiguous.push(n);
+    else yes.push(n);
+  }
+  return { accepted: names.length > 0 && yes.length === names.length, yes, no, missing, ambiguous, answers: (answers ?? []).map((a) => ({ member: a.member, answer: str(a.answer).slice(0, 20), evidence: str(a.evidence).slice(0, 400) })) };
+}
+
+// The question a blocking member answers, fresh and read-only, for each candidate: the earlier finding, its agreed fix,
+// the lines the fixer declared for it (as the harness sealed them) and the objection. Nothing from the fixer's own
+// argument beyond the declaration.
+export function adjudicationTask(items, { stage = null } = {}) {
+  return [
+    `# Council adjudication${stage ? ` (${stage})` : ''}`,
+    '',
+    'You are a member of this ticket\'s council, asked one narrow question per item. Earlier, the council upheld a finding and agreed a fix. The agent that fixed it declared which new lines carry out that fix. Now a council member objects that a behaviour on one of those lines is outside the ticket. Decide only this: **does the agreed fix of the earlier finding require this specific behaviour?**',
+    '',
+    '- Answer `yes` only when the agreed fix cannot be carried out without this behaviour, and say why with evidence (file and line, the finding\'s words). A behaviour that is merely near the fix, in the same file, convenient, or a reasonable extra is `no`.',
+    '- Answer `no` when the behaviour goes beyond what the agreed fix asks, or when you cannot tell. Read the code (read-only); change nothing.',
+    '- The declaration is the fixer\'s claim, not evidence that the fix needs the line.',
+    '',
+    ...items.flatMap((it, i) => [
+      `## Item ${i + 1}: \`${it.label ?? it.key}\``,
+      '',
+      `- Earlier finding \`${it.finding.id}\`${it.finding.stage ? ` (${it.finding.stage}${it.finding.step ? `, ${it.finding.step}` : ''}, round ${it.finding.round})` : it.finding.round ? ` (round ${it.finding.round})` : ''}${it.finding.file ? ` at ${it.finding.file}${it.finding.line ? `:${it.finding.line}` : ''}` : ''}: ${it.finding.text}`,
+      `- Its agreed fix: ${it.finding.fix || '(none recorded)'}`,
+      `- Lines the fixer declared for it${it.declared?.file ? ` in ${it.declared.file}` : ''}:`,
+      '',
+      '```',
+      ...(it.declared?.lines ?? []).slice(0, 40),
+      '```',
+      '',
+      `- The objection, at ${it.objection.file}${it.objection.line ? `:${it.objection.line}` : ''}${it.objection.members?.length ? ` (raised by ${it.objection.members.join(', ')})` : ''}: ${it.objection.text}`,
+      ...(it.objection.fix ? [`- It asks: ${it.objection.fix}`] : []),
+      ...(it.objection.evidence ? [`- Its evidence: ${it.objection.evidence.slice(0, 600)}`] : []),
+      '',
+    ]),
+    'Answer on the last line, one entry per item, with the item keys exactly as given:',
+    '',
+    `AGENT_RESULT: {"answers": [${items.map((it) => `{"key": "${it.label ?? it.key}", "answer": "yes|no", "evidence": "<file:line and why>"}`).join(', ')}]}`,
+  ].join('\n');
+}
+
+// A member's adjudication answers ({ answers: [{ key, answer, evidence }] }), or null when there is no AGENT_RESULT.
+export function parseAdjudication(output) {
+  const m = [...String(output ?? '').matchAll(/AGENT_RESULT:\s*(\{.*\})\s*$/gm)].at(-1);
+  let raw;
+  try {
+    raw = m ? JSON.parse(m[1]) : null;
+  } catch {
+    raw = null;
+  }
+  if (!raw || !Array.isArray(raw.answers)) return null;
+  return { score: null, verdict: null, summary: '', findings: [], answers: raw.answers.filter((a) => a && typeof a === 'object').map((a) => ({ key: str(a.key), answer: str(a.answer), evidence: str(a.evidence) })) };
+}
+
+// Settles the merge's adjudication candidates (merged.adjudicate) with the stage's blocking members: one sitting, every
+// member fresh and read-only, one question per candidate. `run(member, task)` is the stage's own member call (its
+// usage tagged as the adjudication), `remerge(adjudications)` merges the same results again with the answers. The
+// sitting is recorded in council-rounds as kind "adjudication" (counted and costed as a sitting; the PR's council table
+// lists it). Without candidates, the merge is returned unchanged.
+export async function adjudicate({ config = null, council, merged, remerge, run: runMember, stage, story, step = null, round, retries = 0, readOnly = null, log = defaultLog }) {
+  // Each item is asked under a short label (I1, I2, ...); answers are mapped back to the objection's own key.
+  const items = (merged?.adjudicate ?? []).map((it, i) => ({ ...it, label: `I${i + 1}` }));
+  if (merged?.error || !items.length) return merged;
+  const byLabel = new Map(items.map((it) => [it.label, it.key]));
+  const blocking = council.members.filter((m) => m.blocking);
+  const out = await runCouncil({ council: { ...council, members: blocking }, run: runMember, parse: parseAdjudication, taskFor: () => adjudicationTask(items, { stage }), retries, readOnly, log });
+  const adjudications = Object.fromEntries(items.map((it) => [it.key, []]));
+  if (!out.violation) {
+    for (const r of out.results) {
+      if (r.status !== 'ok') continue;
+      for (const a of r.answers ?? []) {
+        const key = byLabel.get(a.key);
+        if (key) adjudications[key].push({ member: r.member.name, answer: a.answer, evidence: a.evidence });
+      }
+    }
+  }
+  const again = remerge(adjudications);
+  if (config) recordAdjudication(config, { stage, story, step, round, council, results: out.results, adjudicated: again.adjudicated ?? [], violation: out.violation ?? null });
+  for (const a of again.adjudicated ?? []) log(`council ${stage}: adjudication of the objection at ${a.file}:${a.line} against ${a.earlier}: ${a.outcome}${a.acceptedBy.length ? ` (yes: ${a.acceptedBy.join(', ')})` : ''}${a.rejectedBy.length ? ` (no: ${a.rejectedBy.join(', ')})` : ''}${a.missing.length ? ` (no answer: ${a.missing.join(', ')})` : ''}`);
+  return { ...again, adjudication: { members: out.results.map((r) => ({ name: r.member.name, status: r.status, attempts: r.attempts ?? 1, seconds: r.seconds ?? null })), items: again.adjudicated ?? [] } };
+}
+
+// The adjudication sitting's record (council-rounds, kind "adjudication") and its decision.
+export function recordAdjudication(config, { stage, story, step = null, round, council, results = [], adjudicated = [], violation = null }) {
+  const rec = {
+    ts: nowIso(),
+    kind: 'adjudication',
+    stage,
+    story,
+    ...(step ? { step } : {}),
+    round,
+    blockOn: council.blockOn,
+    members: results.map((r) => ({ name: r.member.name, cli: r.member.cli, model: r.member.model ?? null, lens: r.member.lens, login: memberLogin(r.member), blocking: true, status: r.status, attempts: r.attempts ?? 1, seconds: r.seconds ?? null, ...(r.reason ? { reason: String(r.reason).slice(0, 300) } : {}) })),
+    ...(violation ? { error: String(violation).slice(0, 300) } : {}),
+    items: adjudicated.map((a) => ({ file: a.file, line: a.line, earlier: a.earlier, outcome: a.outcome, acceptedBy: a.acceptedBy, rejectedBy: a.rejectedBy, missing: a.missing, ambiguous: a.ambiguous })),
+    covered: adjudicated.filter((a) => a.outcome === 'covered').length,
+    stands: adjudicated.filter((a) => a.outcome !== 'covered').length,
+  };
+  try {
+    appendJsonl(metricsFile(config, COUNCIL_FILE), rec);
+    logDecision(config, { stage: `council-${stage}`, story, round, agent: 'council', subject: step ? `${story}/${step}` : story, decision: 'adjudicated', reason: `${rec.covered} covered, ${rec.stands} standing`, members: rec.members, items: adjudicated.map((a) => ({ source: 'adjudication', file: a.file, line: a.line, earlier: a.earlier, outcome: a.outcome, acceptedBy: a.acceptedBy, rejectedBy: a.rejectedBy, missing: a.missing, ambiguous: a.ambiguous, answers: a.answers })) });
+  } catch (error) {
+    defaultLog(`council: could not record the adjudication of ${stage} round ${round}: ${error.message}`);
+  }
+  return rec;
+}
+
 // A snapshot of a checkout's working tree (tracked and untracked files, .gitignore respected) as a git tree id, or null.
 export function treeSnapshot(cwd) {
   const index = path.join(os.tmpdir(), `factory-council-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -585,7 +809,7 @@ const safeName = (x) => String(x ?? '').replace(/[^A-Za-z0-9._-]+/g, '_');
 // Where a stage's memory for one story (and subtask) lives: the run state, never the change.
 export const memoryFile = (root, stateDir, { stage, story, step = null }) => path.join(root, stateDir, 'council', 'memory', `${ledgerBase({ stage, story, step })}.json`);
 
-const upheldRecord = (f) => ({ id: str(f.id) || null, text: (str(f.text) || str(f.issue) || str(f.title)).slice(0, 600), fix: fixOf(f).slice(0, 600), file: f.file ?? null, line: Number.isFinite(f.line) ? f.line : null, members: f.upheldBy?.length ? f.upheldBy : f.members ?? [] });
+const upheldRecord = (f) => ({ id: str(f.id) || null, text: (str(f.text) || str(f.issue) || str(f.title)).slice(0, 600), fix: fixOf(f).slice(0, 600), file: f.file ?? null, line: Number.isFinite(f.line) ? f.line : null, members: f.upheldBy?.length ? f.upheldBy : f.members ?? [], ...(f.adjudication?.outcome === 'stands' ? { adjudication: { earlier: f.adjudication.earlier, earlierText: f.adjudication.earlierText, earlierFix: f.adjudication.earlierFix, file: f.adjudication.file, line: f.adjudication.line, rejectedBy: f.adjudication.rejectedBy } } : {}) });
 
 // Names the merged findings no member named (`<prefix>-<n>`, in place), before they are remembered and handed to the
 // agent fixing them, so its declaration of which lines answer which finding (fixDeclarationText) can name each one.
@@ -636,7 +860,7 @@ export function fixDeclarationText(file, findings = []) {
     '',
     '`{"fixes": [{"id": "<finding id>", "hunks": [{"file": "<path from the repository root>", "start": <first line>, "end": <last line>}]}]}`',
     '',
-    `One entry per finding you changed code for (${ids.map((i) => `\`${i}\``).join(', ')}), listing only the line ranges, as the files stand when you finish, that you added or changed to carry out that finding's agreed fix. Do not list lines you changed for another reason (another finding, clean-up, code you only moved), and leave out a finding you changed nothing for. A later objection that a line is outside the ticket is settled without the council only for new lines listed here under exactly one finding; everything else goes back to the council.`,
+    `One entry per finding you changed code for (${ids.map((i) => `\`${i}\``).join(', ')}), listing only the line ranges, as the files stand when you finish, that you added or changed to carry out that finding's agreed fix. Do not list lines you changed for another reason (another finding, clean-up, code you only moved), and leave out a finding you changed nothing for. A later objection that a line is outside the ticket can become a note only for new lines listed here under exactly one finding, and only when every council member, asked separately, agrees that finding's fix requires that line; list nothing else.`,
   ].join('\n');
 }
 
@@ -808,11 +1032,20 @@ export function councilMemory({ file, cwd, round, fixes = null }) {
     const by = new Map(sealed.filter((s) => s.file === rel && s.lines.has(text)).map((s) => [s.finding.key, s.finding]));
     if (by.size !== 1) return null;
     const [finding] = by.values();
-    return remedyCovers(finding, rel) ? [finding] : null;
+    const declared = sealed.filter((x) => x.file === rel && x.finding.key === finding.key).flatMap((x) => [...x.lines]);
+    return remedyCovers(finding, rel) ? [{ ...finding, declared: { file: rel, lines: [...new Set(declared)] } }] : null;
   };
   const upheld = [...here, ...elsewhere].slice(-20);
+  // Objections that stood on adjudication against an earlier finding's fix (the implementer was told to take that part
+  // out): a later demand for that finding again is the council contradicting itself (mergeCouncil escalates it).
+  const all = [...here, ...elsewhere];
+  const rejected = all.filter((u) => u.adjudication).map((u) => {
+    const e = all.find((x) => str(x.id) === str(u.adjudication.earlier));
+    return { earlier: { id: u.adjudication.earlier, text: e?.text ?? u.adjudication.earlierText ?? '', fix: e?.fix ?? u.adjudication.earlierFix ?? '', file: e?.file ?? null, round: e?.round ?? null }, objection: { id: u.id, text: u.text, file: u.adjudication.file, line: u.adjudication.line, rejectedBy: u.adjudication.rejectedBy ?? [] } };
+  });
   return {
     upheld,
+    rejected,
     sanctions,
     fixes,
     text: earlierFindingsText(upheld),
@@ -969,7 +1202,9 @@ export function councilReviewSection(records) {
   // fixes), and a round 0 is a verify-first check (feature verification checks again before any new round). Council C9
   // proof run: keeping only the last sitting showed the test automation council as "Rounds: 0" with no score.
   const groups = new Map();
-  for (const r of [...records].sort((a, b) => String(a.ts).localeCompare(String(b.ts)))) {
+  // Adjudication sittings (kind "adjudication") are listed under their stage, never as rounds of it.
+  const adjudications = records.filter((r) => r.kind === 'adjudication');
+  for (const r of [...records].filter((x) => x.kind !== 'adjudication').sort((a, b) => String(a.ts).localeCompare(String(b.ts)))) {
     const key = `${r.stage}|${r.story}|${r.step ?? ''}`;
     if (!groups.has(key)) groups.set(key, []);
     const sittings = groups.get(key);
@@ -1007,7 +1242,13 @@ export function councilReviewSection(records) {
     // placed (council C11, Sol 3: a report said three where the records held four).
     const settledAt = cols.filter(({ r }) => r.earlierRound > 0);
     const settled = settledAt.reduce((n, { r }) => n + r.earlierRound, 0);
-    if (settled) gaps.push(`${settled} scope objection${settled > 1 ? 's' : ''} settled as a note by the recorded fix of an earlier upheld finding (${settledAt.map(({ r, label }) => `${label}${r.earlierRound > 1 ? ` ×${r.earlierRound}` : ''}`).join(', ')})`);
+    if (settled) gaps.push(`${settled} scope objection${settled > 1 ? 's' : ''} accepted as a note, on adjudication by every blocking member, as required by the agreed fix of an earlier upheld finding (${settledAt.map(({ r, label }) => `${label}${r.earlierRound > 1 ? ` ×${r.earlierRound}` : ''}`).join(', ')})`);
+    // Every adjudication sitting of this stage: counted as a sitting, with each objection's outcome and who answered.
+    const adj = adjudications.filter((a) => `${a.stage}|${a.story}|${a.step ?? ''}` === key).sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+    if (adj.length) {
+      const runs = adj.reduce((n, a) => n + (a.members ?? []).reduce((k, m) => k + (m.attempts ?? 1), 0), 0);
+      gaps.push(`${adj.length} adjudication sitting${adj.length > 1 ? 's' : ''} (${runs} member execution${runs === 1 ? '' : 's'}): ${adj.flatMap((a) => (a.items ?? []).map((it) => `round ${a.round}, ${it.file}:${it.line} against ${it.earlier}: ${it.outcome === 'covered' ? `covered (yes: ${it.acceptedBy.join(', ')})` : `stands (${[it.rejectedBy?.length ? `no: ${it.rejectedBy.join(', ')}` : '', it.missing?.length ? `no answer: ${it.missing.join(', ')}` : '', it.ambiguous?.length ? `unclear: ${it.ambiguous.join(', ')}` : ''].filter(Boolean).join('; ')})`}`)).join('; ') || 'no item recorded'}`);
+    }
     const notes = [...gaps, ...(judged ? ['the critics\' scores are inputs: the judge rules each finding, and the PR check passes on that ruling, not on every critic reaching the council\'s passScore'] : [])];
     blocks.push([...heading, summary, ...(notes.length ? ['', ...notes.map((n) => `- ${n[0].toUpperCase()}${n.slice(1)}.`)] : []), '', `| Member | ${cols.map((c) => c.label[0].toUpperCase() + c.label.slice(1)).join(' | ')} |`, `| --- | ${cols.map(() => '---').join(' | ')} |`, ...rows, `| ${judged ? 'Judge\'s ruling' : 'Result'} | ${passes.join(' | ')} |`].join('\n'));
   }

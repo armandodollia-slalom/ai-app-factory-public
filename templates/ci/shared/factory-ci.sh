@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The factory's CI jobs for CI systems whose definitions call one script (Jenkins, CircleCI, Bitbucket Pipelines):
 #   bash .factory/ci/factory-ci.sh <job>
-# Jobs: gate, lint, feature-verification, review-quorum, pr-check, demo-video, retro, tracker, graphify-prune.
+# Jobs: gate, lint, feature-verification, review-quorum, pr-check, retro, tracker, graphify-prune. (Demo videos are made
+# on the machine that runs the pipeline, never in CI.)
 # It installs the factory version .factory/factory.json pins (from its `source`), then runs the job. The CI system passes
 # its own variables: the target branch (FACTORY_BASE, else the CI's own pull request variable, else origin's default
 # branch), the pull request number (FACTORY_PR), and the secrets the job needs from its secret store: FACTORY_TOKEN
@@ -74,25 +75,6 @@ case "$job" in
     if [ -z "$pr" ]; then echo "The PR check needs a pull request (FACTORY_PR)."; exit 1; fi
     agent_cli || exit 0
     factory pr-check run --pr "$pr" --base "origin/$base" --push --json
-    ;;
-  # The e2e specs the pull request changes, recorded on the test stack (Docker), their videos added to its description;
-  # backend-only changes get an API summary (docs/ai-pipeline/pr-demo-video.md in the factory).
-  demo-video)
-    if [ -z "$pr" ]; then exit 0; fi
-    head_sha="$(git rev-parse HEAD)"
-    list=$(factory pr-video specs --base "origin/$base" | paste -sd, -)
-    scope=$(factory pr-video scope --base "origin/$base")
-    eval "$scope"
-    record=false; stack=false
-    if [ -n "$list" ] && { [ "$video" = true ] || [ "$api" = true ]; }; then record=true; fi
-    if { [ -n "$list" ] && [ "$video" = true ]; } || [ "$api" = true ]; then stack=true; fi
-    if [ "$video" != true ]; then factory pr-video publish --pr "$pr" --remove; fi
-    failed=false
-    if [ "$stack" = true ]; then toolchain; npx playwright install --with-deps chromium; factory teststack up; fi
-    if [ "$record" = true ]; then E2E_KEEP_VIDEOS=1 E2E_API_LOG=1 npx playwright test -c playwright.teststack.config.ts --project scenarios --no-deps ${list//,/ } || failed=true; fi
-    if [ "$record" = true ] && [ "$video" = true ]; then factory pr-video publish --pr "$pr" --specs "$list" --head-sha "$head_sha" --run-url "${FACTORY_RUN_URL:-}"; fi
-    factory pr-video api --pr "$pr" --base "origin/$base" --api "$api" --frontend "$frontend" --specs "$list" --head-sha "$head_sha" --run-url "${FACTORY_RUN_URL:-}" || echo "Could not add the API summary."
-    if [ "$failed" = true ]; then echo "A changed e2e spec failed; its video is marked failed in the description."; exit 1; fi
     ;;
   retro) agent_cli || exit 0; factory retro run ;;
   tracker) factory automations ;;

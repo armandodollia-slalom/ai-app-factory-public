@@ -20,6 +20,8 @@
 // Without `config.host` the host is detected from the `origin` remote (../products.mjs, shared with the
 // tracker layer and the generator); a GitHub origin (or none, with the legacy `board.repo` /
 // `tickets.repo`) behaves exactly as before the adapters.
+import { gate, guardAdapter } from '../redact.mjs';
+import { operations } from '../providers/contracts.mjs';
 import { fileURLToPath } from 'node:url';
 import { runBlocking } from '../blocking.mjs';
 import { expandEnv, secretSetting } from '../env.mjs';
@@ -120,11 +122,14 @@ export function ownsPr(settings, link) {
 }
 
 // Wraps a synchronous adapter in the async contract (identity values and toString stay as they are).
-function asyncify(obj) {
+// An adapter's own `sync` (the custom adapter points it at itself) is not copied: hostFor sets it.
+function asyncify(obj, seen = new WeakSet()) {
   const out = {};
+  seen.add(obj);
   for (const [k, v] of Object.entries(obj)) {
+    if (k === 'sync') continue;
     if (typeof v === 'function' && !['toString', 'toJSON'].includes(k)) out[k] = async (...args) => v(...args);
-    else if (v && typeof v === 'object' && !Array.isArray(v)) out[k] = asyncify(v);
+    else if (v && typeof v === 'object' && !Array.isArray(v) && !seen.has(v)) out[k] = asyncify(v, seen);
     else out[k] = v;
   }
   return out;
@@ -167,13 +172,18 @@ export async function callAdapter(settings, method, args = [], { token = null, e
   return fn.apply(owner, args);
 }
 
+// Every host adapter's write operations (the contract's `write` ops: PR bodies, comments, issues, statuses) pass the
+// secret gate (redact.mjs): redacted, then scanned; a hit left over throws and nothing is sent.
+export const HOST_WRITE_OPS = operations('host').filter((o) => o.mode === 'write').map((o) => o.id);
+const gated = (a) => guardAdapter(a, 'host', HOST_WRITE_OPS);
+
 export function createAdapter(settings, deps = {}) {
   const s = { ...settings, resolveToken: () => resolveToken(settings, deps.env ?? process.env) };
-  if (settings.type === 'github') return createGithubHost(s, deps);
-  if (settings.type === 'gitlab') return createGitlabHost(s, deps);
-  if (settings.type === 'bitbucket') return createBitbucketHost(s, deps);
-  if (settings.type === 'custom') return createCustomAdapter('host', settings, deps);
-  return createAzureDevopsHost(s, deps);
+  if (settings.type === 'github') return gated(createGithubHost(s, deps));
+  if (settings.type === 'gitlab') return gated(createGitlabHost(s, deps));
+  if (settings.type === 'bitbucket') return gated(createBitbucketHost(s, deps));
+  if (settings.type === 'custom') return gated(createCustomAdapter('host', settings, deps));
+  return gated(createAzureDevopsHost(s, deps));
 }
 
 const cache = new WeakMap();
@@ -188,31 +198,39 @@ export function hostFor(config, deps = {}) {
   let host;
   if (settings.type === 'custom') {
     // A command the repository declares: synchronous by nature, so both forms are the same calls.
-    const core = createCustomAdapter('host', settings, deps);
+    const core = gated(createCustomAdapter('host', settings, deps));
     host = asyncify(core);
     host.sync = core;
   } else if (settings.type === 'github') {
-    const core = createGithubHost({ ...settings, resolveToken: () => resolveToken(settings, deps.env ?? process.env) }, deps);
+    const core = gated(createGithubHost({ ...settings, resolveToken: () => resolveToken(settings, deps.env ?? process.env) }, deps));
     host = asyncify(core);
     host.sync = core;
     // No gh on this machine (a bare CI runner): the async reads and comments go through the REST API with its token.
     if (!deps.gh && !deps.run && !ghInstalled()) {
       const rest = githubRest(settings, { env: deps.env ?? process.env });
-      if (rest) Object.assign(host.pr, { get: rest.get, comment: (n, body) => rest.comment(n, body) });
+      if (rest) Object.assign(host.pr, { get: rest.get, comment: (n, body) => rest.comment(n, gate(body, 'host pr.comment')) });
     }
   } else {
     host = createAdapter(settings, deps);
     let sync;
-    Object.defineProperty(host, 'sync', { get: () => (sync ??= bridged(settings, deps)), enumerable: false });
+    Object.defineProperty(host, 'sync', { get: () => (sync ??= derived(bridged(settings, deps))), enumerable: false });
   }
-  host.settings = settings;
-  host.git = gitRemote(settings);
-  host.fileUrl = (file, ref, opts) => fileUrl(settings, file, ref, opts);
-  host.prUrl = (number) => prUrl(settings, number);
-  host.ownsPr = (link) => ownsPr(settings, link);
+  // The operations every host has without a network call. Both calling forms carry them: synchronous callers hold
+  // `host.sync` and call these too (an epic run crashed after its PR opened when `sync` lacked `ownsPr`).
   const resolveBotToken = () => secretSetting(settings.bot?.token, deps.env ?? process.env);
   const createHost = (d) => hostFor(config, { ...deps, ...d });
-  host.bot = settings.type === 'github' ? githubBot(config) : settings.type === 'gitlab' ? gitlabBot(settings, { resolveBotToken, createHost }) : settings.type === 'bitbucket' ? bitbucketBot(settings, { resolveBotToken, createHost }) : settings.type === 'custom' ? customBot() : azureBot(settings, { resolveBotToken, createHost });
+  const bot = settings.type === 'github' ? githubBot(config) : settings.type === 'gitlab' ? gitlabBot(settings, { resolveBotToken, createHost }) : settings.type === 'bitbucket' ? bitbucketBot(settings, { resolveBotToken, createHost }) : settings.type === 'custom' ? customBot() : azureBot(settings, { resolveBotToken, createHost });
+  function derived(target) {
+    target.settings = settings;
+    target.git = gitRemote(settings);
+    target.fileUrl = (file, ref, opts) => fileUrl(settings, file, ref, opts);
+    target.prUrl = (number) => prUrl(settings, number);
+    target.ownsPr = (link) => ownsPr(settings, link);
+    target.bot = bot;
+    return target;
+  }
+  derived(host);
+  if (settings.type === 'github' || settings.type === 'custom') derived(host.sync);
   if (plain) cache.set(config, host);
   return host;
 }

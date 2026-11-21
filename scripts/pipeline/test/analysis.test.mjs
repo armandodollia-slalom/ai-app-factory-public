@@ -101,7 +101,8 @@ test('parsers: SARIF (rule default level, file URIs), MSBuild (deduplicated), ES
 test('parsers: secret reports never keep the secret; actionlint, OSV-Scanner and the packs\' own parsers', async () => {
   const leaks = P.parseGitleaksJson(JSON.stringify([{ RuleID: 'aws', File: 'a.env', StartLine: 2, Secret: 'TOP-SECRET-VALUE', Match: 'key=TOP-SECRET-VALUE', Commit: 'abc' }]));
   assert.doesNotMatch(JSON.stringify(leaks), /TOP-SECRET-VALUE/);
-  assert.match(leaks[0].key, /^secret:[0-9a-f]{16}$/);
+  // No credential word before the hash (redact.mjs): `leak-<hash>`, not `secret:<hash>`.
+  assert.match(leaks[0].key, /^leak-[0-9a-f]{16}$/);
   assert.deepEqual(P.parseActionlintJson('[{"message":"m","filepath":".github/workflows/a.yml","line":3,"kind":"expression"}]').map((f) => [f.rule, f.file, f.line]), [['expression', '.github/workflows/a.yml', 3]]);
   const osv = P.parseOsvJson(JSON.stringify({ results: [{ source: { path: 'package-lock.json' }, packages: [{ package: { name: 'minimist', version: '1.2.0', ecosystem: 'npm' }, groups: [{ ids: ['CVE-1', 'GHSA-aaaa'], max_severity: '9.8' }, { ids: ['GHSA-bbbb'], max_severity: '3.1' }] }] }] }));
   assert.deepEqual(osv.map((f) => [f.rule, f.level, f.key]), [['GHSA-aaaa', 'error', 'npm:minimist:GHSA-aaaa'], ['GHSA-bbbb', 'warning', 'npm:minimist:GHSA-bbbb']]);
@@ -128,7 +129,8 @@ test('baseline by lines: only findings on lines the change added count; others i
   const r = classify(f, { scope: 'changed-lines', baseline: 'lines', changed });
   assert.deepEqual(r.introduced.map((x) => `${x.file}:${x.line}`), ['a.ts:2', 'new.ts:1']);
   assert.deepEqual(r.preexisting.map((x) => `${x.file}:${x.line}`), ['a.ts:3']);
-  assert.match(f[0].id, /^tool:R:[0-9a-f]{16}$/);
+  // The fingerprint first, prefixed (a rule name such as generic-api-key never sits before a hex string).
+  assert.match(f[0].id, /^tool:fp-[0-9a-f]{16}:R$/);
 });
 
 test('baseline by merge-base fingerprint: a moved finding is the same finding, a second copy is new; native trusts the tool', () => {

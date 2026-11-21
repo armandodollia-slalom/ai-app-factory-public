@@ -543,6 +543,13 @@ async function analysisPruneInfo(config) {
       for (const plat of Object.keys(t.install?.platforms ?? {})) pinned.add(`${t.install.name ?? t.id}-${t.install.version}-${plat}`);
       for (const src of t.rules ?? []) if (src.repo) pinned.add(path.basename(ruleSetDir(machineCache(), src)));
     }
+    // The demo-video toolchain (packs/video/tools.json) is the factory's, pinned for every repository.
+    try {
+      const { PINS } = await import('../../pr-video/lib/tools.mjs');
+      pinned.add(PINS.id);
+    } catch {
+      // no video toolchain in this install
+    }
     return { cache: machineCache(), dir: analysisDir(config), pinned };
   } catch {
     return null;

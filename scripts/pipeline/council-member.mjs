@@ -3,6 +3,7 @@
 // review runs in a Stop hook): `node council-member.mjs <job.json>`. The job names the repository, the stage's config
 // folder, the agent run and the file the result goes to; the stage reads that file in the round, or, for a
 // non-blocking member that finished late, in the next round as feedback (council.mjs runDetachedMember, takeLate).
+import { writeText } from './lib/redact.mjs';
 import fs from 'node:fs';
 import { runAgentAsync } from './lib/agents.mjs';
 import { loadConfig } from './lib/config.mjs';
@@ -18,6 +19,6 @@ try {
 } catch (error) {
   result = { status: 1, output: '', error: error.message };
 }
-fs.writeFileSync(`${job.out}.tmp`, JSON.stringify({ ...result, member: job.member, round: job.round, finishedAt: new Date().toISOString() }));
+writeText(`${job.out}.tmp`, JSON.stringify({ ...result, member: job.member, round: job.round, finishedAt: new Date().toISOString() }));
 fs.renameSync(`${job.out}.tmp`, job.out);
 fs.rmSync(jobFile, { force: true });

@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnBackground } from '../../pipeline/lib/background.mjs';
 import { implChanges } from '../../pipeline/lib/git.mjs';
+import { routeToRole } from '../../pipeline/lib/finding-route.mjs';
+import { addRequired } from '../../feature-verification/lib/required.mjs';
 import { nextAttempt, runDied } from '../../pipeline/lib/recovery.mjs';
 import { clearEscalation, escalate, lockFile, loadState, logFile, updateState } from '../../pipeline/lib/state.mjs';
 import { listStories, resolveStory } from '../../pipeline/lib/stories.mjs';
@@ -38,13 +40,23 @@ function deliver(config, story, pc, payload) {
     bump();
     return notice(`PR check: ${story.key} scored ${pc.score}/10 against its story (acceptance criteria, flow, design, style, video). Report: ${pc.report}`);
   }
+  // The code agent gets only what it can resolve; test gaps become required cases for feature verification
+  // (finding-route.mjs, required.mjs).
+  const { mine, elsewhere } = routeToRole(pc.openFindings ?? [], 'implementer');
   if (pc.deliveries === 0) {
     bump();
-    return block(`The PR check of ${story.key} scored ${pc.score}/10 against its story. ${pc.reason ?? ''}\n\nOpen findings (details and fixes in ${pc.report}):\n${formatFindings(pc.openFindings)}\n\nFix them, then finish your turn; the check runs again after the architecture review and feature verification pass.`);
+    const gaps = elsewhere.filter((f) => f.resolves.some((r) => r === 'tests' || r === 'plan'));
+    if (gaps.length) addRequired(config, story.key, gaps.map((f) => ({ id: f.id, source: 'pr-check', title: f.title, fix: f.fix ?? null })));
+    const handed = elsewhere.length ? `\n\nNot for you (${elsewhere.map((f) => f.id).join(', ')}): ${gaps.length ? 'feature verification adds the missing tests as required cases' : 'the PR check\'s fixer resolves them'}.` : '';
+    if (!mine.length) return notice(`PR check: ${story.key} scored ${pc.score}/10; its open findings are not about the production code.${handed}`);
+    // route: routeToRole
+    return block(`The PR check of ${story.key} scored ${pc.score}/10 against its story. ${pc.reason ?? ''}\n\nOpen findings (details and fixes in ${pc.report}):\n${formatFindings(mine)}${handed}\n\nFix them, then finish your turn; the check runs again after the architecture review and feature verification pass.`);
   }
   if (pc.deliveries === 1 && !payload.stop_hook_active) {
     bump();
-    return block(`The PR check findings for ${story.key} are still open and nothing has changed since the check. Address them (see ${pc.report}):\n${formatFindings(pc.openFindings)}`);
+    // route: routeToRole (only the findings the code agent can resolve, as in the first delivery)
+    if (!mine.length) return null;
+    return block(`The PR check findings for ${story.key} are still open and nothing has changed since the check. Address them (see ${pc.report}):\n${formatFindings(mine)}`);
   }
   if (pc.deliveries <= 2) {
     updateState(config, story.key, (s) => (s.prCheck.deliveries = 3));
@@ -75,6 +87,7 @@ export function hookStop(config, story, payload = {}) {
   const { maxRuns } = settings(config);
   if (pc.runs >= maxRuns && pc.verdict === 'FAIL') {
     updateState(config, story.key, (s) => Object.assign(s.prCheck, { status: 'escalated', hash }));
+    // not-an-agent: an escalation to a person
     escalate(config, story, 'pr-check', `still failing after ${pc.runs} PR checks`, `Last score ${pc.score}/10. Open findings:\n${formatFindings(pc.openFindings)}\n\nReport: ${pc.report}`);
     return notice(`PR check: ${story.key} still failed after ${pc.runs} checks. A human needs to decide; see .factory/state/escalations/${story.key}-pr-check.md.`);
   }
@@ -83,11 +96,20 @@ export function hookStop(config, story, payload = {}) {
   return notice(`PR check: ${story.key} will be checked against its story in the background once feature verification has verified the tests (log: ${bg.log}). Findings come back on your next stop.`);
 }
 
+// A new report round on the same implementation (implement's return of test gaps to test automation): the check waits for
+// the tests to verify again, then sits. The return budget bounds how often this happens, so maxRuns is not applied.
+export function recheck(config, story) {
+  const { hash } = implChanges(config);
+  if (!hash) return null;
+  updateState(config, story.key, (s) => Object.assign(s.prCheck, { status: 'idle', verdict: null, score: null, openFindings: [] }));
+  return spawnWaiter(config, story, hash, { recoveries: 0, retryAt: null });
+}
+
 // Saved before spawning: the waiter checks that its hash is still the current one.
 function spawnWaiter(config, story, hash, fields) {
   const file = logFile(config, story.key, 'pr-check');
   const rel = path.relative(config.root, file);
-  updateState(config, story.key, (s) => Object.assign(s.prCheck, { status: 'waiting', hash, pid: null, boot: null, log: rel, reason: null, deliveries: 0, requestedAt: nowIso(), ...fields }));
+  updateState(config, story.key, (s) => Object.assign(s.prCheck, { status: 'waiting', hash, currentHash: null, files: implChanges(config).files, pid: null, boot: null, log: rel, reason: null, deliveries: 0, requestedAt: nowIso(), ...fields }));
   const bg = spawnBackground(config, { script: SCRIPT, key: story.key, stage: 'pr-check', args: ['hook-run', story.key, '--hash', hash], file });
   updateState(config, story.key, (s) => {
     if (s.prCheck.hash === hash && !s.prCheck.pid) Object.assign(s.prCheck, { pid: bg.pid, boot: bootId() });
@@ -146,6 +168,19 @@ export async function hookRun(config, story, hash, executeCheck) {
   const set = (fields) => updateState(config, story.key, (s) => Object.assign(s.prCheck, fields));
   const current = () => loadState(config, story.key).prCheck.hash === hash;
 
+  // One comparison, logged with both hashes and the files that differ: stale is recorded only with a current hash that
+  // differs from the one waited for (dogfood C24: the waiter's log was empty and the cause had to be rebuilt by hand).
+  let compared = 0;
+  const moved = (when) => {
+    const now = implChanges(config);
+    if (compared++ === 0) log(`${story.key}: waiting for the PR check of implementation ${hash}; current ${now.hash || '(none)'} (${now.files.length} file(s))`);
+    if (now.hash === hash) return false;
+    const was = loadState(config, story.key).prCheck.files ?? null;
+    const changed = was ? [...new Set([...now.files.filter((f) => !was.includes(f)), ...was.filter((f) => !now.files.includes(f))])] : now.files;
+    log(`${story.key}: stale ${when}: waited for ${hash}, current ${now.hash || '(none)'}; files now in the implementation: ${now.files.join(', ') || '(none)'}${was ? `; added or removed since: ${changed.join(', ') || '(none: same files, changed content)'}` : ''}`);
+    set({ status: 'stale', currentHash: now.hash || null, reason: `the implementation changed ${when} (waited for ${hash}, now ${now.hash || 'none'})` });
+    return true;
+  };
   if (!current()) return 0;
   set(selfProcess());
   for (;;) {
@@ -153,10 +188,7 @@ export async function hookRun(config, story, hash, executeCheck) {
       log(`superseded: ${story.key} has a newer PR check`);
       return 0;
     }
-    if (implChanges(config).hash !== hash) {
-      set({ status: 'stale', reason: 'the implementation changed while waiting' });
-      return 0;
-    }
+    if (moved('while waiting')) return 0;
     const { automation } = loadState(config, story.key);
     if (!requireTests || automation.verifiedHash === hash) break;
     if (!testsPending(config, story, automation, hash)) {
@@ -182,10 +214,7 @@ export async function hookRun(config, story, hash, executeCheck) {
     return 1;
   }
   if (!current()) return 0;
-  if (implChanges(config).hash !== hash) {
-    set({ status: 'stale', reason: 'the implementation changed during the check' });
-    return 0;
-  }
+  if (moved('during the check')) return 0;
   const pass = summary.verdict === 'PASS';
   updateState(config, story.key, (s) =>
     Object.assign(s.prCheck, {
@@ -216,5 +245,7 @@ export function sessionContext(config, story) {
   if (recovered) return `PR check: ${recovered}`;
   if (pc.status !== 'done') return `PR check for ${story.key}: ${pc.status === 'idle' ? 'not run' : pc.status}${pc.reason ? ` (${pc.reason})` : ''}.`;
   const line = `PR check for ${story.key}: ${pc.verdict} ${pc.score}/10 (report: ${pc.report}).`;
-  return pc.verdict === 'PASS' ? line : `${line}\nOpen findings to fix:\n${formatFindings(pc.openFindings)}`;
+  // The session's context reaches the code agent: only what it can resolve.
+  // route: routeToRole
+  return pc.verdict === 'PASS' ? line : `${line}\nOpen findings to fix:\n${formatFindings(routeToRole(pc.openFindings ?? [], 'implementer').mine)}`;
 }

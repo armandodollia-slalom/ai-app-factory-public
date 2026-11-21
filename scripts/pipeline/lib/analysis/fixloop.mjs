@@ -38,6 +38,7 @@ export async function fixLoop(config, slot, { cwd, base, deps, bounces = null, l
     if (!report.findings.length || bounce >= budget) break;
     bounce++;
     deps.log?.(`${label}static analysis: ${report.findings.length} finding(s); fix bounce ${bounce} of ${budget}`);
+    // not-routed: tool findings, the harness's own facts, always the code agent's
     await deps.askImplementer(fixTaskText(report, { bounce, bounces: budget }), bounce);
     deps.commit(`${label}fix static analysis findings (bounce ${bounce})`);
   }

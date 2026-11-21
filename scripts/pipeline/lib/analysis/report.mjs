@@ -1,6 +1,7 @@
 // One analysis report per head commit and slot, under the factory state folder of the main checkout, so later slots,
 // the architecture-review council, feature verification and the PR check read it instead of running the tools again.
 // Also: the findings as harness findings for the council, the evidence text members get, and the PR body section.
+import { writeText } from '../redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { analysisDir } from './runner.mjs';
@@ -14,7 +15,7 @@ export function writeReport(config, report) {
   if (!report?.sha || report.tree?.state === 'dirty') return null;
   const file = reportFile(config, report.sha, report.slot);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(report, null, 1)}\n`);
+  writeText(file, `${JSON.stringify(report, null, 1)}\n`);
   return file;
 }
 

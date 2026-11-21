@@ -61,7 +61,9 @@ Verified by running: the LSP entries of `dotnet`, `typescript`, `python` and `go
 
 - After editing `agents/*.agent.md`, run the tests: prompt versions are hashes and some tests pin structure, not text.
 - After editing `templates/`, run `factory render` in a test repository and `factory check`.
-- The retro stage of repositories that use the factory opens pull requests against `agents/`, `docs/`, `templates/` and `skills/` here. Review them like any other change: they quote the evidence from the repository that proposed them.
+- The retro stage of repositories that use the factory pushes proposal branches that change `agents/`, `docs/`, `templates/` and `skills/` here; a person opens the pull request. Review them like any other change: they quote the evidence from the repository that proposed them.
+- After changing a page with a Mermaid diagram, check that it still renders (GitHub's preview, or the Mermaid live editor); keep node text short and quote labels that contain punctuation.
+- After changing `templates/e2e/`, add the new file's hash to `templates/e2e/history.json` (a test checks it).
 
 ## Releases
 

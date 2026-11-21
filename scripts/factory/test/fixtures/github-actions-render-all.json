@@ -31,10 +31,6 @@
     "kind": "file",
     "sha": "1e9f7341f65096da"
   },
-  ".github/workflows/factory-pr-demo-video.yml": {
-    "kind": "file",
-    "sha": "849b54b8c7c02d4d"
-  },
   ".github/workflows/factory-retro.yml": {
     "kind": "file",
     "sha": "e338c7b288221b5e"

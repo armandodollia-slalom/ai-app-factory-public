@@ -130,7 +130,10 @@ for its CLI, a stage member that does not exist. `factory council check` prints 
      question for the ticket's owner: the pair reports blocked (the escalation questions ask it), the review escalates,
      and the PR check ends `QUESTION`.
    - A blocking finding whose own fix asks for no change ("none required") is a note (`noChange`): nothing could
-     resolve it.
+     resolve it. Only when it cannot hide a request: every blocking member's item in the cluster asks for no change,
+     nothing after the "none" asks for one ("None required; remove the limit" is a request), and it is not a scope
+     objection. A scope objection asks to take the behaviour out whatever its fix says: it stands, and its fix becomes
+     that instruction.
    - **Memory across rounds.** Every stage (pair, UI pair, review, test plan, test automation, PR check) keeps, per
      story and subtask, the findings each round of the sitting upheld (for the PR check, the judge's upheld findings),
      their agreed fixes and a snapshot of the tree that round judged (`.factory/state/council/memory/`). The next round's
@@ -144,19 +147,31 @@ for its CLI, a stage member that does not exist. `factory council check` prints 
      return): it keeps the lines the step added whose text was not in the file before it and is not text the step
      removed (moved code), and records refusals (`rejected`: an id that round did not uphold, a range wider than 200
      lines, original or moved lines).
-   - **Settlement.** A later finding that is a scope objection (`kind` "scope", or rule 3's wording "no ticket line asks
-     for it") is settled only when its own line (never a line its evidence cites) is a sealed line of exactly one
-     upheld finding, the line's text is not generic and occurs once in its file, and that finding is about the file or
-     its agreed fix names it. Then the earlier finding stands and the objection is a note crediting that one finding
-     (`sanctionedBy`, counted as `earlierRound` in the round's record and in the PR body's council section). Anything
-     else (no declaration, two findings, a neighbouring or repeated line, original code, a file the remedy does not
-     cover) leaves the objection to the council. A defect in how the fix was done is not a scope objection and still
+   - **Adjudication, never settlement by the harness.** A declaration proves the fixer wrote a line, not that the
+     remedy needed it, so the harness never decides that by itself. A later finding that is a scope objection (`kind`
+     "scope", or rule 3's wording "no ticket line asks for it") whose own line (never a line its evidence cites) is a
+     sealed line of exactly one upheld finding (the line's text not generic and once in its file, the finding about the
+     file or its agreed fix naming it) **stands** and is a candidate (`adjudicate`). The stage then holds one
+     adjudication sitting (`adjudicate()`): every blocking member, fresh and read-only, sees the earlier finding, its
+     agreed fix, the lines the fixer declared for it and the objection, nothing else of the fixer's, and answers per
+     item "does the agreed fix require this specific behaviour?" `yes` or `no` with evidence. Only a plain `yes` with
+     evidence from every blocking member makes the objection a note crediting that one finding (`sanctionedBy`, with
+     `acceptedBy`; `earlierRound` in the round's record). A `no`, a missing or unparsable answer, a hedged or doubled
+     answer, a yes without evidence, an unavailable member, or a member that changed the tree: the objection stands,
+     and its fix becomes a concrete instruction (take out the behaviour the adjudication did not accept, keep the change
+     that carries out the earlier finding's agreed fix). Non-blocking members are not asked. The sitting is recorded in
+     `council-rounds.jsonl` with `kind` "adjudication" (members, executions, each item's outcome and who said what), its
+     usage under the stage with step `adjudication-<member>`, and listed in the PR body's council section. If a later
+     round demands that earlier finding again after its objection stood, the council has contradicted itself: one owner
+     question stating both positions (a contradiction with `escalate`), asked at once. Anything that is not a candidate
+     (no declaration, two findings, a neighbouring or repeated line, original code, a file the remedy does not cover)
+     is an ordinary finding of the council. A defect in how the fix was done is not a scope objection and still
      blocks, and so does a cluster in which any blocking member's finding is not a scope objection. A round number not
      after the last recorded one starts a new sitting; the old sitting's rounds become history.
    - **Across stages.** The memory is per story: a stage also reads the rulings of the story's other stages and earlier
      sittings (the PR check reads what the review upheld; the review, after a return from the PR check, what the PR check
-     upheld). Sealed lines are matched by their text, so a later stage settles an objection to them however far later
-     changes moved them.
+     upheld). Sealed lines are matched by their text, so a later stage recognises an objection to them however far later
+     changes moved them (and the objection still goes to adjudication).
 5. The implementer (or the fixer, or the test-automation agent) gets the merged findings in the stage's usual format.
    A `DELETE TEST` finding is acted on by deleting the test; a `REWRITE` by deleting the regions and writing them again.
    How to handle both is added to that agent's task only when a council sits for the stage
@@ -183,7 +198,7 @@ judges (the design critic when no frontend file changed, the video critic when t
 not: every member critiques every round. A member's lens (`correctness`, `security`, `test-value`, `rewrite`) is about
 the whole change, not a class of files, so no fix can be shown to leave its judgement untouched, and carrying an earlier
 10 would let it stand over code the member never saw; an acceptance-lens member rates every ticket line against the code
-the round ends on (council C7). The cost is one critic run per member per round: a council of three for six rounds is
+the round ends on. The cost is one critic run per member per round: a council of three for six rounds is
 up to 18 critic runs (plus the acceptance critic when no member has that lens, the defender and the judge), where the
 stage's own five critics with carry-over often run three or four per round after the first.
 

@@ -18,6 +18,9 @@
 // azure-devops -> Azure Boards). GitLab has no tracker here, so `tracker.type` must be set: trackerFor
 // throws a TrackerError('config') that says so. A repository with a GitHub origin and no new keys is the
 // GitHub tracker, exactly as before.
+import { guardAdapter } from '../../../pipeline/lib/redact.mjs';
+import { operations } from '../../../pipeline/lib/providers/contracts.mjs';
+const TRACKER_WRITE_OPS = operations('tracker').filter((o) => o.mode === 'write').map((o) => o.id);
 import { azureBoardsTracker } from './azure-boards.mjs';
 import { githubTracker, resetGithubMemo } from './github.mjs';
 import { jiraTracker } from './jira.mjs';
@@ -50,6 +53,8 @@ export function trackerFor(config, opts = {}) {
   const type = trackerType(config);
   const tracker = type === 'jira' ? jiraTracker(config, opts) : type === 'azure-boards' ? azureBoardsTracker(config, opts) : type === 'gitlab' ? gitlabTracker(config, opts) : type === 'linear' ? linearTracker(config, opts) : type === 'custom' ? createCustomAdapter('tracker', { ...(config.tracker ?? {}), root: config.root }, opts) : githubTracker(config, opts);
   withRefusalFallback(tracker);
+  // Ticket text, comments and evidence pass the secret gate (redact.mjs): every adapter, built in or custom.
+  guardAdapter(tracker, 'tracker', TRACKER_WRITE_OPS);
   // The synchronous form, as on a code host: tracker methods already are synchronous.
   if (!('sync' in tracker)) Object.defineProperty(tracker, 'sync', { value: tracker, enumerable: false });
   byRunner.set(runner, tracker);

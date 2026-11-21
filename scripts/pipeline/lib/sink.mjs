@@ -14,6 +14,8 @@
 //   { "type": "otlp", "endpoint": "...", "headers": {} } OpenTelemetry logs (Datadog, Honeycomb, Grafana...)  push only
 // Secrets never go in the config: write "${ENV_VAR}" in a header, URL or command and it is read from the
 // environment when used. A sink that can only push cannot feed the retro; `status` says so.
+import { guardAdapter } from './redact.mjs';
+import { writeText, appendText } from './redact.mjs';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -80,7 +82,7 @@ const adapters = {
       async push(stream, records) {
         const file = path.join(base, settings.project, stream.replace(/\.jsonl$/, ''), `${host()}.jsonl`);
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.appendFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+        appendText(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
       },
       async pull(stream, since) {
         const name = stream.replace(/\.jsonl$/, '');
@@ -177,10 +179,12 @@ const adapters = {
   },
 };
 
+// Every sink adapter's writes pass the secret gate (redact.mjs guardAdapter): records are exported only redacted.
 export function sinkAdapter(config) {
   const settings = sinkSettings(config);
-  return settings.type === 'none' ? null : adapters[settings.type](settings);
+  return settings.type === 'none' ? null : guardAdapter(adapters[settings.type](settings), 'sink', SINK_WRITE_OPS);
 }
+export const SINK_WRITE_OPS = ['push', 'write', 'send', 'append', 'put'];
 
 // Ships what each stream gained since the last push. A stream is cut at its last complete line, and its
 // cursor moves only after the store accepted the batch, so a failed push is retried by the next one.
@@ -230,7 +234,7 @@ export async function pull(config, { adapter = sinkAdapter(config), since = null
       const seen = new Set();
       const unique = records.filter((r) => (r._id ? !seen.has(r._id) && seen.add(r._id) : true));
       fs.mkdirSync(path.dirname(cacheFile(config, stream)), { recursive: true });
-      fs.writeFileSync(cacheFile(config, stream), unique.map((r) => JSON.stringify(r)).join('\n') + (unique.length ? '\n' : ''));
+      writeText(cacheFile(config, stream), unique.map((r) => JSON.stringify(r)).join('\n') + (unique.length ? '\n' : ''));
       if (unique.length) result.streams[stream] = { pulled: unique.length };
       result.pulled += unique.length;
     } catch (error) {
@@ -244,7 +248,8 @@ export async function pull(config, { adapter = sinkAdapter(config), since = null
 
 export const KNOWN_STREAMS = ['decisions.jsonl', 'decision-outcomes.jsonl', 'verifier-runs.jsonl', 'verifier-denials.jsonl', 'precheck-failures.jsonl', 'calibration.jsonl', 'arch-reviews.jsonl', 'pr-checks.jsonl', 'token-usage.jsonl', 'implement-runs.jsonl', 'subtask-runs.jsonl', 'run-conditions.jsonl', 'full-project-runs.jsonl', 'escalations.jsonl', 'retro-observations.jsonl', 'retro-selftests.jsonl', 'runs.jsonl', 'council-rounds.jsonl', 'analysis-runs.jsonl', 'analysis-findings.jsonl', 'pr-check-returns.jsonl', 'analysis-held.jsonl', 'history-rewrites.jsonl', 'secret-decisions.jsonl', 'analysis-agreement.jsonl', 'analysis-gate.jsonl'];
 // Local only: never shipped (a run's own external-call log, the stack's image cache records).
-export const LOCAL_STREAMS = ['calls.jsonl', 'images.jsonl'];
+// redact-seen.jsonl: hashes of values the redaction boundary saw, in the state directory; never shipped or committed.
+export const LOCAL_STREAMS = ['calls.jsonl', 'images.jsonl', 'redact-seen.jsonl'];
 
 // Local records plus what the last pull cached, without duplicates: what a reader that wants the whole
 // picture (the retro) uses in place of the local file alone. Envelope fields are kept; readers ignore them.

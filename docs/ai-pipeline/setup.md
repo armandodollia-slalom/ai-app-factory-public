@@ -144,6 +144,7 @@ The [review gate](review-gate.md) needs nothing extra to assess PRs and request 
 | Setting | Where | Why |
 | --- | --- | --- |
 | `review-quorum` as a required status check on `main` | Settings → Rules → Rulesets → `main` → Require status checks to pass | enforces each PR's `approvals:N`; until then it is a visible check only |
+| Required checks no workflow runs | `factory doctor` | a branch rule that still requires a check no workflow of the checkout provides (for example after a release removed a workflow) holds every PR; `factory render` names the checks a release stopped shipping, and `factory review-gate enforce` requires exactly the checks the shipped workflows run (a rule it does not own is changed by hand) |
 | Allow auto-merge | Settings → General → Pull Requests (or `gh api -X PATCH repos/<owner>/<repo> -F allow_auto_merge=true`) | GitHub merges a PR the review gate cleared the moment its checks pass; without it the gate merges one `board sync` later. `factory doctor` and `factory review-gate enforce` check it |
 | A GitHub App with a ruleset bypass, its token in `REVIEW_GATE_APP_TOKEN`, and `implement.autoMerge.identity: "app"` (or the [PR bot](#the-pipelines-pr-bot) on the bypass list and `identity: "bot"`) | the App's settings; the ruleset's bypass list | only once `main` requires approvals from people: a Low PR that needs none can then merge only through a bypass |
 

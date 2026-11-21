@@ -15,10 +15,11 @@ import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { recordOutage } from '../../pipeline/lib/outage.mjs';
 import { ticketDir } from '../../board/lib/source.mjs';
 import { epicToJoin, loadEpicRun, runEpic } from '../lib/epic.mjs';
-import { deliveryShape, epicDeps, epicPrBody, groupDeps, nextStories, ownsConflict, singleGroups, validateGroups, validateNote } from '../lib/epic-plan.mjs';
+import { deliveryShape, featureGroupTitle, epicDeps, epicPrBody, groupDeps, journeyGroup, nextStories, ownsConflict, singleGroups, validateGroups, validateNote } from '../lib/epic-plan.mjs';
 import { groupRow, labelDecisions } from '../lib/decisions.mjs';
 import { failedResults } from '../lib/board-events.mjs';
 import { planTask } from '../lib/tasks.mjs';
+import { prCheckHold } from '../lib/implement.mjs';
 
 const git = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -359,8 +360,8 @@ test('bug epic: the orchestrator groups the bugs; each group gets its branch, it
   // Every published group PR goes through the review gate, from its group worktree.
   assert.deepEqual(f.gates.map((g) => [g.keys.join(','), g.pr === cartUrl, g.base]).sort(), [['BUG-1,BUG-2', true, 'main'], ['BUG-3', false, 'main']]);
   // Council C2: a group's PR check records reached the store only after its branch merged. Each unit ships its
-  // worktree's records when it ends, after the PR and the gate.
-  assert.deepEqual([...f.ships].sort(), f.gates.map((g) => g.worktree).sort());
+  // worktree's records when it ends, after the PR and the gate; the main checkout ships the epic plan's records.
+  assert.deepEqual([...f.ships].sort(), [env.config.root, ...f.gates.map((g) => g.worktree)].sort());
   // Dogfood C4: what CI runs on a PR runs before the group PR opens, and the PR says so.
   assert.deepEqual(f.parities.sort(), ['--stories BUG-1,BUG-2', '--stories BUG-3']);
   assert.match(cart.body, /- CI checks run before this PR: all 1 passed/);
@@ -842,4 +843,146 @@ test('feature epic delivery: the epic PR opens finished too (no gate rating for 
 test('openPr never opens or pushes to a PR that is already open', async () => {
   const { openPr } = await import('../lib/epic.mjs');
   await assert.rejects(openPr({ worktree: os.tmpdir(), branch: 'bugfix/shop/cart', prBase: 'main' }, { title: 't', body: 'b', existing: 'https://github.com/example/repo/pull/7' }), /already open; it is re-delivered on hold/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// A feature epic's PR split (implement.epic.prSplit, --pr-split): one PR for the epic (default), one per story, or
+// groups the orchestrator chooses (validated like bug-epic groups, capped by implement.epic.maxStoriesPerGroup). Every
+// PR still opens once, after every agent stage, on a CI-proven head (the same delivery); the cross-story journeys are
+// verified on one group, stacked on the others that hold a journey story.
+// ---------------------------------------------------------------------------------------------
+
+test('deliveryShape: a feature epic follows prSplit; a bug epic ignores it; --grouping still overrides', () => {
+  const feats = [{ key: 'A-1' }, { key: 'A-2' }];
+  assert.deepEqual(deliveryShape(feats), { kind: 'epic' }, 'default: one PR');
+  assert.deepEqual(deliveryShape(feats, 'auto', 'story'), { kind: 'groups', planned: false, feature: true });
+  assert.deepEqual(deliveryShape(feats, 'auto', 'groups'), { kind: 'groups', planned: true, feature: true });
+  assert.deepEqual(deliveryShape([{ key: 'BUG-1' }, { key: 'BUG-2' }], 'auto', 'story'), { kind: 'groups', planned: true });
+  assert.deepEqual(deliveryShape(feats, 'epic', 'groups'), { kind: 'epic' });
+});
+
+test('journeyGroup: the last group holding a journey story verifies every journey, stacked on the other holders', () => {
+  const groups = [{ id: 'a', tickets: ['K-1'] }, { id: 'b', tickets: ['K-2'] }, { id: 'c', tickets: ['K-3'] }];
+  const deps = new Map([['a', []], ['b', ['a']], ['c', []]]);
+  assert.deepEqual(journeyGroup(groups, deps, [{ stories: ['K-1', 'K-2'] }]), { id: 'b', added: [] }, 'b already stacks on a');
+  assert.deepEqual(journeyGroup(groups, deps, [{ stories: ['K-1', 'K-3'] }]), { id: 'c', added: ['a'] });
+  assert.equal(journeyGroup(groups, deps, []), null);
+});
+
+test('feature epic, prSplit story: the design note is planned once, then one PR per story on feature branches, no bug rating, journeys on one story\'s PR', async () => {
+  const env = makeRepo();
+  const fvs = [];
+  const f = fakeDeps(featureNote, { startWorker: fakeWorker().startWorker, epicFv: async (uenv, { key, note }) => (fvs.push({ unit: uenv.unit.id, key, journeys: note.journeys.map((j) => j.id) }), { status: 'verified', key }) });
+  const r = await epicRun(env, f, { prSplit: 'story' });
+  assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
+  assert.equal(f.agentCalls.length, 1);
+  assert.match(f.agentCalls[0].task, /delivered as one PR per story/);
+  assert.doesNotMatch(f.agentCalls[0].task, /prGroups|bug epic/);
+  assert.deepEqual(f.prs.map((p) => p.branch).sort(), ['feat/shop--demo-1', 'feat/shop--demo-2', 'feat/shop--demo-3']);
+  assert.ok(!f.order.some((o) => o[0] === 'assess' || o[0] === 'gate'), 'a feature PR gets no bug-fix rating');
+  for (const b of ['feat/shop--demo-1', 'feat/shop--demo-2', 'feat/shop--demo-3']) assert.deepEqual(steps(f, b), ['push', 'branch-ci', 'push', 'open', 'pr-ci'], b);
+  assert.equal(f.order.filter((o) => o[0] === 'open').length, 3, 'each PR opened once');
+  // DEMO-2 is blocked by DEMO-1: its PR is stacked on DEMO-1's branch and verifies the journey that crosses both.
+  assert.equal(f.prs.find((p) => p.branch === 'feat/shop--demo-2').base, 'feat/shop--demo-1');
+  assert.deepEqual(fvs, [{ unit: 'demo-2', key: 'EPIC-10', journeys: ['browse-to-basket'] }]);
+  assert.match(f.prs.find((p) => p.branch === 'feat/shop--demo-1').title, /^Shop: .*\(DEMO-1\)$/);
+  const decisions = readJsonl(path.join(env.repo, '.factory/metrics/decisions.jsonl'));
+  assert.ok(decisions.some((d) => d.decision === 'pr-groups' && /prSplit "story"/.test(d.reason)));
+  assert.equal(unitState(env, 'demo-2').journeys, true);
+});
+
+test('feature epic, prSplit groups: the orchestrator groups the stories; a journey across groups is verified on the closing group, stacked on the other', async () => {
+  const env = makeRepo();
+  const fvs = [];
+  const note = { ...featureNote, journeys: [{ id: 'catalog-to-order', title: 'Browse then order', stories: ['DEMO-1', 'DEMO-3'], steps: ['open catalog', 'order'], expected: 'order placed' }], prGroups: [{ id: 'browse', title: 'Catalog and basket', tickets: ['DEMO-1', 'DEMO-2'], reason: 'the basket builds on the catalog', risk: 'low' }, { id: 'orders', title: 'Ordering', tickets: ['DEMO-3'], reason: 'another service', risk: 'low' }] };
+  const f = fakeDeps(note, { startWorker: fakeWorker().startWorker, epicFv: async (uenv, { key, note: n }) => (fvs.push({ unit: uenv.unit.id, key, journeys: n.journeys.map((j) => j.id) }), { status: 'verified', key }) });
+  const r = await epicRun(env, f, { prSplit: 'groups' });
+  assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
+  assert.match(f.agentCalls[0].task, /delivered as several PRs[\s\S]*prGroups/);
+  assert.deepEqual(f.prs.map((p) => p.branch).sort(), ['feat/shop--browse', 'feat/shop--orders']);
+  const orders = f.prs.find((p) => p.branch === 'feat/shop--orders');
+  assert.equal(orders.base, 'feat/shop--browse', 'stacked on the group holding the other journey story');
+  assert.match(orders.title, /^Shop: Ordering \(DEMO-3\)$/);
+  assert.deepEqual(fvs, [{ unit: 'orders', key: 'EPIC-10', journeys: ['catalog-to-order'] }]);
+  assert.deepEqual(unitState(env, 'orders').deps, ['browse']);
+  assert.ok(!f.order.some((o) => o[0] === 'assess'));
+  assert.ok(f.order.filter((o) => o[0] === 'open').length === 2);
+});
+
+test('feature epic, prSplit groups: a group over the cap, or a foundation, is rejected; a grouping rejected twice falls back to one PR per story', async () => {
+  const keys = ['DEMO-1', 'DEMO-2', 'DEMO-3'];
+  const stories = keys.map((key) => ({ key, blockedBy: key === 'DEMO-2' ? ['DEMO-1'] : [] }));
+  const big = { stories: [], prGroups: [{ id: 'all', title: 'All', tickets: keys }] };
+  const v = validateNote(big, { keys, groups: true, stories, maxPerGroup: 2, featureGroups: true });
+  assert.ok(v.groupErrors.some((e) => /more than implement\.epic\.maxStoriesPerGroup \(2\)/.test(e)), v.errors.join('; '));
+  const withFoundation = validateNote({ ...big, prGroups: [{ id: 'a', title: 'A', tickets: keys }], foundation: { goal: 'g', owns: ['src/x/**'] } }, { keys, groups: true, stories, featureGroups: true });
+  assert.ok(withFoundation.noteErrors.some((e) => /foundation must be null/.test(e)));
+  const env = makeRepo();
+  env.config.implement.epic = { ...env.config.implement.epic, maxStoriesPerGroup: 2 };
+  const f = fakeDeps({ ...featureNote, prGroups: big.prGroups }, { startWorker: fakeWorker().startWorker });
+  const r = await epicRun(env, f, { prSplit: 'groups' });
+  assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
+  assert.equal(f.agentCalls.length, 2, 'asked again once');
+  assert.match(f.agentCalls[0].task, /at most 2 stories per group/);
+  assert.match(f.agentCalls[1].task, /previous note was rejected/);
+  assert.equal(f.prs.length, 3, 'one PR per story');
+});
+
+// A crash after the PR opened (the run summary's PR state read threw `host.ownsPr is not a function`): the epic state is
+// saved as interrupted with the phase and the reason, never left `running`, and the checkout's own records (the epic
+// plan's usage and decisions) are shipped even so.
+test('epic run: a step that throws after the PR opened leaves a resumable interrupted state and ships the plan records', async () => {
+  const env = makeRepo();
+  const note = { ...featureNote, journeys: [], prGroups: [{ id: 'all', title: 'Shop: catalog, basket and orders', tickets: ['DEMO-1', 'DEMO-2', 'DEMO-3'], reason: 'one feature', risk: 'low' }] };
+  const f = fakeDeps(note, { startWorker: fakeWorker().startWorker, prState: () => { throw new TypeError('host.ownsPr is not a function'); } });
+  await assert.rejects(() => epicRun(env, f, { prSplit: 'groups' }), /ownsPr is not a function/);
+  const state = loadEpicRun(env.config, env.epic.key);
+  assert.equal(state.status, 'interrupted');
+  assert.equal(state.outcome, 'crashed');
+  assert.equal(state.phase, 'summary', 'the phase it stopped in is saved');
+  assert.match(state.reason, /summary stopped: host\.ownsPr is not a function/);
+  assert.equal(state.pid, null);
+  assert.equal(state.plan?.ok, true, 'the plan is kept for the resume');
+  assert.equal(unitState(env, 'all').status, 'done', 'the delivered group is kept');
+  assert.ok(f.ships.includes(env.config.root), 'the main checkout (epic plan records) is shipped');
+  assert.equal(f.prs.length, 1);
+  assert.equal(f.prs[0].title, 'Shop: catalog, basket and orders (DEMO-1, DEMO-2, DEMO-3)', 'the epic title is not repeated');
+  // The resume (fixed host): the delivered group is not delivered again, no agent runs, the epic ends delivered.
+  const agentsBefore = f.agentCalls.length;
+  const g = fakeDeps(note, { startWorker: () => { throw new Error('no worker may start on this resume'); }, prState: () => 'OPEN' });
+  const r = await epicRun(env, g, { prSplit: 'groups' });
+  assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
+  assert.equal(g.agentCalls.length, 0);
+  assert.equal(f.agentCalls.length, agentsBefore);
+  assert.equal(g.prs.length, 0, 'no second PR');
+  const end = loadEpicRun(env.config, env.epic.key);
+  assert.equal(end.status, 'delivered');
+  assert.equal(end.phase, 'finished');
+});
+
+test('featureGroupTitle: the epic title is never repeated', () => {
+  assert.equal(featureGroupTitle('Shop by brand', 'Shop by brand: Brands page and sorting', ['B-1', 'B-2']), 'Shop by brand: Brands page and sorting (B-1, B-2)');
+  assert.equal(featureGroupTitle('Shop by brand', 'Shop by Brand', ['B-1']), 'Shop by Brand (B-1)');
+  assert.equal(featureGroupTitle('Shop', 'Ordering', ['D-3']), 'Shop: Ordering (D-3)');
+});
+
+// The live epic run: the unit PR check in fix mode ended ESCALATED 8/10 with three major findings, and the group PR still
+// opened ready. An unfinished change never gets a PR (the single delivery's pre-open rule): the branch is pushed, the
+// findings go on the tickets, and the run says why.
+test('epic delivery: a unit PR check that ends escalated in fix mode opens no PR; the branch is pushed and the findings stay on the tickets', async () => {
+  const env = makeRepo();
+  env.config.implement.epic = { ...env.config.implement.epic, prCheck: 'fix' };
+  const note = { ...featureNote, journeys: [], prGroups: [{ id: 'all', title: 'Everything', tickets: ['DEMO-1', 'DEMO-2', 'DEMO-3'], reason: 'one feature', risk: 'low' }] };
+  const escalated = { status: 'done', mode: 'fix', verdict: 'ESCALATED', score: 8, openFindings: [{ id: 'VID-1', severity: 'major', title: 'UI cases without videos' }, { id: 'VID-4', severity: 'minor', title: 'a caption is terse' }] };
+  const f = fakeDeps(note, { startWorker: fakeWorker().startWorker, prCheck: async () => escalated });
+  const r = await epicRun(env, f, { prSplit: 'groups' });
+  assert.equal(f.prs.length, 0, 'no PR opens');
+  assert.ok(!f.order.some((o) => o[0] === 'open'));
+  assert.ok(f.order.some((o) => o[0] === 'push'), 'the branch is pushed');
+  assert.notEqual(r.epic.outcome, 'done');
+  assert.match(r.epic.reason, /PR check ended ESCALATED \(8\/10\) with 1 finding\(s\) at major or worse still upheld/);
+  // Report mode reports: the same verdict goes into the PR as it is.
+  assert.equal(prCheckHold(escalated, { mode: 'report' }), null);
+  assert.equal(prCheckHold({ status: 'done', verdict: 'PASS', score: 9, openFindings: [{ id: 'X', severity: 'minor', title: 't' }] }, { mode: 'fix' }), null);
+  assert.equal(prCheckHold({ status: 'done', verdict: 'FAIL', score: 7, openFindings: [{ id: 'X', severity: 'blocking', title: 't' }] }, { mode: 'fix' }).outcome, 'pr-check-escalated');
 });

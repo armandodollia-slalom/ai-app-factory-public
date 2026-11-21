@@ -29,14 +29,14 @@ Three sections of the overlay (`lsp`, `stack`, `teststack`) belong to tools with
 | Key | Meaning |
 | --- | --- |
 | `version` | the factory version this repository is rendered with. `factory doctor` reports a mismatch with the installed engine; `factory upgrade` moves the pin and renders again |
-| `source` | where the factory comes from: used in the install hint and as the target of the retro's factory pull requests |
+| `source` | where the factory comes from: used in the install hint and as the repository the retro pushes its factory proposal branches to (a person opens the pull request) |
 | `features.lsp` | the `lsp` MCP server and its hooks in the agent tools' settings |
 | `features.graphify` | graphify instructions and hooks |
 | `features.ci` | the CI jobs for `ci.provider`: `.github/workflows/factory-*.yml` and the `setup-*` actions (GitHub Actions), `.gitlab/ci/factory-*.yml` and an include block in `.gitlab-ci.yml` (GitLab CI), or `.azure-pipelines/factory-*.yml` (Azure Pipelines). See [hosts-and-trackers.md](hosts-and-trackers.md#ci-systems) |
 | `features.agentFiles` | agent definitions for each tool (`.claude/agents/`, `.github/agents/`) and the instruction blocks in `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` |
 | `owners` | the code owners of `.factory/` and of every file the factory generates (handles or teams, such as `["@alice", "@org/platform"]`). `factory render` writes them in a block of `CODEOWNERS` (`.github/CODEOWNERS`, or `.gitlab/CODEOWNERS` on GitLab, unless the repository has one at the root or in `docs/`; Azure DevOps has no CODEOWNERS: use a required-reviewers branch policy on these paths). `factory init` takes `--owners`, or the GitHub repository's owner or the GitLab project's top-level group. GitHub only requires their review when a branch rule asks for code-owner review, which needs a public repository or a paid plan: `factory doctor` warns when the default branch does not require `review-quorum` and code-owner review (GitHub rulesets or classic branch protection, GitLab protected branch, Azure DevOps branch policies), or cannot; `factory review-gate enforce` sets it |
 | `features.gitHooks` | `.factory/githooks/` |
-| `features.demoVideo` | the demo video workflow and the `factory-toolchain` action skeleton |
+| `features.demoVideo` | demo videos and API summaries, produced on the machine that runs the pipeline before a PR opens ([pr-demo-video.md](ai-pipeline/pr-demo-video.md)); render keeps the shared e2e fixtures (`fixtures.ts`, `demo.ts`, `video-reporter.ts`) in step and copies the CI toolchain skeleton once. No CI system gets a demo-video job |
 
 After changing the pin or the overlay, run `factory render`. Every file it writes outside `.factory/` is listed in `.factory/manifest.json`; `factory uninstall` removes exactly those.
 
@@ -116,13 +116,19 @@ Each stage page under [ai-pipeline/](ai-pipeline/README.md) documents its own se
 | `implement` | `prepareCmd` (run once in each new story or subtask worktree), `checks` (build and lint commands a subtask must pass), `unitTests.cmd` (`{project}` is a service's `unitTests` path), `uiStory` (how a UI story is recognised), `ui.teststackCmd` (how to start the app for UI verifiers), `roles.<role>.cli` and `roles.<role>.env` (a role's own CLI and its process variables, such as a second login's `CODEX_HOME`; never secrets, see [council.md](ai-pipeline/council.md)) |
 | `precheck` | `lint` and `fix` by file extension (`{files}`), `testRunners` (how written tests are run and discovered) |
 | `testRoots`, `testExtensions`, `implExclude` | what is a test file, and what is not implementation |
+| `implement.prCheck` | `mode` (`fix` or `report`), `fixUntil` (`major`), `bugFixUntil` (`minor`), `fixLenses`, `fixRounds` (3), and `returnToImplementation`: `enabled` (true), `maxReturns` (2), `minSeverity` (`major`), `implementationLenses`, `lightLenses`, `lightPaths` (governance; [implement.md](ai-pipeline/implement.md#findings-about-the-production-change-go-back-to-implementation)) |
+| `implement.preOpen` | how the PR opens finished (governance): `branches` (branch patterns whose pushes run CI before the PR; default from the branch prefixes), `afterOpen` (`draft`, `label` or `close-reopen`: how an open PR is held while agents work on it again), `wipLabel` (`work-in-progress`), `draftCycles` (1). Unknown keys are reported. The order itself is not a setting ([implement.md](ai-pipeline/implement.md#the-pr-opens-finished)) |
+| `implement.ciFixRounds`, `implement.ciWait` | CI fixing rounds a red head gets before a person decides (1; `PIPELINE_CI_FIX_ROUNDS` for one run), and whether the run waits for the PR's checks after the open |
+| `implement.delivery`, `implement.epic` | `delivery` (`epic` or `story`), and for epics `prSplit` (`epic`, `story` or `groups`), `maxStoriesPerGroup`, `grouping` (`auto`, `epic`, `ticket`), `branchPrefix`, `bugfixPrefix`, `featureVerification`, `prCheck` (`fix`, `report`, `off`) ([implement.md](ai-pipeline/implement.md#delivery-modes)) |
+| `implement.reviewGate`, `implement.autoMerge` | the review gate's severity floor, confidence and approvals per severity; auto-merge on or off, merge identity and method ([review-gate.md](ai-pipeline/review-gate.md)) |
 | `review` | `maxRounds`, `policy` (the architecture policy step) |
 | `prCheck` | `frontendPaths`, `conventions` (documents the style critic checks against) |
-| `prVideo` | `specPatterns` (which e2e specs record a demo) |
+| `prVideo` | `specPatterns` (which e2e specs record a demo), `videosDir`, `storageBranch`, `recordCmd`, `slotWaitSec`, `localTimeoutSec`, `testTimeoutSec`, `backendPaths`, `neutralPaths`, `api` |
+| `video` | narration (`enabled`, `voice`, `speed`, `lang`, `model`), `pacing`, `size`, `ffmpeg`, `licenceReview`, `critic`; `script` (narration by the `demo-narrator` agent: `scope` `headline`, `all` or `none`, `model`, `timeoutSec`, the length limits, `speakEvidence`); `bugPair` (`enabled`, `requireBefore`: a bug whose reproduction cannot be shown before the fix opens no PR); `apiEvidence` (a backend bug's requests before and after the fix: `enabled`, `headers`, `maxBodyBytes`, `maxPairs`) ([pr-demo-video.md](ai-pipeline/pr-demo-video.md#turning-it-on)) |
 | `tickets`, `board` | the GitHub tracker: `repo`, `owner`, `projectNumber`. `repo` and `owner` default to the GitHub `origin`. Other trackers: [`tracker`](#code-host-tracker-and-ci) |
 | `agent` | `cli` (`claude`, `copilot`, `codex`), `models` per agent, `modelIds`, `claude.promptCacheTtl` (`5m` by default: a headless agent run is one short session, and the 1-hour cache Claude Code picks on a subscription is written at 1.6x the price), `claude.toolSearch` (`false` by default: MCP tools such as the language servers are listed to the agent directly, not deferred behind ToolSearch) |
 | `bot` | the PR bot ([setup](ai-pipeline/setup.md#the-pipelines-pr-bot)) |
-| `council` | opt-in council verifiers: `members` (each with `cli`, `model`, `effort`, `lens`, `blocking`, `env`), `stages` (`pairVerify`, `pairUiVerify`, `review`, `testPlan`, `testAutomation`, `prCheck`), `rounds`, `passScore`, `blockOn`, `onUnavailable`. Without it every stage runs its single verifier ([council.md](ai-pipeline/council.md)) |
+| `council` | opt-in council verifiers (governance): `members` (each with `name`, `cli` (`claude`, `codex`, `copilot`, `custom` with `cmd`), `model`, `effort`, `lens`, `blocking`, `env`), `stages` (`pairVerify`, `pairUiVerify`, `review`, `testPlan`, `testAutomation`, `prCheck`, each with its `members` and optional `rounds`), `rounds` (3), `passScore` (9), `blockOn` (`any`, `majority`, `all`), `onUnavailable` (`fail` or `report`). Scope objections to sealed fixes are settled by an adjudication sitting of the blocking members. Without it every stage runs its single verifier ([council.md](ai-pipeline/council.md)) |
 
 ## Tool sections
 
@@ -138,17 +144,18 @@ Where agent run records go besides the local files in `.factory/metrics/`. Types
 
 ### Where metrics are written
 
-Pipeline branches (story, group and epic worktrees) append to the tracked `.factory/metrics/*.jsonl` and commit them with their work, so a merged PR brings them to the base branch; `.gitattributes` merges them as a union. The main checkout (the main worktree, on the base branch) never writes the tracked files: its own commands (`board sync`, the review gate's bookkeeping, `retro run`) spool to `.factory/state/metrics-spool/` (ignored), the sink ships the spool with its own cursors, and every reader sees the tracked records and the spooled ones. So `git pull`, merge and rebase of the main checkout never meet local metric edits. `FACTORY_METRICS_SPOOL=1|0` forces it on or off.
+Pipeline branches (story, group and epic worktrees) append to their own file of each stream, `.factory/metrics/<stream>.jsonl.d/<branch>.jsonl`, and commit it with their work, so a merged PR brings it to the base branch and no two branches write the same file (`FACTORY_METRICS_SHARD=0` writes the stream's own file instead; the engine's tests use it). The older shared `<stream>.jsonl` files are still read, and `.gitattributes` merges them as a union. The main checkout (the main worktree, on the base branch) never writes the tracked files: its own commands (`board sync`, the review gate's bookkeeping, `retro run`) spool to `.factory/state/metrics-spool/` (ignored), the sink ships the spool with its own cursors, and every reader sees the tracked records and the spooled ones. So `git pull`, merge and rebase of the main checkout never meet local metric edits. `FACTORY_METRICS_SPOOL=1|0` forces it on or off.
 
-GitHub's mergeability ignores merge drivers, so two open pipeline PRs that both append to a metrics file look conflicting once one merges. The runner merges the latest base into a branch before it pushes it, and `board sync` merges the base into each open pipeline PR GitHub reports as conflicting (or not yet computed) when git merges it cleanly, then pushes it so its checks run again.
+GitHub's mergeability ignores merge drivers, so two open pipeline PRs that both appended to a shared metrics file looked conflicting once one merged; the per-branch files avoid that. The runner merges the latest base into a branch before it pushes it, and `board sync` merges the base into each open pipeline PR GitHub reports as conflicting (or not yet computed) when git merges it cleanly, then pushes it so its checks run again.
 
 ## Retro: `retro.factory`
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | let the retro propose changes to the factory itself, as a separate pull request against `source` |
-| `allowedPaths` | `agents/`, `docs/`, `templates/`, `skills/` | what such a pull request may touch |
-| `evidence` | `summary` | how much of this repository's run data the pull request quotes |
+| `enabled` | `true` | let the retro propose changes to the factory itself, as a branch pushed to `source`; a person opens its pull request |
+| `source` | the pin's `source`, else the install's `origin` | the repository the proposal branch is pushed to |
+| `allowedPaths` | `agents/`, `docs/`, `templates/`, `skills/` | what such a proposal may touch |
+| `evidence` | `summary` | how much of this repository's run data the proposal quotes |
 
 See [ai-pipeline/retro.md](ai-pipeline/retro.md).
 
@@ -241,6 +248,17 @@ A tool:
 | `severity` | a vendor severity map `{ critical, high, medium, low, info }` → `blocking` \| `major` \| `minor` (the commercial definitions have one; a tool without one blocks by its `block` list) |
 | `commercial` | a scanner definition's vendor data: `vendor`, `modes`, `tokenEnv`, `check`, `server` (`adapter`, `submit`, or a custom adapter's `command`), docs and verification |
 | `timeoutSec`, `okExit`, `extensions`, `env`, `ruleFilter`, `errorPattern`, `missingPattern`, `version`, `sample`, `protect` | as named; `env` values may be `${NAME}` references, read from the environment when the tool runs |
+
+## Redaction
+
+The redaction boundary has no switch: everything the pipeline writes or publishes passes it ([observability.md](observability.md#redaction)). What it treats as a secret:
+
+- the secret scanner's high-confidence rules, and a name containing key, secret, token or password directly before a hex or base64-like value;
+- the values of environment variables named like credentials (`*TOKEN`, `*SECRET`, `*PASSWORD`, `*_KEY`, `*CREDENTIALS`), and of every variable the config names in a setting ending in `tokenEnv`, `Env` or `EnvVar`;
+- a value written directly into the config under a credential-named setting (write `${NAME}` instead);
+- any value detected earlier in the same run.
+
+Test data that needs a credential-like value uses the factory's placeholder marker, which the boundary leaves alone; `analysis.secrets.allow` declares values the secret scanner ignores ([analysis.md](ai-pipeline/analysis.md)).
 
 ## Agent prompts
 

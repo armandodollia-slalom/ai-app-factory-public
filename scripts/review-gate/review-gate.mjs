@@ -6,6 +6,7 @@
 //   status [--pr <url>]                               the gate state recorded on this machine
 //   explain <file>... [--impact L --fix-risk L --categories a,b]
 //                                                     what the gate would decide for a change to these files
+import { writeText } from '../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent } from '../pipeline/lib/agents.mjs';
@@ -98,7 +99,7 @@ async function main() {
       const { assessPr } = await import('./lib/assessment.mjs');
       const a = assessPr(config, { pr: null, keys, base: flags.base }, deps);
       fs.mkdirSync(path.dirname(path.resolve(flags.out)), { recursive: true });
-      fs.writeFileSync(path.resolve(flags.out), JSON.stringify(a, null, 2));
+      writeText(path.resolve(flags.out), JSON.stringify(a, null, 2));
       console.log(`assessed before the PR: severity ${a.severity.level ?? 'unknown'} (${a.tickets.map((t) => `${t.key} ${t.severity.level ?? '?'}, confidence ${t.confidence.score}`).join('; ')})`);
       return 0;
     }
@@ -206,6 +207,19 @@ async function main() {
           // no CI definitions to read
         }
         for (const u of uncovered) console.log(`WARNING: the application's check "${u.name}" (${u.workflow}, job ${u.job}) ${u.shared ? 'shares a required name' : 'is not required'}: ${u.reason}`);
+        // After the rule is written: any rule on the branch (another ruleset, classic protection) that still requires a
+        // check no shipped workflow provides holds every PR; enforce owns only its own rule, so a person removes the rest.
+        if (!flags['dry-run']) {
+          try {
+            const { ciFor } = await import('../pipeline/lib/ci/index.mjs');
+            const { unprovidedRequired, unprovidedText } = await import('../factory/lib/code-host.mjs');
+            const bp = host.sync.repo.branchProtection?.();
+            const stale = bp && !bp.unavailable ? unprovidedRequired(bp.requiredChecks ?? [], ciFor(config).providedChecks?.(config.root) ?? null) : [];
+            if (stale.length) console.log(`WARNING: ${unprovidedText(String(host.repo), bp.branch ?? 'the default branch', stale)}.`);
+          } catch {
+            // the rules could not be read again: doctor checks them
+          }
+        }
       }
       // The auto-merge setting is reported, not changed: it is the owner's call (docs/ai-pipeline/setup.md).
       const auto = autoMergeSetting(host.sync);

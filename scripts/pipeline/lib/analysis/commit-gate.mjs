@@ -6,6 +6,7 @@
 //
 //   gateStaged(cwd) -> { held: [{ tool, rule, file, line, id }], notes: [...], error }
 //   heldSecrets(config, cwd) -> the held findings whose files are still uncommitted (the delivery refuses to push them)
+import { writeText } from '../redact.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -14,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { git } from '../git.mjs';
 import { changedLines } from '../lint.mjs';
 import { metricsFile } from '../state.mjs';
-import { appendJsonl, nowIso } from '../util.mjs';
+import { appendJsonl, nowIso, stepRecord } from '../util.mjs';
 import { classify } from './baseline.mjs';
 import { recordPrefixes, uncommittedInScope } from './runner.mjs';
 import { isSecretTool } from './secrets.mjs';
@@ -96,7 +97,7 @@ export function gateStaged(cwd, { message = '', spawn = spawnSync, stateDir = '.
   } catch {
     out = null;
   }
-  if (!out) return { ...none, error: `the commit gate did not run (exit ${r.status ?? r.signal ?? 'unknown'})` };
+  if (!out) return { ...none, error: `the commit gate did not run (exit ${r.status ?? r.signal ?? 'unknown'}): ${stepRecord(r).error}` };
   const result = { held: out.held ?? [], notes: out.notes ?? [], error: out.error ?? null };
   const heldFiles = [...new Set(result.held.map((f) => f.file).filter(Boolean))];
   if (heldFiles.length) git(cwd, ['reset', '-q', '--', ...heldFiles]);
@@ -111,7 +112,7 @@ export function gateStaged(cwd, { message = '', spawn = spawnSync, stateDir = '.
   const next = [...before.filter((h) => !files.includes(h.file)), ...result.held.map((h) => ({ ...h, at: nowIso(), commit: message.split('\n')[0].slice(0, 160) }))];
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify({ held: next }, null, 1)}\n`);
+    writeText(file, `${JSON.stringify({ held: next }, null, 1)}\n`);
     if (result.held.length || result.notes.length) {
       appendJsonl(metricsFile({ root: cwd, metricsDir, stateDir }, HELD_METRICS), [{ ts: nowIso(), commit: message.split('\n')[0].slice(0, 160), files: files.length, held: result.held, notes: result.notes, error: result.error }]);
     }

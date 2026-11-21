@@ -23,6 +23,17 @@ if (cli === 'copilot') {
 } else {
   prompt = fs.readFileSync(0, 'utf8');
 }
+// The harness's follow-up question for a missing `resolves` is answered outside the member's scripted steps (see
+// resolves-question.mjs) and not logged as a call.
+if (/Your result was rejected: \d+ finding\(s\) have no `resolves` field/.test(prompt)) {
+  const text = 'AGENT_RESULT: {"resolves": {}}\n';
+  if (cli === 'claude') process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', result: text, modelUsage: {} }));
+  else if (cli === 'codex') {
+    fs.writeFileSync(arg('--output-last-message'), text);
+    process.stdout.write(`${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } })}\n`);
+  } else process.stdout.write(text);
+  process.exit(0);
+}
 const log = `${scriptFile}.calls.jsonl`;
 const counts = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
 const n = counts.filter((c) => c.member === member && c.agent === process.env.PIPELINE_AGENT_NAME).length;

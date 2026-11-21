@@ -1,8 +1,13 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
-import { contestedText, councilFor, councilMemory, fixesFile, memoryFile, nameFindings, memberRunEnv, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection } from '../../pipeline/lib/council.mjs';
+import { contestedText, councilFor, councilMemory, fixesFile, memoryFile, nameFindings, memberRunEnv, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log, nowIso } from '../../pipeline/lib/util.mjs';
+import { resolvesGiven } from '../../pipeline/lib/finding-route.mjs';
+import { automationFiles } from './plans.mjs';
+import { enforceRequired, requiredFor, requiredVerifierText, unmetRequired } from './required.mjs';
 
 export const VERIFIER = { plan: 'test-plan-verifier', automation: 'test-automation-verifier' };
 export const PRODUCER = { plan: 'test-planner', automation: 'test-automation' };
@@ -28,6 +33,8 @@ export function normalizeVerdict(config, stage, raw, { uiCases = [] } = {}) {
       detail: String(gap?.detail ?? '').trim() || '(no detail given)',
       location: gap?.location ?? null,
       root_stage: stage === 'automation' && gap?.root_stage === 'plan' ? 'plan' : stage,
+      // Only the automation verifier may say a gap is the code's (feature verification then reports a product bug).
+      ...(stage === 'automation' && resolvesGiven(gap).length === 1 && resolvesGiven(gap)[0] === 'code' ? { resolves: 'code' } : {}),
     };
   });
   // UI cases (tests that recorded video): the verifier must say, per case, which keyframe it opened and what it
@@ -115,9 +122,52 @@ export function formatGaps(gaps) {
 export const COUNCIL_STAGE = { plan: 'testPlan', automation: 'testAutomation' };
 
 // One verifier round: the stage's council when one sits for it, else the single verifier (runVerifier, unchanged).
+// A gap that only says a keyframe or the video does not show the URL (dogfood C15, C17, C23: several blocking automation
+// rounds) is presentation, not behaviour: since 0.2.85 the fixture draws the URL on every keyframe and in the video
+// itself. When the case's recorded steps prove the navigation (its test navigates or asserts the URL), the gap is a note,
+// not a blocking finding; a verdict whose only gaps were such notes passes.
+export const URL_CAPTION_GAP = /\b(?:url|address(?: bar)?|captions?|route|path)\b[\s\S]{0,160}(?:\b(?:keyframes?|frames?|video|screenshots?)\b|\.png\b)|(?:\b(?:keyframes?|frames?|video|screenshots?)\b|\.png\b)[\s\S]{0,160}\b(?:url|address(?: bar)?|captions?|path)\b/i;
+const NOT_SHOWN = /\b(?:not|no|never|missing|absent|without|lacks?|doesn't|does not|cannot|can't|isn't|is not)\b/i;
+const NAVIGATES = /\b(?:toHaveURL|waitForURL|waitForNavigation)\s*\(|\.goto\s*\(/;
+
+export function navigationProof(config, story, { files = null, read = (f) => fs.readFileSync(path.join(config.root, f), 'utf8') } = {}) {
+  let map;
+  return (caseId) => {
+    try {
+      map ??= files ?? automationFiles(config, story).tests;
+    } catch {
+      return false;
+    }
+    for (const [file, ids] of map) {
+      if (caseId && !ids.has(caseId)) continue;
+      try {
+        if (NAVIGATES.test(read(file))) return true;
+      } catch {
+        // unreadable: no proof
+      }
+    }
+    return false;
+  };
+}
+
+export function demoteUrlCaptionGaps(verdict, { navigationProven, requiredScore }) {
+  const noise = (verdict.gaps ?? []).filter((g) => URL_CAPTION_GAP.test(g.detail ?? '') && NOT_SHOWN.test(g.detail ?? '') && navigationProven(g.case));
+  if (!noise.length) return verdict;
+  const gaps = verdict.gaps.filter((g) => !noise.includes(g));
+  const notes = [...(verdict.notes ?? []), ...noise.map((g) => ({ ...g, demoted: 'url-caption: the recorded steps prove the navigation, and the fixture draws the URL on every keyframe' }))];
+  const pass = !gaps.length && !verdict.passed;
+  return { ...verdict, gaps, notes, demotedUrlCaption: noise.length, ...(pass ? { score: Math.max(verdict.score ?? 0, requiredScore), passed: true } : {}) };
+}
+
+// Required cases (required.mjs): the verifier sees every one, and the harness caps the verdict while one is unmet.
 export async function verifyRound(config, opts) {
   const council = councilFor(config, COUNCIL_STAGE[opts.stage]);
-  return council ? councilVerifier(config, { ...opts, council }) : runVerifier(config, opts);
+  const required = opts.story?.key ? requiredFor(config, opts.story.key) : [];
+  const o = required.length ? { ...opts, task: `${opts.task}\n${requiredVerifierText(required, opts.stage)}` } : opts;
+  let verdict = council ? await councilVerifier(config, { ...o, council }) : await runVerifier(config, o);
+  if (opts.stage === 'automation' && verdict && !verdict.error && opts.story) verdict = demoteUrlCaptionGaps(verdict, { navigationProven: navigationProof(config, opts.story), requiredScore: config.loops.requiredScore });
+  if (!required.length || verdict?.error) return verdict;
+  return enforceRequired(verdict, unmetRequired(config, opts.story, opts.stage, { required }), { requiredScore: config.loops.requiredScore, stage: opts.stage });
 }
 
 // A council round of a feature verification verifier: every member scores the plan or the tests with the stage's own
@@ -148,7 +198,19 @@ export async function councilVerifier(config, { stage, story, round, task, produ
     onLate: late?.push,
   });
   const cases = planCases(config.root, config.plansDir, story.key);
-  const merged = mergeCouncil(council, out.results, { protect: (f) => testProtection(f, { keys: [story.key], cases }), violation: out.violation, feedback: late?.take() ?? [], earlier: memory, root: config.root });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases }), violation: out.violation, feedback: late?.take() ?? [], earlier: memory, root: config.root };
+  const merged = await adjudicate({
+    config,
+    council,
+    merged: mergeCouncil(council, out.results, mergeOpts),
+    remerge: (adjudications) => mergeCouncil(council, out.results, { ...mergeOpts, adjudications }),
+    run: runMember ?? ((m, t) => runAgentAsync(config, { name, task: t, mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.timeoutsSec.verifier, extraEnv: memberRunEnv(m), usage: { stage: `${stage}-verify`, story: story.key, round, step: `adjudication-${m.name}` } })),
+    stage: COUNCIL_STAGE[stage],
+    story: story.key,
+    round,
+    retries: config.agent.resultParseRetries,
+    readOnly: { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+  });
   if (!merged.error) memory.remember(nameFindings(merged.findings, `${COUNCIL_STAGE[stage]}-r${round}`));
   recordCouncilRound(config, { stage: COUNCIL_STAGE[stage], story: story.key, round, council, merged });
   if (merged.error) return { error: `verifier council: ${merged.error}`, output: merged.summary };

@@ -175,6 +175,8 @@ export function ciOutputs(config, { provider = 'github-actions', installRoot = I
     { path: '.factory/bin/analysis/decide.mjs', content: gen(read('scripts/pipeline/lib/analysis/decide.mjs')) },
     { path: '.factory/bin/analysis/commercial.mjs', content: gen(read('scripts/pipeline/lib/analysis/commercial.mjs')) },
     { path: '.factory/bin/analysis/fetch.mjs', content: gen(read('scripts/pipeline/lib/analysis/fetch.mjs')) },
+    // The redaction boundary the parsers use (a secret scanner's matched values are remembered as hashes, never kept).
+    { path: '.factory/bin/redact.mjs', content: gen(read('scripts/pipeline/lib/redact.mjs')) },
     ...Object.entries(rules).map(([p, src]) => ({ path: p, content: fs.readFileSync(src, 'utf8') })),
     { path: CI_DATA, content: `${JSON.stringify(data, null, 2)}\n` },
     ...Object.entries(modules).map(([p, src]) => ({ path: p, content: gen(fs.readFileSync(src, 'utf8')) })),

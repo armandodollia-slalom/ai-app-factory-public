@@ -11,6 +11,11 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { seedTicket } from '../../pipeline/test/fixtures/tickets.mjs';
 
+// The fixer leases a test-stack slot: a registry of its own, so the machine's real leases (another run, another suite
+// file) never make it wait past this test's time limit (it did once in a full run: 240 s waiting for a slot).
+// Local git calls can stall for minutes on a loaded machine (external.mjs); a full suite run once spent 240 s in round 2's
+// tree snapshot. The time limits below are ceilings for a slow run, never the expected time (alone: about 10 s).
+const leaseHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-check-council-leases-'));
 const here = path.dirname(fileURLToPath(import.meta.url));
 const source = path.resolve(here, '..', '..', '..');
 const fakeAgent = path.join(source, 'scripts', 'pipeline', 'test', 'fixtures', 'fake-agent.mjs');
@@ -79,10 +84,10 @@ test('a PR check council: members critique beside the acceptance critic, a non-b
     'pr-check-fixer': [{ delayMs: 3500, writeFiles: { 'src/Basket/Coupons.cs': '// coupons, expiry checked\n' }, deleteFiles: [OTHER_TEST], result: { fixed: ['OPUS-1-1'], notFixed: [], summary: 'checks expiry' } }],
   }));
   for (const suffix of ['.calls.json', '.prompts.log']) fs.rmSync(scriptFile + suffix, { force: true });
-  const env = { ...process.env, FACTORY_METRICS_SHARD: '0', FACTORY_METRICS_SPOOL: '0', PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main' };
+  const env = { ...process.env, FACTORY_METRICS_SHARD: '0', FACTORY_METRICS_SPOOL: '0', PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main', TESTSTACK_STATE_HOME: leaseHome };
   delete env.PIPELINE_CHILD;
   delete env.PIPELINE_DISABLE;
-  const r = spawnSync(process.execPath, ['scripts/pr-check/pr-check.mjs', 'run', '--story', 'DEMO-1', '--json'], { cwd: repo, encoding: 'utf8', env, timeout: 240_000 });
+  const r = spawnSync(process.execPath, ['scripts/pr-check/pr-check.mjs', 'run', '--story', 'DEMO-1', '--json'], { cwd: repo, encoding: 'utf8', env, timeout: 1_800_000 });
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
   const result = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
   assert.deepEqual([result.verdict, result.rounds], ['PASS', 2]);
@@ -119,8 +124,9 @@ test('a PR check council does not block, in a later round, the fix of a finding 
   const scope = { severity: 'blocking', kind: 'scope', title: 'Adds a 400 for malformed codes that no ticket line asks for', detail: 'new error response', evidence: 'src/Basket/Coupons.cs:3', fix: 'remove the 400 branch', file: 'src/Basket/Coupons.cs', line: 3 };
   fs.writeFileSync(scriptFile, JSON.stringify({
     'pr-check-acceptance': [{ result: { score: 10, summary: 'all met', coverage: rowsMet, findings: [] } }],
-    'pr-check-flow@opus': [{ result: { score: 5, summary: 'crash', findings: [crash] } }, { result: { score: 6, summary: 'scope', findings: [scope] } }],
-    'pr-check-flow@sol': [clean(), { result: { score: 6, summary: 'scope', findings: [{ ...scope, title: 'A 400 response no ticket line names' }] } }],
+    // Round 2's scope objection is on lines declared for OPUS-1-1: both blocking members accept it on adjudication.
+    'pr-check-flow@opus': [{ result: { score: 5, summary: 'crash', findings: [crash] } }, { result: { score: 6, summary: 'scope', findings: [scope] } }, { result: { answers: [{ key: 'I1', answer: 'yes', evidence: 'src/Basket/Coupons.cs:3: the agreed fix is this 400' }] } }],
+    'pr-check-flow@sol': [clean(), { result: { score: 6, summary: 'scope', findings: [{ ...scope, title: 'A 400 response no ticket line names' }] } }, { result: { answers: [{ key: 'I1', answer: 'yes', evidence: 'src/Basket/Coupons.cs:3: the agreed fix is this 400' }] } }],
     'pr-check-style@slow': [clean()],
     'pr-check-defender': [{ result: { responses: [{ id: 'OPUS-1-1', position: 'concede', argument: 'true' }] } }, { result: { responses: [{ id: 'OPUS-2-1', position: 'rebut', argument: 'round 1 required it' }] } }],
     'pr-check-judge': [{ result: { score: 5, lensScores: { opus: 5 }, summary: 'crash', rulings: [{ id: 'OPUS-1-1', ruling: 'upheld', severity: 'blocking', reason: 'conceded', fix: 'answer 400 for a malformed code' }] } }, { result: { score: 6, lensScores: { opus: 6 }, summary: 'scope', rulings: [{ id: 'OPUS-2-1', ruling: 'upheld', severity: 'blocking', reason: 'no ticket line', fix: 'remove the 400 branch' }] } }],
@@ -129,10 +135,10 @@ test('a PR check council does not block, in a later round, the fix of a finding 
   }));
   for (const suffix of ['.calls.json', '.prompts.log']) fs.rmSync(scriptFile + suffix, { force: true });
   fs.rmSync(path.join(repo, '.factory/metrics/council-rounds.jsonl'), { force: true });
-  const env = { ...process.env, FACTORY_METRICS_SHARD: '0', FACTORY_METRICS_SPOOL: '0', PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main' };
+  const env = { ...process.env, FACTORY_METRICS_SHARD: '0', FACTORY_METRICS_SPOOL: '0', PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main', TESTSTACK_STATE_HOME: leaseHome };
   delete env.PIPELINE_CHILD;
   delete env.PIPELINE_DISABLE;
-  const r = spawnSync(process.execPath, ['scripts/pr-check/pr-check.mjs', 'run', '--story', 'DEMO-1', '--json'], { cwd: repo, encoding: 'utf8', env, timeout: 240_000 });
+  const r = spawnSync(process.execPath, ['scripts/pr-check/pr-check.mjs', 'run', '--story', 'DEMO-1', '--json'], { cwd: repo, encoding: 'utf8', env, timeout: 1_800_000 });
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
   const result = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
   assert.deepEqual([result.verdict, result.rounds], ['PASS', 2], JSON.stringify(result).slice(0, 2000));
@@ -140,5 +146,6 @@ test('a PR check council does not block, in a later round, the fix of a finding 
   assert.match(prompts, /=== pr-check-flow@sol #2[\s\S]*### Findings the council upheld in earlier rounds[\s\S]*A malformed coupon code throws[\s\S]*Agreed fix: answer 400/);
   assert.match(prompts, /=== pr-check-fixer #1[\s\S]*### Say which lines answer which finding[\s\S]*council\/fixes\/prCheck--DEMO-1\.json[\s\S]*`OPUS-1-1`/);
   const rounds = fs.readFileSync(path.join(repo, '.factory/metrics/council-rounds.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.deepEqual(rounds.map((x) => [x.round, x.pass, x.earlierRound ?? 0]), [[1, false, 0], [2, true, 1]]);
+  assert.deepEqual(rounds.map((x) => [x.kind ?? 'round', x.round, x.pass ?? null, x.earlierRound ?? x.covered ?? 0]), [['round', 1, false, 0], ['adjudication', 2, null, 1], ['round', 2, true, 1]]);
+  assert.match(prompts, /=== pr-check-flow@opus #3[\s\S]*# Council adjudication \(prCheck\)[\s\S]*Earlier finding `OPUS-1-1`/);
 });

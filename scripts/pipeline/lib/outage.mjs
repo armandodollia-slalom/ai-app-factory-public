@@ -5,6 +5,7 @@
 //
 // The run (and its worker and feature verification processes, which inherit the environment) shares one marker file,
 // PIPELINE_OUTAGE_FILE. Without it, outages are still detected and logged, but nothing is recorded.
+import { writeText } from './redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -31,7 +32,7 @@ export function recordOutage({ cli, agent, reason }) {
   if (!file) return;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), cli, agent, reason }, null, 2)}\n`);
+    writeText(file, `${JSON.stringify({ ts: new Date().toISOString(), cli, agent, reason }, null, 2)}\n`);
   } catch {
     // best effort: the agent's own failure still ends its story
   }

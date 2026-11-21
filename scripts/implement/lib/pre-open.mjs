@@ -9,16 +9,16 @@
 // starts after the PR's ready time, unless the PR was in draft (or held) at that moment.
 //
 // Settings (governance, implement.preOpen in .factory/config.json):
-//   enabled       true    always on: every pipeline PR (a ticket's, a bug-epic group's, a feature epic's) opens finished;
-//                         false is reported as a problem and ignored
+// Every pipeline PR (a ticket's, a bug-epic group's, a feature epic's) opens finished; no setting changes that.
 //   branches      null    story branch patterns whose pushes run CI before the PR (default: from implement.branchPrefix,
 //                         implement.epic.branchPrefix and implement.epic.bugfixPrefix)
 //   afterOpen     'draft' how an open PR is held while agents work on it again: 'draft' (convert to draft and back),
 //                         'label' (a blocking work-in-progress label on hosts without drafts), 'close-reopen'
 //   wipLabel      'work-in-progress'
 //   draftCycles   1       times an open PR may go back to draft before a person decides
-//   failedStory   'no-pr' a story whose PR check or CI never passes: no PR, the branch pushed, the findings on the ticket
-//                         ('draft-pr' is reported as a problem and ignored)
+// Removed settings, reported by preOpenProblems when a config still has them: `enabled` (an open before the work and
+// CI are done is no longer possible) and `failedStory` (a story that does not finish always escalates on its ticket with
+// its branch pushed and no PR).
 import fs from 'node:fs';
 import path from 'node:path';
 import { appendJsonl, nowIso, readJson, writeJson } from '../../pipeline/lib/util.mjs';
@@ -28,16 +28,18 @@ import { ciFor } from '../../pipeline/lib/ci/index.mjs';
 import { branchFlaky, branchLabel, branchWait, ciFixRounds, ciGate, ciLine, deliveryDecision } from './ci-wait.mjs';
 import { headSha } from './gitops.mjs';
 
-export const PRE_OPEN_DEFAULTS = { enabled: true, branches: null, afterOpen: 'draft', wipLabel: 'work-in-progress', draftCycles: 1, failedStory: 'no-pr' };
+export const PRE_OPEN_DEFAULTS = { branches: null, afterOpen: 'draft', wipLabel: 'work-in-progress', draftCycles: 1 };
 const AFTER_OPEN = ['draft', 'label', 'close-reopen'];
-const FAILED_STORY = ['no-pr', 'draft-pr'];
+const REMOVED = {
+  enabled: 'implement.preOpen.enabled was removed: every pipeline PR now opens finished (all agent work done, CI proven on its head), and an open PR that agents work on again is held (implement.preOpen.afterOpen); remove the setting',
+  failedStory: 'implement.preOpen.failedStory was removed: a story whose PR check or CI never passes now always escalates on its ticket, with its branch pushed, the findings on the ticket and no PR; remove the setting',
+};
 
 export function preOpenSettings(config) {
   const s = { ...PRE_OPEN_DEFAULTS, ...(config.implement?.preOpen ?? {}) };
   if (!AFTER_OPEN.includes(s.afterOpen)) s.afterOpen = 'draft';
   // The order is not optional (owner requirement C16/C18): no setting opens a PR before its work and CI are done.
-  s.enabled = true;
-  s.failedStory = 'no-pr';
+  for (const k of Object.keys(REMOVED)) delete s[k];
   return s;
 }
 
@@ -46,11 +48,9 @@ export function preOpenProblems(config) {
   if (raw === undefined) return [];
   const p = [];
   const known = Object.keys(PRE_OPEN_DEFAULTS);
-  for (const k of Object.keys(raw ?? {})) if (!known.includes(k)) p.push(`implement.preOpen.${k} is not a setting (${known.join(', ')})`);
+  for (const k of Object.keys(raw ?? {})) if (REMOVED[k]) p.push(REMOVED[k]);
+  for (const k of Object.keys(raw ?? {})) if (!known.includes(k) && !REMOVED[k]) p.push(`implement.preOpen.${k} is not a setting (${known.join(', ')})`);
   if (raw?.afterOpen !== undefined && !AFTER_OPEN.includes(raw.afterOpen)) p.push(`implement.preOpen.afterOpen must be one of ${AFTER_OPEN.join(', ')}`);
-  if (raw?.enabled === false) p.push('implement.preOpen.enabled false is no longer supported: every pipeline PR opens finished (CI proven on its head, all agent work done); remove the setting');
-  if (raw?.failedStory === 'draft-pr') p.push('implement.preOpen.failedStory "draft-pr" is no longer supported: a story that does not finish escalates on its ticket with no PR; remove the setting');
-  if (raw?.failedStory !== undefined && !FAILED_STORY.includes(raw.failedStory)) p.push(`implement.preOpen.failedStory must be one of ${FAILED_STORY.join(', ')}`);
   if (raw?.branches !== undefined && raw.branches !== null && !(Array.isArray(raw.branches) && raw.branches.every((b) => typeof b === 'string' && b))) p.push('implement.preOpen.branches must be a list of branch patterns');
   if (raw?.draftCycles !== undefined && !(Number.isInteger(raw.draftCycles) && raw.draftCycles >= 0)) p.push('implement.preOpen.draftCycles must be a whole number');
   return p;

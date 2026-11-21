@@ -1,3 +1,4 @@
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import { reportFor } from '../../pipeline/lib/analysis/fixloop.mjs';
 import os from 'node:os';
@@ -32,19 +33,23 @@ import { acquireLock, appendJsonl, extractResult, lockHolder, log, nowIso, relea
 import { coveringUnits, expandArgv as expand, fenceLang, planRuns, runnerFor, sharedFixtureErrors, tagError, taggingLines, testRunners } from './runners.mjs';
 import { servicesOfFile } from '../../implement/lib/project.mjs';
 import { PRODUCER, formatGaps, verifyRound } from './verify.mjs';
+import { addRequired, requiredFor, requiredProducerText, unmetRequired } from './required.mjs';
+import { resolvesGiven, routeToRole } from '../../pipeline/lib/finding-route.mjs';
 import { councilActionsText, councilFor, councilRounds, fixDeclarationText, fixesFile, guardProtectedTests, lateBox, planCases, protectedTestFinding } from '../../pipeline/lib/council.mjs';
 
 // A contradiction between council members (verdict.council.contradictions) that the round before also had: no evidence
 // settled it, so it is a question for the ticket's owner (escalated like a loop that cannot finish). Updates `seen`.
 export function repeatedContradictions(verdict, seen) {
   const now = (verdict?.council?.contradictions ?? []).map((c) => String(c.subject));
-  const repeated = now.filter((c) => seen.has(c));
+  // The council contradicting its own earlier ruling after an adjudication (`escalate`) is a question at once.
+  const repeated = [...new Set([...now.filter((c) => seen.has(c)), ...(verdict?.council?.contradictions ?? []).filter((c) => c.escalate).map((c) => String(c.subject))])];
   seen.clear();
   for (const c of now) seen.add(c);
   return repeated;
 }
 
 // Non-blocking council members' notes (late feedback, outvoted and minor findings) for the producer's next round.
+// not-an-agent: a text helper; each caller routes
 const councilNotes = (verdict) => (verdict?.notes?.length ? `\n\nNon-blocking notes from the council (act on them only when they are right for the ticket):\n${formatGaps(verdict.notes)}` : '');
 
 const FV_SCRIPT = fileURLToPath(new URL('../feature-verification.mjs', import.meta.url));
@@ -125,7 +130,7 @@ export function storyDiffSince(config, story, oldSha, { version = storyVersion }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'story-diff-'));
   try {
     const before = path.join(tmp, 'story.md');
-    fs.writeFileSync(before, old);
+    writeText(before, old);
     const diff = git(config.root, ['diff', '--no-index', '--no-ext-diff', '--', before, current]).stdout;
     return diff ? diff.replaceAll(before, `${story.key}@${oldSha}`).replaceAll(current, story.file) : null;
   } finally {
@@ -245,6 +250,9 @@ export async function planLoop(config, story, { force = false, resume = false, s
   try {
     tidyPlan(config, story);
     const initial = planStatus(config, story);
+    // Required cases a later stage upheld that the plan does not name yet: the planner runs on them (required.mjs).
+    const requiredUnmet = unmetRequired(config, story, 'plan');
+    if (requiredUnmet.length && !seedFeedback) seedFeedback = requiredProducerText(requiredUnmet, 'plan');
     if (initial.state === 'verified' && !force && !seedFeedback) {
       log(`${story.key}: plan is verified and up to date.`);
       finished('verified');
@@ -264,6 +272,7 @@ export async function planLoop(config, story, { force = false, resume = false, s
         log(`${story.key}: the edited plan verified ${verdict.score}/10 as it is (no planner run).`);
         return { status: 'verified', rounds: 0 };
       }
+      // route: resolvesGiven (the plan verifier's gaps of a changed plan are the planner's)
       if (!verdict.error) firstFeedback = `The plan was edited after verification (by a PR check fix) and the verifier found gaps. Fix only these; keep everything else as it is:\n${formatGaps(verdict.gaps)}`;
     }
     const keptSnapshot = new Map(keptCases(readPlan(config, story)).map((c) => [c.file, fs.readFileSync(path.join(config.root, c.file), 'utf8')]));
@@ -295,7 +304,7 @@ export async function planLoop(config, story, { force = false, resume = false, s
         // Removed or rewritten in any way (council C6: a rewrite that kept the marker escaped the old check).
         if (!fs.existsSync(abs) || fs.readFileSync(abs, 'utf8') !== text) {
           fs.mkdirSync(path.dirname(abs), { recursive: true });
-          fs.writeFileSync(abs, text);
+          writeText(abs, text);
           log(`${story.key}: restored ${path.basename(file)}, a case kept for an upheld PR check finding, after the planner removed or changed it`);
         }
       }
@@ -306,6 +315,7 @@ export async function planLoop(config, story, { force = false, resume = false, s
         logPrecheck(config, 'plan', story, round, pre.errors);
         // The verifier's last gaps stay in the feedback: a structural fix must not bring back what the verifier rejected
         // (council C9 proof run: sad cases added for the check were rejected as invented, removed, and demanded again).
+        // not-an-agent: harness checks; the gaps it repeats were routed in their round (resolvesGiven)
         feedback = `Structural check failed:\n${pre.errors.map((e) => `- ${e}`).join('\n')}${lastGaps.length ? `\n\nThe verifier's points from the last verified round still apply; do not undo them:\n${formatGaps(lastGaps)}` : ''}`;
         continue;
       }
@@ -344,12 +354,19 @@ export async function planLoop(config, story, { force = false, resume = false, s
       lastScore = verdict.score;
       const repeated = repeatedContradictions(verdict, contested);
       if (repeated.length) {
+        // not-an-agent: an escalation to a person
         escalate(config, story, 'plan', 'council members contradict each other', `The test plan verifier council disagrees on ${repeated.join('; ')} two rounds running, and the evidence has not settled it. The ticket's owner decides.\n\n${formatGaps(verdict.gaps)}`);
         finished('escalated');
         return { status: 'escalated', reason: 'council members contradict each other' };
       }
-      feedback = `The verifier scored the plan ${verdict.score}/10. Fix every gap:\n${formatGaps(verdict.gaps)}${councilNotes(verdict)}`;
+      // The planner gets the gaps a plan change resolves; a gap its verifier says only production code resolves is named
+      // as not the planner's (it stays in the verdict and the escalation).
+      // route: resolvesGiven
+      const notPlan = verdict.gaps.filter((g) => { const r = resolvesGiven(g); return r.length > 0 && !r.includes('plan') && !r.includes('tests'); });
+      const planOwn = verdict.gaps.filter((g) => !notPlan.includes(g));
+      feedback = `The verifier scored the plan ${verdict.score}/10. Fix every gap:\n${formatGaps(planOwn)}${notPlan.length ? `\n\nNot for the plan (a production change resolves them; do not act on them): ${notPlan.map((g) => g.case ?? g.detail).join('; ')}` : ''}${councilNotes(verdict)}`;
     }
+    // not-an-agent: an escalation to a person
     escalate(config, story, 'plan', `plan did not pass in ${maxRounds} rounds (${notPassed(config, lastScore, lastGaps)})`, lastGaps.length ? formatGaps(lastGaps) : feedback ?? '');
     finished('escalated');
     return { status: 'escalated' };
@@ -616,6 +633,11 @@ function automationTask(config, story, { mode, feedback, implFiles }) {
   if (mode === 'update') {
     lines.push('', 'Tests for this story already exist. Update them in place so they match the current plan and implementation; do not duplicate tests.');
   }
+  const required = requiredFor(config, story.key);
+  if (required.length) {
+    const unmet = unmetRequired(config, story, 'automation', { required, plan });
+    lines.push(requiredProducerText(unmet.length ? unmet : required, 'automation'));
+  }
   if (feedback) lines.push('', '### Fix every item from the previous round', '', feedback);
   return lines.join('\n');
 }
@@ -659,6 +681,13 @@ export const automationVerifierTaskFor = (config, story) => automationVerifierTa
 
 // scoped (re-verification after a PR check fix round): no whole-project runs; the PR check runs one full verification
 // before it pushes (wall-clock, council C5).
+// The hash a verified automation pass records: the canonical implementation hash now (implChanges, the one every stage
+// compares), and the hash it started from when the pass itself moved it.
+export function verifiedHashOf(config, targetHash) {
+  const now = implChanges(config);
+  return { hash: now.hash, from: now.hash !== targetHash ? targetHash : null, files: now.files };
+}
+
 export async function automationLoop(config, story, { implHash = null, skipTests = false, resume = false, verifyFirst = false, scoped = false, maxRounds = councilRounds(config, 'testAutomation', config.loops.automationMaxRounds) } = {}) {
   const lock = lockFile(config, story.key, 'automation');
   if (!acquireLock(lock)) {
@@ -674,9 +703,14 @@ export async function automationLoop(config, story, { implHash = null, skipTests
       // One stack slot for the whole pass: the agent's sessions and every precheck round use it, warm (council C4).
       const result = await holdStorySlot(config, story.key, () => automationPass(config, story, { skipTests, maxRounds, targetHash, resume, verifyFirst, scoped, saved: saved?.hash === targetHash ? saved : null }));
       resume = false;
+      // The verified hash is the canonical implementation hash after the pass (its own commit included), never the hash
+      // it started from: test automation may change a file the implementation hash covers (dogfood C24: a central
+      // package-version file for a new test package), and every later comparison reads this one value.
+      const after = result.status === 'verified' ? verifiedHashOf(config, targetHash) : null;
+      if (after?.from) log(`${story.key}: test automation changed files the implementation hash covers (${after.files.join(', ')}); verified hash ${after.hash} (started from ${after.from})`);
       const state = updateState(config, story.key, (s) => {
         Object.assign(s.automation, { status: result.status, pid: null, boot: null, ...RECOVERY_DONE, finishedAt: nowIso() });
-        if (result.status === 'verified') s.automation.verifiedHash = targetHash;
+        if (result.status === 'verified') Object.assign(s.automation, { verifiedHash: after.hash, verifiedFrom: after.from });
         if (result.bugs) s.automation.bugs = result.bugs;
       });
       const next = state.automation.requestedHash;
@@ -691,8 +725,9 @@ export async function automationLoop(config, story, { implHash = null, skipTests
 
 async function automationPass(config, story, { skipTests, maxRounds, targetHash, resume = false, verifyFirst = false, scoped = false, saved = null }) {
   const status = planStatus(config, story);
-  if (status.state !== 'verified') {
-    log(`${story.key}: plan is ${status.state}; running the plan loop first.`);
+  const planRequired = unmetRequired(config, story, 'plan');
+  if (status.state !== 'verified' || planRequired.length) {
+    log(`${story.key}: plan is ${status.state}${planRequired.length ? ` and does not cover required case(s) ${planRequired.map((r) => r.id).join(', ')}` : ''}; running the plan loop first.`);
     let plan = await planLoop(config, story, { resume });
     // A plan run already in progress (for example the post-commit hook after the story's notes were
     // committed) holds the lock: wait for it, then use its plan (or run the loop if it didn't verify).
@@ -714,6 +749,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
   let lastScore = null;
   // The last verifier round's gaps stay in the feedback until a verifier round runs again, so a
   // precheck failure or a crashed run in between does not hide them from the next fresh agent.
+  // route: productGapsOf (lastGaps are what the producer already received)
   const withOpenGaps = (text) => (lastGaps.length ? `${text}\n\nThe last verifier round's gaps are still open; fix them too:\n${formatGaps(lastGaps.filter((g) => g.root_stage !== 'plan'))}` : text);
   // verifyFirst (re-verification after the PR check's fixer edited the tests): the tests exist and were changed on
   // purpose, so they are checked as they are (precheck, run, verifier) before any automation agent run; the agent
@@ -736,7 +772,8 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       if (!verdict.error) {
         lastGaps = verdict.gaps;
         lastScore = verdict.score;
-        feedback = `The tests were changed after verification and no longer pass the verifier:\n${formatGaps(verdict.gaps.filter((g) => g.root_stage !== 'plan'))}`;
+        // route: productGapsOf
+        feedback = `The tests were changed after verification and no longer pass the verifier:\n${formatGaps(verdict.gaps.filter((g) => g.root_stage !== 'plan' && !productGapsOf([g]).length))}`;
       }
     } else {
       logPrecheck(config, 'automation', story, 0, pre.errors);
@@ -764,8 +801,17 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       return { status: 'escalated', reason: producer.noSlot };
     }
     const reported = extractResult(producer.output);
+    // The test writer's own bug reports are routed too: a "bug" that a test resolves (it names a missing test) stays
+    // with test automation; only production defects go to the implementer.
+    // route: routeToRole
+    const claimed = reported?.status === 'product-bug' ? routeToRole((Array.isArray(reported.bugs) ? reported.bugs : []).map((b) => ({ ...b, issue: [b.case, b.reason].filter(Boolean).join(': ') })), 'implementer') : null;
+    if (claimed && !claimed.mine.length && claimed.elsewhere.length) {
+      log(`${story.key}: the test writer reported ${claimed.elsewhere.length} "bug(s)" that only a test resolves; they stay with test automation`);
+      feedback = `What you reported as implementation bugs is resolved by tests, which are yours to write:\n${formatBugs(claimed.elsewhere)}`;
+      continue;
+    }
     if (reported?.status === 'product-bug') {
-      const bugs = Array.isArray(reported.bugs) ? reported.bugs : [];
+      const bugs = claimed.mine.length ? claimed.mine.map(({ issue: _issue, resolves: _resolves, ...b }) => b) : Array.isArray(reported.bugs) ? reported.bugs : [];
       logDecision(config, {
         stage: 'automation',
         story: story.key,
@@ -777,6 +823,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
         reason: reported.summary ?? `${bugs.length} implementation bug(s)`,
         items: normalizeBugs(bugs),
       });
+      // not-an-agent: an escalation to a person
       escalate(config, story, 'automation', 'tests found implementation bugs', formatBugs(bugs));
       return { status: 'product-bug', bugs };
     }
@@ -835,19 +882,33 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
     }
     lastGaps = verdict.gaps;
     lastScore = verdict.score;
+    // A gap only a production change can close (the verifier says `resolves: code`: the test is right, the code is wrong)
+    // does not go back to the test writer, who cannot change the code: it is a product bug for the implementer.
+    const productGaps = productGapsOf(verdict.gaps);
+    if (productGaps.length) {
+      const bugs = productGaps.map((g) => ({ case: g.case, reason: `${g.detail}${g.location ? ` (${g.location})` : ''}`, source: 'automation verifier' }));
+      logDecision(config, { stage: 'automation', story: story.key, round, agent: 'verifier', agentVer: verdict.verifierVersion ?? null, subject: 'implementer', decision: 'product-bug', reason: `the verifier named ${bugs.length} gap(s) only a production change can close`, items: normalizeBugs(bugs) });
+      // not-an-agent: an escalation to a person
+      escalate(config, story, 'automation', 'the verifier found implementation bugs', formatBugs(bugs));
+      return { status: 'product-bug', bugs };
+    }
     const repeated = repeatedContradictions(verdict, contested);
     if (repeated.length) {
+      // not-an-agent: an escalation to a person
       escalate(config, story, 'automation', 'council members contradict each other', `The test automation verifier council disagrees on ${repeated.join('; ')} two rounds running, and the evidence has not settled it. The ticket's owner decides.\n\n${formatGaps(verdict.gaps)}`);
       return { status: 'escalated', reason: 'council members contradict each other' };
     }
     const planGaps = verdict.gaps.filter((g) => g.root_stage === 'plan');
     if (planGaps.length) {
       log(`${story.key}: ${planGaps.length} gap(s) trace back to the plan; sending them to the plan agent.`);
+      // route: productGapsOf (root_stage plan: the verifier traced them to the cases)
       const plan = await planLoop(config, story, { seedFeedback: `The automation verifier traced these problems to the test cases themselves:\n${formatGaps(planGaps)}` });
       if (plan.status !== 'verified') return { status: 'blocked-on-plan' };
     }
+    // route: productGapsOf (above: gaps only production code closes went to the implementer as product bugs)
     feedback = `The verifier scored the tests ${verdict.score}/10. Fix every gap:\n${formatGaps(verdict.gaps.filter((g) => g.root_stage !== 'plan'))}${planGaps.length ? '\n\nThe plan was also updated to fix case-level problems; re-read the case files.' : ''}${councilNotes(verdict)}`;
   }
+  // not-an-agent: an escalation to a person
   escalate(config, story, 'automation', `tests did not pass in ${maxRounds} rounds (${notPassed(config, lastScore, lastGaps)})`, lastGaps.length ? formatGaps(lastGaps) : feedback ?? '');
   return { status: 'escalated' };
 }
@@ -857,6 +918,18 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
 // ---------------------------------------------------------------------------------------------
 
 export const spawnFv = (config, key, stage, args, file) => spawnBackground(config, { script: FV_SCRIPT, key, stage, args, file });
+
+// A later stage's test gaps become required cases, and test automation (with the plan loop first, when the plan does
+// not name them) starts on the current implementation (required.mjs). Used by `fv require`.
+export function requireCases(config, story, items, { head = null } = {}) {
+  const required = addRequired(config, story.key, items, { head });
+  const hash = implChanges(config).hash;
+  const bg = startAutomation(config, story, hash);
+  return { required, ...bg };
+}
+
+// Verifier gaps whose fix is in the production code (verify.mjs keeps `resolves` on a gap).
+export const productGapsOf = (gaps) => (gaps ?? []).filter((g) => g.resolves === 'code' && g.root_stage !== 'plan');
 
 export function startAutomation(config, story, implHash) {
   const holder = lockHolder(lockFile(config, story.key, 'automation'));
@@ -979,6 +1052,7 @@ export function sessionContext(config, story, recovered = []) {
     for (const r of recovered.filter((r) => r.story === story.key)) lines.push(formatRecovery(r));
     const state = loadState(config, story.key);
     lines.push(`Feature verification for ${story.key}: plan ${planStatus(config, story).state}, test automation ${state.automation.status}.`);
+    // not-an-agent: a status summary
     if (state.automation.bugs?.length) lines.push(`Feature verification found implementation bugs:\n${formatBugs(state.automation.bugs)}`);
   }
   return lines.join('\n');

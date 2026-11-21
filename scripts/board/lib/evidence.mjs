@@ -1,3 +1,4 @@
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fsReader } from '../../pipeline/lib/git.mjs';
@@ -196,6 +197,6 @@ export function captureApiEvidence(config, story) {
     return { ...t, exchanges: parseNetwork(network, (sha1) => run('unzip', ['-p', trace, `resources/${sha1}`]).stdout) };
   });
   const full = renderEvidence(story.key, tests, { maxExchanges: Infinity, maxBodyChars: Infinity, maxChars: Infinity });
-  fs.writeFileSync(path.join(outDir, 'api-evidence.md'), full);
+  writeText(path.join(outDir, 'api-evidence.md'), full);
   return renderEvidence(story.key, tests, { maxExchanges: settings.maxExchanges, maxBodyChars: settings.maxBodyChars, maxChars: settings.maxCommentChars });
 }

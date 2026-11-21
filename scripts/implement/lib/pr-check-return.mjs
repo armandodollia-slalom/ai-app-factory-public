@@ -46,33 +46,97 @@ const normalizePath = (x, root) => {
   return p.replace(/^\.\//, '');
 };
 
-// 'implementation' or 'light', and why. memberLenses maps a council member's name (the PR check names its critic after
-// the member) to its lens at the prCheck stage.
-export function routeFinding(f, { settings = RETURN_DEFAULTS, memberLenses = {}, root = null } = {}) {
+// What would resolve a finding (dogfood C23: "error branches are not tested" went to the implementer, who writes no
+// tests, twice, and the ticket ran out of returns). The judge or council member names it in `resolves` (code, tests,
+// plan, records; several for a mixed finding); without it the harness reads the finding: its action, its text (a gap in
+// the tests, a test to remove), the files it names. Shared by every stage that hands a finding to an agent
+// (finding-route.mjs).
+export { resolvesOf, TEST_GAP_RE } from '../../pipeline/lib/finding-route.mjs';
+import { resolvesOf } from '../../pipeline/lib/finding-route.mjs';
+
+const isLight = (files, settings) => files.length > 0 && files.every((p) => settings.lightPaths.some((g) => globRe(g).test(p)));
+
+// The route of one finding, or of one part of a mixed finding (`part`: code, tests, plan or records):
+// 'implementation' (the implementer and the whole stack), 'tests' (test plan and test automation, the finding a required
+// case) or 'light' (the PR check's fixer), and why. memberLenses maps a council member's name (the PR check names its
+// critic after the member) to its lens at the prCheck stage.
+export function routeFinding(f, { settings = RETURN_DEFAULTS, memberLenses = {}, root = null, part = null } = {}) {
   const lens = memberLenses[f.lens] ?? f.lens ?? null;
   const files = filesOf(f, root);
-  const light = files.length > 0 && files.every((p) => settings.lightPaths.some((g) => globRe(g).test(p)));
+  const light = isLight(files, settings);
   const minor = settings.minSeverity && f.severity && !severityAtLeast(f.severity, settings.minSeverity);
-  const back = (why) => (minor ? { route: 'light', lens, why: `${why}, ${f.severity} (below returnToImplementation.minSeverity ${settings.minSeverity}): the PR check's fixer` } : { route: 'implementation', lens, why });
+  const resolves = part ? [part] : resolvesOf(f, { files, lens });
+  const back = (why) => (minor ? { route: 'light', lens, resolves, why: `${why}, ${f.severity} (below returnToImplementation.minSeverity ${settings.minSeverity}): the PR check's fixer` } : { route: 'implementation', lens, resolves, why });
+  if (!resolves.includes('code')) {
+    if (resolves.includes('tests') || resolves.includes('plan')) {
+      // Fixing a test the branch already has stays with the fixer; a missing test is a required case for test automation.
+      if (light && !resolves.includes('plan')) return { route: 'light', lens, resolves, why: `a test finding confined to ${files.join(', ')}` };
+      if (minor) return { route: 'light', lens, resolves, why: `a test gap, ${f.severity} (below returnToImplementation.minSeverity ${settings.minSeverity}): the PR check's fixer` };
+      return { route: 'tests', lens, resolves, why: `resolved by ${resolves.join(' and ')}: a required case for the test plan and test automation` };
+    }
+    if (resolves.includes('records')) return { route: 'light', lens, resolves, why: 'resolved by the records or the PR text' };
+  }
   if (f.action === 'rewrite') return back('a rewrite of what the change built');
   if (settings.implementationLenses.includes(lens)) {
-    if (light) return { route: 'light', lens, why: `${lens} finding confined to ${files.join(', ')} (tests, docs or records)` };
+    if (light && !f.resolvesGiven) return { route: 'light', lens, resolves, why: `${lens} finding confined to ${files.join(', ')} (tests, docs or records)` };
     return back(`${lens} finding about the production change`);
   }
-  if (settings.lightLenses.includes(lens)) return { route: 'light', lens, why: `${lens} finding` };
+  if (settings.lightLenses.includes(lens) && !f.resolvesGiven) return { route: 'light', lens, resolves, why: `${lens} finding` };
   // An unknown lens: the full stack, which is never wrong, only slower.
   return back(`finding of lens ${lens ?? 'unknown'}`);
 }
 
-// Splits the findings fix mode would act on.
+// Splits the findings fix mode would act on. A mixed finding (code and tests) is split: its code part returns to the
+// implementer, its test part becomes a required case; both keep the finding's id (`part` tells them apart).
 export function routeFindings(findings, opts = {}) {
-  const out = { implementation: [], light: [] };
+  const out = { implementation: [], tests: [], light: [] };
   for (const f of findings ?? []) {
-    const r = routeFinding(f, opts);
-    out[r.route].push({ ...f, route: r.route, routeWhy: r.why, routeLens: r.lens });
+    const given = Array.isArray(f.resolves) ? f.resolves.length > 0 : Boolean(f.resolves);
+    const g = { ...f, resolvesGiven: given };
+    const resolves = resolvesOf(g, { files: filesOf(g, opts.root), lens: opts.memberLenses?.[f.lens] ?? f.lens });
+    const parts = resolves.includes('code') && resolves.some((r) => r === 'tests' || r === 'plan') ? ['code', resolves.includes('plan') ? 'plan' : 'tests'] : [null];
+    for (const part of parts) {
+      const r = routeFinding(g, { ...opts, part });
+      out[r.route].push({ ...f, route: r.route, routeWhy: r.why, routeLens: r.lens, resolves: r.resolves, ...(part ? { part } : {}) });
+    }
   }
   return out;
 }
+
+// "Returned, nothing addressed" (dogfood C23): the PR check upholds again a finding an earlier return was sent for, and
+// either that return went where the finding cannot be resolved (a test gap to the implementer), or nothing of the kind
+// that resolves it changed since the return began. The harness decides what happens, never the return budget silently:
+// a wrong route is re-routed once, free; a right route that changed nothing escalates with that reason.
+//   changed: repository files changed since the return's head (records excluded by the caller or here).
+export function unaddressed(findings, returns, { changed = [], settings = RETURN_DEFAULTS, root = null } = {}) {
+  const out = [];
+  const last = returns?.at(-1);
+  if (!last) return out;
+  const files = changed.filter((p) => !p.startsWith('.factory/'));
+  const tests = files.filter((p) => settings.lightPaths.some((g) => globRe(g).test(p)) && !/\.md$/.test(p));
+  const code = files.filter((p) => !settings.lightPaths.some((g) => globRe(g).test(p)));
+  const allPlans = changed.filter((p) => p.startsWith('.factory/plans/') || /(^|\/)tests\/plans\//.test(p));
+  for (const f of findings) {
+    const sent = (last.findings ?? []).find((x) => x.id === f.id && (!f.part || !x.part || x.part === f.part));
+    if (!sent) continue;
+    const sentRoute = sent.route ?? 'implementation';
+    const want = f.route;
+    const named = filesOf(f, root);
+    if (sentRoute !== want) {
+      out.push({ ...f, sentRoute, kind: 'wrong-route', why: `return ${last.n} sent ${f.id} to ${sentRoute === 'implementation' ? 'the implementer' : 'test automation'}, which cannot resolve it (it is resolved by ${(f.resolves ?? []).join(' and ')})` });
+      continue;
+    }
+    // A test return answers with tests or plan cases (the files a test gap names are usually the code under test); an
+    // implementation return with the production files the finding names, else with any production file.
+    const touched = want === 'tests' ? tests.length + allPlans.length > 0 : want === 'implementation' ? (named.length ? named.some((p) => changed.includes(p)) : code.length > 0) : true;
+    if (!touched) out.push({ ...f, sentRoute, kind: 'nothing-changed', why: `return ${last.n} sent ${f.id} to ${want === 'tests' ? 'test automation' : 'the implementer'} and nothing of what resolves it changed since (${want === 'tests' ? 'no test or plan file' : 'no production file'}${named.length ? `; it names ${named.join(', ')}` : ''})` });
+  }
+  return out;
+}
+
+// Whether a return is the one free re-route: some findings were sent where they cannot be resolved, every finding of
+// this return goes where those now go, and no earlier return was free.
+export const freeReroute = (toReturn, rerouted, returns) => rerouted.length > 0 && !(returns ?? []).some((e) => e.free) && toReturn.every((f) => rerouted.some((r) => r.route === f.route));
 
 // The implementer's fix list for a return.
 export function returnTask({ key, findings, n, max, round = null }) {

@@ -6,14 +6,12 @@ Before a PR opens (single ticket and bug group), the pipeline runs every check b
 
 | Workflow | Job | Before the PR | Why none |
 | --- | --- | --- | --- |
-| `gate.yml` | `pipeline` | parity run before the PR: factory check, factory models check, factory teststack validate (and factory teststack drift when the repository configures it) |  |
-| `gate.yml` | `policy` | architecture review stage (Architecture Policy Pack), and the parity run: factory arch selfcheck |  |
-| `gate.yml` | `lint` | changed-line lint after every implementer run and every PR check fixer commit, and in the parity run (same code as factory lint --base) |  |
-| `gate.yml` | `feature-verification` | feature verification stage, and the parity run: factory fv check --changed-from <base> |  |
-| `feature-verification-check.yml` | `check` | the parity run: factory fv check --changed-from <base> (this workflow is what gate.yml calls) |  |
-| `pr-check.yml` | `check` | the PR check stage before the PR opens (fix mode) |  |
-| `pr-demo-video.yml` | `record` | feature verification runs the stack specs that record the videos |  |
-| `pr-demo-video.yml` | `cleanup` | — | removes published videos after the PR closes |
+| `gate.yml` | `pipeline` | parity run before the PR: factory check, factory models check, factory teststack validate (and factory teststack drift when the repository configures it) | — |
+| `gate.yml` | `policy` | architecture review stage (Architecture Policy Pack), and the parity run: factory arch selfcheck | — |
+| `gate.yml` | `lint` | changed-line lint after every implementer run and every PR check fixer commit, and in the parity run (same code as factory lint --base) | — |
+| `gate.yml` | `feature-verification` | feature verification stage, and the parity run: `factory fv check --changed-from <base>` | — |
+| `feature-verification-check.yml` | `check` | the parity run: `factory fv check --changed-from <base>` (this workflow is what gate.yml calls) | — |
+| `pr-check.yml` | `check` | the PR check stage before the PR opens (fix mode) | — |
 | `review-quorum.yml` | `review-quorum` | — | counts approvals from people; the review gate sets how many |
 | `board-epic-assign.yml` | `sync` | — | not a pull request check (issue events) |
 | `board-escalation-resolve.yml` | `resolve` | — | not a pull request check (issue comments) |

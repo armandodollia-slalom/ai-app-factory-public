@@ -12,7 +12,7 @@ import { git } from '../../pipeline/lib/git.mjs';
 import { readDecisions } from '../../pipeline/lib/human-decisions.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log as defaultLog, nowIso, readJson, runAsync, tail, writeJson } from '../../pipeline/lib/util.mjs';
-import { agentEnv, changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, memberRunEnv, councilRounds, disputesFor, guardProtectedTests, lateBox, protectedTestFinding, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection } from '../../pipeline/lib/council.mjs';
+import { agentEnv, changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, memberRunEnv, councilRounds, disputesFor, guardProtectedTests, lateBox, protectedTestFinding, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { runTags } from '../../pipeline/lib/run-tags.mjs';
 import { addUsage } from '../../pipeline/lib/usage.mjs';
@@ -20,6 +20,8 @@ import { SUBTASK_RUNS_FILE, crossFindings, decisionRecord, planDecisionLog, roun
 import { HARNESS_EXCLUDES, commitAll, commitEnv, createSubtaskWorktree, diffSince, discardChanges, filesChanged, headSha, mergeInProgress, removeWorktree, unmergedFiles } from './gitops.mjs';
 import { disputeCounts, formatDisputes, openDisputes, parseImplementerReport, ruleDisputes, withIds } from './disputes.mjs';
 import { diagnosticFindings, formatDiagnostics, lspAdapter, signatureChanges } from './lsp.mjs';
+import { matchesAny } from './plan.mjs';
+import { pairHandoff } from '../../pipeline/lib/finding-route.mjs';
 import { isUiStory, parsePlanOutput, uiRules, parseVerdict, resolveModelForRole, roleCli, scopeViolations, topoOrder, validatePlan, validateRewrite } from './plan.mjs';
 import { pathLikeRegex, servicesOf, servicesOfFile } from './project.mjs';
 import { waitForMemory } from './resources.mjs';
@@ -67,6 +69,8 @@ export function createContext({ config, key, storyFile, branch, worktree, base, 
     plan: null,
     subtasks: new Map(), // id -> { status, branch, worktree, rounds }
     integrationNotes: [],
+    // Test gaps pair verifiers raised: required cases for feature verification (implement.mjs records them).
+    requiredCases: [],
     metrics: { agentRuns: 0, byRole: {}, pairRounds: 0, takeovers: 0, escalations: 0, limitHit: null, mode: null, lspCalls: 0, signatureChangesWithoutReferences: false, leaseWaitSec: 0, usage: null, followUps: [], analysisBounces: 0, analysisFixed: 0 },
   };
   ctx.deps = {
@@ -460,7 +464,22 @@ async function councilVerify(ctx, st, council, { worktree, base = null, round, r
   });
   const keys = [ctx.key];
   const cases = planCases(ctx.worktree, ctx.config.plansDir, ctx.key);
-  const merged = mergeCouncil(council, out.results, { protect: (f) => testProtection(f, { keys, cases }), feedback: rec.late.take(), violation: out.violation, changed: changedSince(worktree, base, git), earlier: memory, root: worktree });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys, cases }), feedback: rec.late.take(), violation: out.violation, changed: changedSince(worktree, base, git), earlier: memory, root: worktree };
+  const merged = await adjudicate({
+    config: ctx.config,
+    council,
+    merged: mergeCouncil(council, out.results, mergeOpts),
+    remerge: (adjudications) => mergeCouncil(council, out.results, { ...mergeOpts, adjudications }),
+    // Read-only, whatever the stage's own mode (a UI member drives a browser; adjudication only reads).
+    run: (m, task) => agentFor(ctx, rec, 'verifier', { role, name: ui ? 'pair-verifier' : name, mode: 'read', member: m, cwd: worktree, timeoutSec: m.timeoutSec ?? timeoutSec, task, step: `${st.id}:adjudication`, env: { ...env, ...memberRunEnv(m) } }),
+    stage: pairStage(st),
+    story: ctx.key,
+    step: st.id,
+    round,
+    retries: ctx.config.agent.resultParseRetries,
+    readOnly: { cwd: worktree, exclude: [ctx.config.metricsDir, ctx.config.stateDir, ...(ctx.config.implExclude ?? [])] },
+    log: ctx.log,
+  });
   // Named as the implementer will see them (disputes.mjs withIds), so its fix declaration matches what is remembered.
   if (!merged.error) memory.remember(nameFindings(merged.findings, `${st.id}-r${round}`));
   recordCouncilRound(ctx.config, { stage: pairStage(st), story: ctx.key, step: st.id, round, council, merged });
@@ -531,6 +550,7 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
         model: role === 'pairImplementer' ? st.model ?? null : null,
         cwd: worktree,
         timeoutSec: ctx.s.timeouts.pairImplementerSec,
+        // route: pairHandoff (findings = the last round's handoff.mine)
         task: pairImplementerTask({ key: ctx.key, storyFile: path.join(worktree, path.relative(ctx.worktree, ctx.storyFile)), st, worktree, branch, base, round, maxRounds: max, findings, screenshots, diagnostics: diagText, self: Boolean(st.self), mockups: st.verify === 'ui' ? mockupText(ctx) : null, mockupRenders, decisions: ctx.decisions }) + (council ? `\n\n${councilActionsText()}` : '') + (council && findings?.length ? `\n\n${fixDeclarationText(fixesFile(worktree, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }), findings)}` : ''),
       });
       commitAll(worktree, `${ctx.key}: ${st.id} (round ${round})`);
@@ -650,7 +670,7 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
         if (v.contradictions?.length) {
           rec.contested ??= new Map();
           const now = new Set(v.contradictions.map((c) => String(c.subject)));
-          const twice = v.contradictions.filter((c) => rec.contested.get(String(c.subject)) === round - 1);
+          const twice = v.contradictions.filter((c) => c.escalate || rec.contested.get(String(c.subject)) === round - 1);
           for (const subject of now) rec.contested.set(subject, round);
           if (twice.length) {
             const reason = `council members contradict each other and the evidence has not settled it: ${twice.map((c) => `${c.subject} (${c.positions.map((p) => `${p.member}: ${p.action}`).join(' vs ')})`).join('; ')}; the ticket's owner decides`;
@@ -682,8 +702,24 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
       progress(round, 'approved');
       return { status: 'approved', findings: all };
     }
-    all.push(...blocking.map((f) => ({ ...f, subtask: st.id, round })));
-    findings = blocking;
+    // Findings this pair cannot act on do not come back to it (pairHandoff): another subtask's files go to the
+    // integration step, test gaps to feature verification as required cases. Nothing left: the round is approved.
+    // Every pair kind routes, the self-mode and later-change pairs (bug fix, review fix, PR-check return, integration)
+    // too (dogfood C24: a test gap blocked the bug-fix pair, which writes production code, for two of its three rounds).
+    // route: pairHandoff
+    const handoff = pairHandoff(blocking, { ownerOf: (file) => others.find((o) => matchesAny(file, o.owns ?? []))?.id ?? (matchesAny(file, st.owns ?? []) ? st.id : null), self: st.id });
+    if (handoff.otherSide.length || handoff.tests.length) {
+      for (const f of handoff.otherSide) ctx.integrationNotes.push(`The ${st.id} verifier raised a finding about ${f.file} (owned by ${f.owner}), which that pair could not change: ${f.issue}${f.fix ? ` Fix: ${f.fix}` : ''}`);
+      ctx.requiredCases.push(...handoff.tests.map((f) => ({ id: f.id ?? `${st.id}-r${round}`, source: `${st.id} verifier round ${round}`, title: String(f.issue ?? f.title ?? '').slice(0, 300), fix: f.fix ?? null })));
+      rec.handedOff = [...(rec.handedOff ?? []), ...handoff.otherSide.map((f) => ({ id: f.id, round, to: 'integration', why: f.why })), ...handoff.tests.map((f) => ({ id: f.id, round, to: 'feature-verification', why: f.why }))];
+      if (!handoff.mine.length) {
+        ctx.log(`${st.id} round ${round}: every blocking finding is for another stage (${rec.handedOff.filter((h) => h.round === round).map((h) => `${h.id} to ${h.to}`).join(', ')}); the pair's part is approved`);
+        progress(round, 'approved');
+        return { status: 'approved', findings: all, handedOff: rec.handedOff };
+      }
+    }
+    all.push(...handoff.mine.map((f) => ({ ...f, subtask: st.id, round })));
+    findings = handoff.mine;
     screenshots = verdict.screenshots ?? [];
     mockupRenders = verdict.mockupRenders ?? [];
   }
@@ -799,6 +835,7 @@ export async function runSubtask(ctx, st, others) {
       mode: 'implement',
       cwd: wt.path,
       timeoutSec: ctx.s.timeouts.orchestratorSec,
+      // route: pairHandoff (r.findings are the rounds' handoff.mine)
       task: escalationTask({ key: ctx.key, storyFile: path.join(wt.path, path.relative(ctx.worktree, ctx.storyFile)), st, worktree: wt.path, branch: wt.branch, outcome: r.status, findings: r.findings, takeoverAllowed, otherOwns: others.flatMap((o) => o.owns) }),
     });
     const d = extractResult(res.output) ?? {};

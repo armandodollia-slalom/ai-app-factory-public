@@ -18,8 +18,13 @@ const RATE = /rate.?limit|too many requests|retry.?after|abuse detection|seconda
 const CONTENT = /\bspam\b|content (?:filter|policy|was (?:blocked|rejected))|recogni[sz]ed as spam|prohibited (?:content|words?)|inappropriate content|flagged as/i;
 const REASONED = /scope|permission|not accessible|must (?:have|be)|token|credential|unauthori[sz]ed|\bsso\b|saml|admin|access|not allowed|disabled|archived|suspended|\bplan\b|protected|locked|blocked user|not a collaborator|write access/i;
 
-// The HTTP status a CLI's or adapter's message names ("HTTP 403", "(HTTP 403)").
-const statusIn = (text) => Number(/\bHTTP (\d{3})\b/.exec(String(text ?? ''))?.[1]) || null;
+// The HTTP status a CLI's or adapter's message names: "HTTP 403", "(HTTP 403)", and the gh CLI's form for a non-JSON
+// answer, "non-200 OK status code: 403 Forbidden body: ..." or "unexpected status code: 403" (held-out C22: a refused
+// comment answered with an HTML page was recorded as failed).
+export const httpStatusIn = (text) => Number(/\bHTTP (\d{3})\b|\bstatus code:?\s*(\d{3})\b/i.exec(String(text ?? ''))?.slice(1).find(Boolean)) || null;
+const statusIn = httpStatusIn;
+// An HTML error page in a message (a proxy's or the host's generic page): it names no reason the API would give.
+const HTML_BODY = /(?:body:\s*)?"?<!DOCTYPE html[\s\S]*$|<html[\s\S]*$/i;
 
 // True when the host refused the request's text: a message naming spam or a content filter (any 4xx), or a 403 that
 // gives no reason at all. A rate limit or a 403 that names a permission is not one.
@@ -31,6 +36,9 @@ export function isContentRefusal({ status = null, text = '' } = {}) {
   if (s !== 403) return false;
   // What is left once the status, its standard phrase, request URLs and the CLI's own prefix are taken out.
   const said = t
+    .replace(HTML_BODY, ' ')
+    .replace(/\b(?:non-200 OK|unexpected)\s+status code:?\s*/gi, ' ')
+    .replace(/\bbody:\s*/gi, ' ')
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/\bHTTP 403\b|\b403\b|\bforbidden\b/gi, ' ')
     .replace(/\b(?:gh|git)?\s*(?:pr|issue|pull request|merge request)?\s*(?:create|comment|edit)?\s*failed\b/gi, ' ')

@@ -109,6 +109,8 @@ if (a[0] === 'api' && /\\/actions\\/runs\\?head_sha=/.test(a[1])) { const head =
 if (a[0] === 'run' && a[1] === 'list') { const head = a.includes('--commit') ? arg('--commit') : branchHead(arg('--branch')); return out(runsOf(head).map((r) => ({ databaseId: r.id, conclusion: r.conclusion, name: r.name, headSha: head, status: r.status, event: r.event, workflowName: r.name, url: '' }))); }
 if (a[0] === 'run' && a[1] === 'view') return out(a.includes('--log-failed') ? 'pipeline\\tstep\\t2026 FAIL the check failed\\n' : 'all good\\n');
 if (a[0] === 'pr' && a[1] === 'create') {
+  // refuse-open: the host refuses the PR's text (the recorded C21 403) until the test lifts it.
+  if (S.refuseOpen) { S.refusals = (S.refusals ?? 0) + 1; save(); process.stderr.write('pull request create failed: HTTP 403: 403 Forbidden (https://api.github.com/graphql)'); process.exit(1); }
   S.pr = { number: 1, draft: a.includes('--draft'), head: arg('--head'), body: arg('--body'), createdAt: new Date().toISOString(), openedHead: branchHead(arg('--head')) };
   S.events = [...(S.events ?? []), { at: S.pr.createdAt, what: S.pr.draft ? 'opened-draft' : 'opened-ready' }];
   save();
@@ -135,7 +137,7 @@ if (a[0] === 'pr' && a[1] === 'comment') return out('https://github.com/acme/sho
 out('');
 `;
 
-function setup(name, scenario) {
+function setup(name, scenario, { type = 'story', state = {} } = {}) {
   const root = path.join(tmp, name);
   const repo = path.join(root, 'shop');
   const origin = path.join(root, 'origin.git');
@@ -157,7 +159,7 @@ function setup(name, scenario) {
   write(repo, '.gitignore', '.factory/state/\nnode_modules\n');
   write(repo, 'src/Basket/Coupons.cs', '// coupons\n');
   for (const [p, text] of Object.entries(WORKFLOWS)) write(repo, p, text);
-  seedTicket(repo, { key: 'DEMO-1', slug: 'DEMO-1-apply-coupon', text: '# DEMO-1 Apply coupon\n\nRule: a valid coupon gives 10% off; an expired coupon is rejected with 400.\n' });
+  seedTicket(repo, { key: 'DEMO-1', slug: 'DEMO-1-apply-coupon', type, text: '# DEMO-1 Apply coupon\n\nRule: a valid coupon gives 10% off; an expired coupon is rejected with 400.\n' });
   sh(root, 'git', ['init', '-q', '--bare', '-b', 'main', origin]);
   sh(repo, 'git', ['init', '-q', '-b', 'main']);
   sh(repo, 'git', ['config', 'user.email', 'fv@example.com']);
@@ -168,7 +170,7 @@ function setup(name, scenario) {
   sh(repo, 'git', ['push', '-q', 'origin', 'main']);
   fs.mkdirSync(bin, { recursive: true });
   const stateFile = path.join(root, 'gh-state.json');
-  fs.writeFileSync(stateFile, JSON.stringify({ scenario }));
+  fs.writeFileSync(stateFile, JSON.stringify({ scenario, ...state }));
   fs.writeFileSync(path.join(bin, 'gh'), FAKE_GH(stateFile, path.join(root, 'gh.log'), origin), { mode: 0o755 });
   return { root, repo, bin, stateFile };
 }
@@ -323,4 +325,38 @@ test('a run that stops right after its PR opened is resumed after the open (the 
   assert.equal(r.record.phase, null);
   assert.deepEqual([r.record.readyAudit.ok, r.record.readyAudit.after], [true, 0]);
   assert.equal(r.state.events.filter((e) => /^opened/.test(e.what)).length, 1);
+});
+
+// Held-out C22 (council C12, Sol 2): planning and the worker's start cleared the run record's outcome and reason before the
+// story read them, so a resume of a refused open took the general route and reset the first push time. Through the real
+// entry points: a run whose open the host refuses even when shortest, then `implement resume`.
+test('a refused open, then `implement resume`: the open-pending route is taken, the first push time is kept, and no agent starts', { timeout: 3_600_000 }, () => {
+  const ctx = setup('refused-open', 'green', { type: 'bug', state: { refuseOpen: true } });
+  const first = implement(ctx);
+  assert.match(first.stdout, /DEMO-1 +pr-refused/, `${first.stdout}\n${first.stderr}`);
+  assert.ok(first.state.refusals > 1, 'the reduction was tried');
+  assert.equal(first.state.pr, undefined);
+  assert.deepEqual([first.record.outcome, first.record.phase, Boolean(first.record.greenAt)], ['pr-refused', 'pre-open', true]);
+  const firstPushAt = first.record.firstPushAt;
+  assert.ok(firstPushAt);
+  // (The review gate is off in this fixture: no board. Reusing the gate's rating on the resumed open is proven on the same
+  // call by 'a resumed delivery opens with no agent' in host-refusal.test.mjs.)
+  const agentRows = first.usage.length;
+  // The host takes the text now.
+  const st = JSON.parse(fs.readFileSync(ctx.stateFile, 'utf8'));
+  fs.writeFileSync(ctx.stateFile, JSON.stringify({ ...st, refuseOpen: false }));
+  const second = implement(ctx, { args: ['implement', 'resume', '--pr'] });
+  assert.match(second.stdout, /DEMO-1 +done/, `${second.stdout}\n${second.stderr}`);
+  const logs = path.join(ctx.repo, '.factory/state/logs');
+  const attempts = fs.readdirSync(logs).filter((f) => f.startsWith('implement-DEMO-1')).sort();
+  const resumed = fs.readFileSync(path.join(logs, attempts.at(-1)), 'utf8');
+  assert.match(resumed, /resuming the delivery of feat\/demo-1-apply-coupon: the PR did not open earlier[\s\S]*no agent runs, the PR opens on the CI-proven head/, resumed);
+  assert.doesNotMatch(resumed, /restarting feature verification|agent \S+ \(/, 'the general route and agents were not taken');
+  assert.equal(second.usage.length, agentRows, 'no agent run on the resume');
+  assert.equal(second.log.split('\n').filter((l) => / pr create /.test(l)).length, first.state.refusals + 1, 'one accepted open');
+  const result = JSON.parse(fs.readFileSync(path.join(ctx.repo, '.factory/state/implement/DEMO-1.result.json'), 'utf8'));
+  assert.equal(result.firstPushAt, firstPushAt, 'the first push time is kept');
+  assert.equal(result.resumedAt, 'open-pending');
+  assert.equal(second.record.pr, 'https://github.com/acme/shop/pull/1');
+  assert.deepEqual([second.record.readyAudit.ok, second.record.readyAudit.after], [true, 0]);
 });

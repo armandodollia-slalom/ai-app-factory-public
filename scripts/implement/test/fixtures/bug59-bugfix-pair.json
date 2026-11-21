@@ -1,0 +1,90 @@
+{
+ "source": "dogfood C24, recorded bug-fix pair verdicts (decisions.jsonl, stage implement-verify, subtask bug-fix-5)",
+ "rounds": [
+  {
+   "round": 1,
+   "findings": [
+    {
+     "id": "BUG59-A1",
+     "severity": "blocking",
+     "category": "correctness",
+     "file": "src/Identity.API/Quickstart/Account/AccountController.cs",
+     "line": 268,
+     "reason": "Changing LoginViewModel.ReturnUrl alone does not change the URL posted by the rendered form. Password sign-in therefore returns to the original authorization request and encounters the same provider mismatch.",
+     "fix": "When applying the normalized return URL, remove or update its ModelState entry before rendering, including redisplay paths. Run the existing TC-BUG-59-08 browser regression to verify that password sign-in completes."
+    },
+    {
+     "id": "BUG59-PAR",
+     "severity": "blocking",
+     "category": "acceptance",
+     "file": "src/Identity.API/Quickstart/Account/AccountController.cs",
+     "line": 290,
+     "reason": "The query rewrite cannot remove the unsupported provider from a pushed authorization request, so that flow still returns to login after successful password authentication. Switching clients in the regression avoids the required WebApp path.",
+     "fix": "Handle the unsupported provider in the persisted authorization request rather than only its browser query. Cover a pushed request containing idp:idsrv and verify that password sign-in completes to the WebApp."
+    },
+    {
+     "id": "bugfix5-bom",
+     "severity": "minor",
+     "category": "scope",
+     "file": "src/Identity.API/Quickstart/Account/ExternalController.cs",
+     "line": 1,
+     "reason": "The diff adds a UTF-8 BOM to line 1, an encoding change no ticket line asks for (already flagged as minor in review round 1). No behaviour change.",
+     "fix": "Optionally restore the original encoding without a BOM."
+    },
+    {
+     "id": "bugfix5-eof",
+     "severity": "minor",
+     "category": "scope",
+     "file": "src/Identity.API/Quickstart/Account/AccountController.cs",
+     "line": 378,
+     "reason": "Formatting-only edit at the end of the file.",
+     "fix": "Optional: leave the end of the file as it was."
+    }
+   ]
+  },
+  {
+   "round": 2,
+   "findings": [
+    {
+     "id": "BUG59-PAR",
+     "severity": "blocking",
+     "category": "acceptance",
+     "file": "e2e/teststack/bug-59.spec.ts",
+     "line": 236,
+     "reason": "The production approach changed, but TC-BUG-59-08 still bypasses the PAR path whose regression coverage was explicitly required in round 1.",
+     "fix": "Add a regression that pushes a WebApp authorization request containing acr_values=idp:idsrv, follows its request_uri, and verifies password sign-in completes back to the WebApp without returning to login. Run it successfully with video retained."
+    },
+    {
+     "id": "bugfix5-bom",
+     "severity": "minor",
+     "category": "scope",
+     "file": "src/Identity.API/Quickstart/Account/ExternalController.cs",
+     "line": 1,
+     "reason": "An encoding-only change (a UTF-8 BOM added to line 1) that no ticket line asks for; no behaviour change.",
+     "fix": "Optionally restore the original encoding without a BOM."
+    }
+   ]
+  },
+  {
+   "round": 3,
+   "findings": [
+    {
+     "id": "BUG59-PAR",
+     "severity": "blocking",
+     "file": "e2e/teststack/bug-59.spec.ts",
+     "line": 236,
+     "reason": "The regression required by the upheld finding BUG59-PAR (a pushed WebApp authorization request with acr_values=idp:idsrv whose password sign-in completes without returning to login) is not covered. [raised by opus, sol]",
+     "fix": "Add an e2e step that POSTs to {identity}/connect/par as the webapp client (credentials from the stack configuration) with acr_values=idp:idsrv, opens /connect/authorize?client_id=webapp&request_uri=<returned uri> in the browser, signs in as alice, and asserts that /connect/authorize/callback answers 302 to the WebApp's signin-oidc redirect_uri with a code (not /Account/Login). Run it with the video kept."
+    },
+    {
+     "id": "bugfix5-bom",
+     "severity": "minor",
+     "file": "src/Identity.API/Quickstart/Account/ExternalController.cs",
+     "line": 1,
+     "reason": "Encoding-only change that no ticket line asks for; no behaviour change.",
+     "fix": "Optionally restore the original encoding without a BOM."
+    }
+   ]
+  }
+ ]
+}

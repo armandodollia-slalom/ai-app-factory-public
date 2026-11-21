@@ -55,7 +55,9 @@ test('Jenkins: a declarative Jenkinsfile for pull requests and one for the sched
   render(root, INSTALL);
   const pr = read(root, 'ci/jenkins/Jenkinsfile.factory');
   assert.ok(groovyOk(pr, 'Jenkinsfile.factory') >= 6);
-  for (const job of ['gate', 'lint', 'feature-verification', 'review-quorum', 'demo-video', 'pr-check']) assert.match(pr, new RegExp(`factory-ci\\.sh ${job}`), job);
+  for (const job of ['gate', 'lint', 'feature-verification', 'review-quorum', 'pr-check']) assert.match(pr, new RegExp(`factory-ci\\.sh ${job}`), job);
+  // Demo videos are produced on the machine that runs the pipeline, never in CI.
+  assert.doesNotMatch(pr, /factory-ci\.sh demo-video/);
   assert.match(pr, /JIRA_API_TOKEN = credentials\('jira-api-token'\)/);
   assert.match(pr, /stage\("Secret scan"\)/, 'the analysis jobs are stages');
   groovyOk(read(root, 'ci/jenkins/Jenkinsfile.factory-scheduled'), 'scheduled');
@@ -68,7 +70,8 @@ test('CircleCI: one config with the jobs, the workflows and the analysis jobs; s
   render(root, INSTALL);
   const cfg = yamlOk(read(root, '.circleci/config.yml'), 'config.yml');
   assert.equal(cfg.version, 2.1);
-  for (const j of ['factory-gate', 'factory-lint', 'factory-feature-verification', 'review-quorum', 'factory-demo-video', 'factory-scheduled', 'factory-analysis-secrets']) assert.ok(cfg.jobs[j], j);
+  assert.ok(!cfg.jobs?.['factory-demo-video'], 'no demo-video job in CI');
+  for (const j of ['factory-gate', 'factory-lint', 'factory-feature-verification', 'review-quorum', 'factory-scheduled', 'factory-analysis-secrets']) assert.ok(cfg.jobs[j], j);
   const wf = cfg.workflows.factory.jobs.map((j) => Object.keys(j)[0]);
   assert.ok(wf.includes('factory-analysis-sast') && wf.includes('review-quorum'));
   assert.ok(cfg.workflows.factory.jobs.every((j) => Object.values(j)[0].context?.includes('factory')), 'every job reads the factory context');
@@ -81,7 +84,8 @@ test('Bitbucket Pipelines: pull request pipeline with the analysis steps, custom
   const cfg = yamlOk(read(root, 'bitbucket-pipelines.yml'), 'bitbucket-pipelines.yml');
   const pr = cfg.pipelines['pull-requests']['**'];
   const names = JSON.stringify(pr);
-  for (const s of ['factory gate', 'review-quorum', 'feature verification', 'Secret scan', 'demo video']) assert.ok(names.includes(s), s);
+  for (const s of ['factory gate', 'review-quorum', 'feature verification', 'Secret scan']) assert.ok(names.includes(s), s);
+  assert.ok(!names.includes('demo video'), 'no demo video step in CI');
   assert.deepEqual(Object.keys(cfg.pipelines.custom).sort(), ['factory-graphify-prune', 'factory-pr-check', 'factory-retro', 'factory-tracker']);
   assert.deepEqual(check(root, INSTALL), []);
 });
@@ -100,7 +104,7 @@ test('a team\'s own single definition file is never overwritten: the factory\'s 
 
 test('demo video and code graph stages leave every definition when the feature is off', () => {
   for (const provider of ['jenkins', 'circleci', 'bitbucket-pipelines']) {
-    const root = repo(provider, { features: { ...ALL, demoVideo: false, graphify: false } });
+    const root = repo(provider, { features: { ...ALL, graphify: false } });
     render(root, INSTALL);
     const files = Object.keys(readManifest(root).files).filter((p) => /jenkins|circleci|bitbucket/.test(p));
     for (const f of files) {

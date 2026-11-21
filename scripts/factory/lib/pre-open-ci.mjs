@@ -21,7 +21,7 @@ let yamlLib = null;
 const yaml = () => (yamlLib ??= requireHere('yaml'));
 
 // The workflows of the GitHub Actions templates that run before the PR (the gate, static analysis, the demo video).
-export const PRE_OPEN_WORKFLOWS = ['.github/workflows/factory-gate.yml', '.github/workflows/factory-analysis.yml', '.github/workflows/factory-pr-demo-video.yml'];
+export const PRE_OPEN_WORKFLOWS = ['.github/workflows/factory-gate.yml', '.github/workflows/factory-analysis.yml'];
 
 const REUSE_SCRIPT = [
   'set -u',

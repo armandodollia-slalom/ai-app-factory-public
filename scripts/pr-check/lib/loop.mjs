@@ -1,6 +1,7 @@
 // The adversarial PR check loop. Each round: critics review in parallel, the defender rebuts, the
 // critics answer (debateTurns times), the judge rules and the round is scored. Below 10/10 the fixer
 // fixes the upheld findings, the script commits them, and a new round with fresh agents starts.
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import { recordAnalysis, reportFor } from '../../pipeline/lib/analysis/fixloop.mjs';
 import { evidenceText } from '../../pipeline/lib/analysis/report.mjs';
 import { describesUserError, describesWeakerAuthz } from '../../pipeline/lib/user-errors.mjs';
@@ -9,7 +10,7 @@ import { stampKeptCases } from './pr-notes.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgentAsync } from '../../pipeline/lib/agents.mjs';
-import { changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, memberRunEnv, guardProtectedTests, lateBox, memberScore, memberTask, mergeCouncil, normalizeFinding as normalizeCouncilFinding, planCases, recordCouncilRound, rewriteText, testProtection, unavailableReason } from '../../pipeline/lib/council.mjs';
+import { changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, memberRunEnv, guardProtectedTests, lateBox, memberScore, memberTask, mergeCouncil, normalizeFinding as normalizeCouncilFinding, adjudicate, planCases, recordCouncilRound, rewriteText, testProtection, unavailableReason } from '../../pipeline/lib/council.mjs';
 import { escalate, metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log, nowIso, sha, writeJson } from '../../pipeline/lib/util.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
@@ -176,7 +177,7 @@ export function scoreRound({ lenses, findings, rulings = [], judgeLensScores = {
   for (const f of findings) {
     const r = byId.get(f.id);
     if (r) {
-      if (r.ruling === 'upheld') upheld.push({ ...f, severity: SEVERITIES.includes(r.severity) ? r.severity : f.severity, reason: r.reason ?? '', fix: r.fix || f.fix });
+      if (r.ruling === 'upheld') upheld.push({ ...f, severity: SEVERITIES.includes(r.severity) ? r.severity : f.severity, reason: r.reason ?? '', fix: r.fix || f.fix, ...(r.resolves ? { resolves: r.resolves } : {}) });
     } else if (f.status !== 'withdrawn') {
       upheld.push({ ...f, reason: 'The judge gave no ruling, so the finding stands.' });
     }
@@ -190,7 +191,7 @@ export function scoreRound({ lenses, findings, rulings = [], judgeLensScores = {
     if (r?.ruling !== 'upheld' || known.has(String(r.id))) continue;
     const lens = lenses.find((l) => String(r.id).toLowerCase().startsWith(l));
     if (!lens) continue;
-    upheld.push({ id: String(r.id), lens, severity: SEVERITIES.includes(r.severity) ? r.severity : 'major', title: r.title ? String(r.title).slice(0, 200) : `Coverage gap: ${firstSentence(r.reason) || 'an item the critic did not rate met'}`, detail: r.reason ?? '', evidence: '', requirement: '', fix: r.fix ?? '', reason: r.reason ?? '' });
+    upheld.push({ id: String(r.id), lens, severity: SEVERITIES.includes(r.severity) ? r.severity : 'major', title: r.title ? String(r.title).slice(0, 200) : `Coverage gap: ${firstSentence(r.reason) || 'an item the critic did not rate met'}`, detail: r.reason ?? '', evidence: '', requirement: '', fix: r.fix ?? '', reason: r.reason ?? '', ...(r.resolves ? { resolves: r.resolves } : {}) });
   }
   // Owner questions: an acceptance finding the judge dismissed as a question for the ticket's owner, or with a follow-up
   // (an acceptance line cannot be a follow-up).
@@ -252,7 +253,7 @@ function normalizeFinding(raw, lens, id) {
     status: 'open',
     thread: [],
     // A council member's finding keeps the council's fields (council.mjs): who raised it, its action and what it targets.
-    ...Object.fromEntries(['action', 'test', 'deletes', 'approach', 'why', 'covers', 'members', 'upheldBy', 'notUpheld', 'protected', 'supersededBy', 'contested', 'file', 'line'].filter((k) => raw[k] !== undefined && raw[k] !== null).map((k) => [k, raw[k]])),
+    ...Object.fromEntries(['action', 'test', 'deletes', 'approach', 'why', 'covers', 'members', 'upheldBy', 'notUpheld', 'protected', 'supersededBy', 'contested', 'adjudication', 'file', 'line'].filter((k) => raw[k] !== undefined && raw[k] !== null).map((k) => [k, raw[k]])),
   };
 }
 
@@ -305,7 +306,7 @@ async function callAgent(config, ctx, files, { role, agent, label, task, mode = 
       // The stories this check covers: the fixer may change their tests only (story-guard foreignTestGuard).
       extraEnv: { PIPELINE_STORY_KEYS: (ctx.tickets ?? [ctx.story]).filter(Boolean).map((t) => t.key).join(','), ...(member ? memberRunEnv(member) : {}), ...env },
     });
-    fs.writeFileSync(path.join(files.roundAbs, `${label}.out.md`), result.output ?? '');
+    writeText(path.join(files.roundAbs, `${label}.out.md`), result.output ?? '');
     onResult?.(result);
     const raw = extractResult(result.output ?? '');
     if (raw && validate(raw)) return raw;
@@ -444,7 +445,7 @@ async function fixRound(config, ctx, files, round, upheld) {
   // Plan cases the fixer added or changed for these findings are kept through any re-plan (council C5).
   const touched = [...new Set([...git(ctx.workRoot, ['diff', '--name-only', 'HEAD']).stdout.split('\n'), ...git(ctx.workRoot, ['ls-files', '--others', '--exclude-standard']).stdout.split('\n')].filter(Boolean))];
   const fixedIds = Array.isArray(result?.fixed) && result.fixed.length ? result.fixed.map(String) : upheld.map((f) => f.id);
-  const kept = stampKeptCases(touched, fixedIds, { read: (f) => (fs.existsSync(path.join(ctx.workRoot, f)) ? fs.readFileSync(path.join(ctx.workRoot, f), 'utf8') : null), write: (f, t) => fs.writeFileSync(path.join(ctx.workRoot, f), t) });
+  const kept = stampKeptCases(touched, fixedIds, { read: (f) => (fs.existsSync(path.join(ctx.workRoot, f)) ? fs.readFileSync(path.join(ctx.workRoot, f), 'utf8') : null), write: (f, t) => writeText(path.join(ctx.workRoot, f), t) });
   if (kept.length) log(`round ${round}: ${kept.length} plan case(s) the fixer wrote are kept for ${fixedIds.join(', ')}`);
   let commit = commitFixes(config, ctx, `${ctx.story.key}: PR check round ${round} fixes\n\nFixes upheld PR check findings: ${upheld.map((f) => f.id).join(', ')}`);
   // The fixer's change ends with the checks every implementation change gets (dogfood C4): no formatting-only hunks on
@@ -561,7 +562,7 @@ async function critiques(config, ctx, files, round, lenses, previousUpheld) {
 // The council's findings of a round, merged (council.mjs mergeCouncil), as debate findings: one per defect, on the lens
 // of the first member that raised it, with every member's evidence. Minor, outvoted and protected findings go in as
 // minor; findings inside a region an upheld rewrite deletes are left out (the rewrite replaces them).
-function councilFindings(ctx, round, lenses, reviews, previousUpheld, used, lateMembers = [], carried = {}) {
+async function councilFindings(config, ctx, round, lenses, reviews, previousUpheld, used, lateMembers = [], carried = {}) {
   const results = lateMembers.map((member) => ({ member, status: 'late', reason: 'not waited for (non-blocking)' }));
   // A member carried over (carryOver) counts with its last score and nothing new, and the record says so.
   for (const [lens, score] of Object.entries(carried)) {
@@ -585,7 +586,21 @@ function councilFindings(ctx, round, lenses, reviews, previousUpheld, used, late
   });
   const keys = (ctx.tickets ?? [ctx.story]).filter(Boolean).map((t) => t.key);
   const cases = keys.flatMap((k) => planCases(ctx.workRoot, ctx.plansDir, k));
-  const merged = mergeCouncil(ctx.council, results, { protect: (f) => testProtection(f, { keys, cases }), feedback: ctx.councilLate?.take() ?? [], changed: changedSince(ctx.workRoot, ctx.baseRev, git), earlier: ctx.councilMemory ?? null, root: ctx.workRoot });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys, cases }), feedback: ctx.councilLate?.take() ?? [], changed: changedSince(ctx.workRoot, ctx.baseRev, git), earlier: ctx.councilMemory ?? null, root: ctx.workRoot };
+  // A scope objection on lines declared for an earlier upheld finding stands unless every blocking member accepts, asked
+  // fresh and read-only, that the finding's agreed fix requires it (council.mjs adjudicate).
+  const merged = await adjudicate({
+    config,
+    council: ctx.council,
+    merged: mergeCouncil(ctx.council, results, mergeOpts),
+    remerge: (adjudications) => mergeCouncil(ctx.council, results, { ...mergeOpts, adjudications }),
+    run: (m, task) => runAgentAsync(config, { name: lensInfo(ctx, m.name).agent, task, mode: 'read', model: m.model ?? null, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort ?? null, cmd: m.cli === 'custom' ? m.cmd : null, cwd: ctx.workRoot, timeoutSec: config.prCheck.timeoutSec, usage: { stage: 'pr-check', story: ctx.story?.key ?? null, round, step: `adjudication-${m.name}` }, extraEnv: memberRunEnv(m) }),
+    stage: 'prCheck',
+    story: ctx.story?.key ?? 'pr',
+    round,
+    retries: config.agent.resultParseRetries,
+    readOnly: { cwd: ctx.workRoot, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+  });
   const findings = [];
   let n = 0;
   // Late feedback from a non-blocking member goes into the debate as a minor finding of the first blocking lens (it never
@@ -637,7 +652,7 @@ export async function runRound(config, ctx, round, previousUpheld, { carry = {} 
     files.analysis = null;
   }
   ctx.diff = prDiff(config, ctx);
-  fs.writeFileSync(path.join(files.roundAbs, 'diff.patch'), `${ctx.diff.stat}\n${ctx.diff.diff}`);
+  writeText(path.join(files.roundAbs, 'diff.patch'), `${ctx.diff.stat}\n${ctx.diff.diff}`);
   const seated = activeLenses(ctx).filter((l) => !(l in carry));
   log(`round ${round}: critics ${seated.join(', ')}${Object.keys(carry).length ? `; carried over: ${Object.keys(carry).join(', ')} (nothing they judge changed)` : ''}`);
 
@@ -654,7 +669,7 @@ export async function runRound(config, ctx, round, previousUpheld, { carry = {} 
   const used = new Set();
   const earlierIds = new Set(previousUpheld.map((f) => f.id));
   // A council: the members' findings are merged (same defect once, every member's evidence, blockOn) before the debate.
-  const council = ctx.council ? councilFindings(ctx, round, lenses, reviews, previousUpheld, used, all.lenses.filter((l, i) => all.reviews[i] === LATE).map((l) => lensInfo(ctx, l).member), carry) : null;
+  const council = ctx.council ? await councilFindings(config, ctx, round, lenses, reviews, previousUpheld, used, all.lenses.filter((l, i) => all.reviews[i] === LATE).map((l) => lensInfo(ctx, l).member), carry) : null;
   if (council) {
     findings.push(...council.findings);
     failedLenses.push(...council.failedLenses);

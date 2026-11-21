@@ -1,3 +1,4 @@
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fsReader } from '../../pipeline/lib/git.mjs';
@@ -136,7 +137,7 @@ export function stampIndex(config, story, fields) {
     ...fields,
   };
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, stringifyFrontMatter(next, body));
+  writeText(file, stringifyFrontMatter(next, body));
 }
 
 // Agents often write table delimiter rows without spaces (`|----|----|`), which markdownlint's MD060
@@ -154,7 +155,7 @@ export function tidyPlan(config, story) {
   for (const { file, text } of files) {
     const next = tidyTableDelimiters(text);
     if (next === text) continue;
-    fs.writeFileSync(path.join(config.root, file), next);
+    writeText(path.join(config.root, file), next);
     changed = true;
   }
   if (changed && verified) {

@@ -1,3 +1,4 @@
+import { installOutputRedaction, redact, redactValue } from './redact.mjs';
 import crypto, { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -9,11 +10,15 @@ export const sha = (text, length = 12) => createHash('sha256').update(text).dige
 
 export const nowIso = () => new Date().toISOString();
 
+// Console output of every harness process passes the redaction boundary (redact.mjs).
+if (process.env.FACTORY_OUTPUT_REDACTION !== '0') installOutputRedaction();
+
 let logTag = 'pipeline';
 export const setLogTag = (tag) => (logTag = tag);
 
+// Every log line passes the redaction boundary (redact.mjs).
 export function log(...args) {
-  process.stderr.write(`[${logTag}] ${args.join(' ')}\n`);
+  process.stderr.write(`[${logTag}] ${redact(args.join(' '))}\n`);
 }
 
 // Windows cannot spawn an extensionless shebang script (a repository wrapper script): run it through bash.
@@ -205,7 +210,7 @@ export function readJson(file, fallback) {
 export function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  fs.writeFileSync(tmp, `${JSON.stringify(redactValue(value), null, 2)}\n`);
   fs.renameSync(tmp, file);
 }
 
@@ -213,7 +218,7 @@ export function appendJsonl(file, records) {
   const list = Array.isArray(records) ? records : [records];
   if (list.length === 0) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, list.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  fs.appendFileSync(file, list.map((r) => JSON.stringify(redactValue(r))).join('\n') + '\n');
 }
 
 export function readJsonl(file) {
@@ -320,6 +325,24 @@ export function extractResult(text, marker = 'AGENT_RESULT') {
 
 export function tail(text, chars = 4000) {
   return text.length > chars ? `…${text.slice(-chars)}` : text;
+}
+
+// The record of a child step the harness ran: the result the step wrote itself (a file it was given) and, whenever it
+// failed or wrote none, why: its own error message, else the last error line of its stderr, plus the tails of stderr
+// and stdout (redacted). A failed step's output is never dropped, and a line some other tool printed on stdout is never
+// mistaken for the step's result.
+export function stepRecord(r, result = null, { chars = 2000 } = {}) {
+  const exit = r?.status ?? null;
+  const record = { exit, ...(result && typeof result === 'object' ? result : {}) };
+  if (exit === 0 && result) return record;
+  const stderr = String(r?.stderr ?? '');
+  const stdout = String(r?.stdout ?? '');
+  const lines = stderr.split('\n').map((l) => l.trim()).filter(Boolean);
+  const errorLine = [...lines].reverse().find((l) => /error|failed|cannot|not a function|exception|refused|denied/i.test(l)) ?? lines.at(-1) ?? '';
+  record.error = redact(String(result?.error ?? (errorLine || (r?.timedOut ? 'timed out' : `exit ${exit} with no output`))));
+  record.stderrTail = redact(tail(stderr, chars));
+  record.stdoutTail = redact(tail(stdout, Math.floor(chars / 2)));
+  return record;
 }
 
 export function isPidAlive(pid) {

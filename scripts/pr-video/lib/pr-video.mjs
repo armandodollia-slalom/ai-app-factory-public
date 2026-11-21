@@ -67,7 +67,7 @@ const blobUrl = (repo, branch, file) => `https://github.com/${repo}/blob/${branc
 
 // fileUrl(file, { raw }): the code host's link to a file on the storage branch (host.fileUrl); GitHub's
 // blob URL by default.
-export function renderSection({ repo, branch, pr, headSha, runUrl, specs = [], videos = [], note, fileUrl = null, folder = null }) {
+export function renderSection({ repo, branch, pr, headSha, runUrl, specs = [], videos = [], note, fileUrl = null, folder = null, footer = null }) {
   const link = (file, raw = false) => (fileUrl ? fileUrl(file, { raw }) : `${blobUrl(repo, branch, file)}${raw ? '?raw=true' : ''}`);
   const lines = ['## Demo video', ''];
   const source = `${headSha ? `commit ${headSha.slice(0, 7)}` : 'this PR'}${runUrl ? `, [workflow run](${runUrl})` : ''}`;
@@ -76,14 +76,50 @@ export function renderSection({ repo, branch, pr, headSha, runUrl, specs = [], v
     return lines.join('\n');
   }
   lines.push(`Recorded on the test stack from the e2e specs this PR changes: ${specs.map((s) => `\`${s}\``).join(', ')} (${source}).`);
-  for (const v of videos) {
-    lines.push('', `### ${v.ok ? '✅' : '❌ (failed)'} ${v.title}`, '');
-    const dir = folder ?? prFolder(pr);
+  const dir = folder ?? prFolder(pr);
+  const entry = (v, level) => {
+    const out = ['', `${level} ${v.ok ? '✅' : '❌ (failed)'} ${v.title}`, ''];
+    // A video the secret gate held back: never linked; the PR says why (fail closed).
+    if (v.blocked) return [...out, `Not published: ${v.blocked} · \`${v.file}\``];
     const video = link(`${dir}/${v.video}`);
-    if (v.preview) lines.push(`[![${v.title}](${link(`${dir}/${v.preview}`, true)})](${video})`, '');
-    lines.push(`[Full video (WebM)](${video}) · \`${v.file}\``);
+    if (v.preview) out.push(`[![${v.title}](${link(`${dir}/${v.preview}`, true)})](${video})`, '');
+    const facts = [v.durationSec ? `${v.durationSec} s` : null, v.narration ? `narrated (${v.narration})` : v.narrationWhyOff ? `silent with subtitles: ${v.narrationWhyOff}` : null, v.vtt ? `[subtitles (VTT)](${link(`${dir}/${v.vtt}`)})` : null].filter(Boolean);
+    out.push(`[Full video (WebM)](${video}) · \`${v.file}\`${facts.length ? ` · ${facts.join(' · ')}` : ''}`);
+    return out;
+  };
+  // Headline demos first (narrated from the demo-narrator's script), then the other cases' videos as evidence, collapsed.
+  // A UI bug's pair first, under its ticket: "Before the fix" (or why it could not be shown), then "After the fix".
+  const pairs = [...new Set(videos.filter((v) => v.pair).map((v) => v.pair.key))];
+  for (const k of pairs) {
+    const mine = videos.filter((v) => v.pair?.key === k);
+    lines.push('', `### ${k}${mine[0].pair.title ? `: ${mine[0].pair.title}` : ''}`);
+    for (const side of ['before', 'after']) {
+      const v = mine.find((x) => x.pair.side === side);
+      const label = side === 'before' ? 'Before the fix' : 'After the fix';
+      if (!v) continue;
+      if (v.missing) {
+        lines.push('', `#### ${label}`, '', `Not shown: ${v.missing}`);
+        continue;
+      }
+      lines.push(...entry({ ...v, title: label }, '####'));
+    }
   }
-  lines.push('', `<sub>Updated by \`${workflowFile()}\` on every push; edits inside this section are overwritten.</sub>`);
+  const rest = videos.filter((v) => !v.pair);
+  const marked = videos.some((v) => v.headline != null);
+  const headline = marked ? rest.filter((v) => v.headline) : rest;
+  const evidence = marked ? rest.filter((v) => !v.headline) : [];
+  for (const v of headline) lines.push(...entry(v, '###'));
+  const fallback = [...videos.filter((v) => v.pair && !v.missing), ...headline].filter((v) => v.narrator?.by === 'automatic' && v.narrator?.why);
+  if (fallback.length) {
+    lines.push('', '**Automatic narration** (no script by the narrator agent):', '');
+    for (const v of fallback) lines.push(`- ${v.title}: ${v.narrator.why}`);
+  }
+  if (evidence.length) {
+    lines.push('', `<details><summary>Evidence: ${evidence.length} more test-case video(s), subtitled with the automatic lines</summary>`);
+    for (const v of evidence) lines.push(...entry(v, '####'));
+    lines.push('', '</details>');
+  }
+  lines.push('', `<sub>${footer ?? `Updated by \`${workflowFile()}\` on every push`}; edits inside this section are overwritten.</sub>`);
   return lines.join('\n');
 }
 
@@ -91,14 +127,14 @@ export function renderSection({ repo, branch, pr, headSha, runUrl, specs = [], v
 // pr-demo-video.yml, while repositories install it as factory-pr-demo-video.yml). GitHub Actions gives its path.
 export const workflowFile = (env = process.env) => /(\.github\/workflows\/[^@]+)@/.exec(env.GITHUB_WORKFLOW_REF ?? '')?.[1] ?? '.github/workflows/factory-pr-demo-video.yml';
 
-const slug = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100) || 'video';
+export const slug = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100) || 'video';
 
 // Animated preview shown inline in the PR. Skipped (link only) without ffmpeg or when it gets too big.
-function makePreview(video, out) {
-  if (run('ffmpeg', ['-version']).status !== 0) return false;
+export function makePreview(video, out, ffmpeg = 'ffmpeg') {
+  if (run(ffmpeg, ['-version']).status !== 0) return false;
   for (const { fps, width } of GIF_ATTEMPTS) {
     const filter = `fps=${fps},scale=${width}:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer`;
-    const result = run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', video, '-vf', filter, '-loop', '0', out]);
+    const result = run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', video, '-vf', filter, '-loop', '0', out]);
     if (result.status === 0 && fs.existsSync(out) && fs.statSync(out).size <= GIF_MAX_BYTES) return true;
     log(`preview ${path.basename(out)} at ${fps} fps/${width}px ${result.status === 0 ? 'is too large' : `failed: ${result.stderr.trim()}`}`);
   }
@@ -165,6 +201,15 @@ export function readPrBody(target, pr) {
   const p = hostOf(target).pr.get(pr);
   if (!p) throw new Error(`pull request ${pr} not found`);
   return String(p.body ?? '');
+}
+
+// The body of an already-open PR with the demo video and API sections the local step stored for its head (`media`:
+// preOpenMedia's answer): each section replaced in place, or added once; a section with nothing stored is left as it is.
+export function embedSections(body, media, apiMarkers) {
+  let out = String(body ?? '');
+  if (media?.video) out = upsertSection(out, media.video);
+  if (media?.api) out = upsertSection(out, media.api, apiMarkers);
+  return out;
 }
 
 // Writes `section` into the PR body between `markers` (default: the demo video section);

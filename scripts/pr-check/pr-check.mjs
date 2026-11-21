@@ -2,6 +2,7 @@
 // PR check: an adversarial review loop that scores a pull request against its story (acceptance
 // criteria, flow, UI design, code style, video evidence) and fixes it until it scores 10/10.
 // See docs/ai-pipeline/pr-check.md.
+import { writeText, appendText } from '../pipeline/lib/redact.mjs';
 import { hostFor } from '../pipeline/lib/hosts/index.mjs';
 import { ciTarget } from '../pipeline/lib/ci/index.mjs';
 import { trackerFor } from '../board/lib/trackers/index.mjs';
@@ -20,7 +21,7 @@ import { acquireLock, appendJsonl, log, lockHolder, nowIso, readJson, readJsonl,
 import { renderMockups } from '../implement/lib/mockups.mjs';
 import { isClean, removeCheckout, resolveTarget } from './lib/context.mjs';
 import { commentOnPullRequest } from './lib/github.mjs';
-import { hookRun, hookStop, recoverHookRuns, resetPrCheck, sessionContext } from './lib/hooks.mjs';
+import { hookRun, hookStop, recheck, recoverHookRuns, resetPrCheck, sessionContext } from './lib/hooks.mjs';
 import { CHECKS_FILE, LENSES, runPrCheck } from './lib/loop.mjs';
 import { renderReport } from './lib/report.mjs';
 import { interruptedRuns, readProgress, resumeRuns, writeProgress } from './lib/runs.mjs';
@@ -109,7 +110,7 @@ async function executeCheck(config, flags) {
     }
     const contextDir = path.join(ctx.runDir, 'context');
     fs.mkdirSync(contextDir, { recursive: true });
-    fs.writeFileSync(path.join(contextDir, 'pr.md'), ctx.pr ? `# #${ctx.pr.number} ${ctx.pr.title}\n\n${ctx.pr.url}\n\n${ctx.pr.body || '(no description)'}\n` : `No pull request: checking branch ${ctx.branch}.\n`);
+    writeText(path.join(contextDir, 'pr.md'), ctx.pr ? `# #${ctx.pr.number} ${ctx.pr.title}\n\n${ctx.pr.url}\n\n${ctx.pr.body || '(no description)'}\n` : `No pull request: checking branch ${ctx.branch}.\n`);
 
     const values = typeof flags.videos === 'string' ? flags.videos.split(',').map((v) => v.trim()).filter(Boolean) : [];
     ctx.video = await extractVideoFrames(config, ctx.runDir, videoSources(config, { values, prBody: ctx.pr?.body ?? '', caseIds: (ctx.tickets ?? [ctx.story]).filter(Boolean).map((t) => `tc-${t.key}-`) }), ctx.workRoot);
@@ -284,7 +285,7 @@ async function executeCheck(config, flags) {
 
     const out = resultDir(config, ctx.id);
     fs.mkdirSync(out, { recursive: true });
-    fs.writeFileSync(path.join(out, 'report.md'), report);
+    writeText(path.join(out, 'report.md'), report);
     const summary = {
       id: ctx.id,
       story: ctx.story.key,
@@ -296,7 +297,8 @@ async function executeCheck(config, flags) {
       lensScores: last?.lensScores ?? {},
       rounds: result.history.length,
       reason: result.reason,
-      openFindings: last?.upheld.map(({ id, lens, severity, title }) => ({ id, lens, severity, title })) ?? [],
+      // What routes a finding (implement's return to implementation or to test automation) travels with it.
+      openFindings: last?.upheld.map(({ id, lens, severity, title, file, fix, action, resolves }) => ({ id, lens, severity, title, ...(file ? { file } : {}), ...(fix ? { fix: String(fix).slice(0, 600) } : {}), ...(action ? { action } : {}), ...(resolves ? { resolves } : {}) })) ?? [],
       upheldFindings: last?.upheld ?? [],
       // Findings upheld in an earlier round and fixed since (the report's "Resolved during the loop"), so the PR
       // body does not list them as follow-ups.
@@ -438,7 +440,7 @@ function updateStoryNotes(config, ctx, history, commits) {
       const before = fs.readFileSync(t.file, 'utf8');
       const after = withNotesUpdate(before, fixes, commits);
       if (after !== before) {
-        fs.writeFileSync(t.file, after);
+        writeText(t.file, after);
         changed = true;
         log(`${t.key}: Implementation Notes updated with what the PR check fix changed`);
       }
@@ -631,6 +633,12 @@ async function main() {
       return 2;
     }
 
+    case 'recheck': {
+      const bg = recheck(config, requireStory(config, positional[0]));
+      console.log(bg ? `PR check: waiting for the tests to verify, then a new report round (log: ${bg.log}).` : 'PR check: no implementation to check.');
+      return bg ? 0 : 1;
+    }
+
     case 'hook-run': {
       if (typeof flags.hash !== 'string') throw new Error('hook-run needs --hash <impl-hash>');
       return hookRun(config, requireStory(config, positional[0]), flags.hash, executeCheck);
@@ -662,7 +670,7 @@ export function reverifyAfterFixes(config, ctx, deps = {}, { scoped = false } = 
     const r = spawnSync(process.execPath, [fv, ...args], { cwd: ctx.workRoot, env, encoding: 'utf8' });
     try {
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
-      fs.appendFileSync(logFile, `$ feature-verification ${args.join(' ')} (exit ${r.status})\n${r.stdout ?? ''}${r.stderr ?? ''}\n`);
+      appendText(logFile, `$ feature-verification ${args.join(' ')} (exit ${r.status})\n${r.stdout ?? ''}${r.stderr ?? ''}\n`);
     } catch {
       // the log is a record, not a requirement
     }

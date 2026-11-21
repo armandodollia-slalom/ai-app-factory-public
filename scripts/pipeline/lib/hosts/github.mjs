@@ -8,7 +8,7 @@
 // cwd }.
 import { run as runCmd } from '../util.mjs';
 import { HostAuthError, HostError, HostRefusedError } from './errors.mjs';
-import { isContentRefusal } from './refusal.mjs';
+import { httpStatusIn, isContentRefusal } from './refusal.mjs';
 import { ghLogin, loadCredentials } from '../bot.mjs';
 
 export const DEFAULT_URL = 'https://github.com';
@@ -131,13 +131,16 @@ export function createGithubHost(settings, deps = {}) {
     const text = String(r.stderr ?? '').trim().slice(0, 400);
     // The external-call policy's cause (a timeout after its retries) says it best.
     const msg = r.cause && (!text || /timed out/.test(String(r.cause))) ? String(r.cause) : `gh ${args.slice(0, 3).join(' ')} failed: ${text}`;
-    if (/HTTP 401|authentication|gh auth login/i.test(text)) return new HostAuthError(msg, { status: 401 });
+    // The HTTP status the CLI reports, when it reports one (structured from here on; the exit code is not a status).
+    const http = httpStatusIn(text);
+    if (/HTTP 401|authentication|gh auth login/i.test(text) || http === 401) return new HostAuthError(msg, { status: 401 });
     // A content filter on a call that sends text (a PR, an issue, a comment, an edit): a bare 403 with no reason, or a
     // message naming spam or content (hosts/refusal.mjs). A read's 403 stays a permission error.
-    if (/^(pr|issue) (create|comment|edit)$|^api$/.test(args.slice(0, 2).join(' ').replace(/^api .*/, 'api')) && (args[0] !== 'api' || args.some((a) => /^(POST|PATCH|PUT)$/.test(a))) && isContentRefusal({ text })) return new HostRefusedError(msg, { status: 403 });
+    if (/^(pr|issue) (create|comment|edit)$|^api$/.test(args.slice(0, 2).join(' ').replace(/^api .*/, 'api')) && (args[0] !== 'api' || args.some((a) => /^(POST|PATCH|PUT)$/.test(a))) && isContentRefusal({ status: http, text })) return new HostRefusedError(msg, { status: http ?? 403 });
     if (/already exists/i.test(text)) return new HostError(msg, { status: r.status, code: 'exists' });
     if (/HTTP 404|not found|no pull requests? found|could not resolve/i.test(text)) return new HostError(msg, { status: 404, code: 'not-found' });
-    return new HostError(msg, { status: r.status, code: 'cli' });
+    if (http === 429 || /rate.?limit/i.test(text)) return new HostError(msg, { status: http ?? 429, code: 'rate-limit' });
+    return new HostError(msg, { status: http ?? r.status, code: 'cli' });
   };
   const ok = (args, o) => {
     const r = gh(args, o);
@@ -434,7 +437,13 @@ export function githubRest(settings, { env = process.env, fetchImpl = null } = {
   const call = async (method, route, body) => {
     const { fetchWithTimeout } = await import('../external.mjs');
     const response = await (fetchImpl ?? fetchWithTimeout)(`${base}/repos/${settings.repo}${route}`, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body: body ? JSON.stringify(body) : undefined });
-    if (!response.ok) throw new HostError(`GitHub ${method} ${route} failed: ${response.status} ${await response.text()}`, { status: response.status });
+    if (!response.ok) {
+      const text = await response.text();
+      const msg = `GitHub ${method} ${route} failed: ${response.status} ${text}`;
+      // The structured status decides: a content refusal of a text-sending call, else the status as it is.
+      if (body && method !== 'GET' && isContentRefusal({ status: response.status, text })) throw new HostRefusedError(msg, { status: response.status });
+      throw new HostError(msg, { status: response.status, code: response.status === 429 ? 'rate-limit' : 'http' });
+    }
     return response.json();
   };
   return {

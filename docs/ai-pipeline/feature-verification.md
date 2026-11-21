@@ -8,13 +8,14 @@ The stage is run as `factory fv <command>` (`factory feature-verification` is th
 
 ```mermaid
 flowchart LR
-  S[fv plan KEY<br/>or implement run] --> P[test-planner agent<br/>writes or updates the plan]
-  P --> C{Structural<br/>precheck}
-  C -->|fails| P
-  C -->|passes| V[test-plan-verifier<br/>fresh process, read-only]
-  V -->|score below 9, gaps logged| P
-  V -->|9/10 or 10/10| OK[Plan stamped verified<br/>story-sha + plan-sha]
-  P -.->|5 rounds below 9/10| E[Escalation for a human]
+  S["fv plan KEY<br/>or implement run"] --> P["test-planner agent<br/>writes or updates the plan"]
+  RQ["Required cases<br/>PR check or review test gaps"] --> P
+  P --> C{"Structural<br/>precheck"}
+  C -->|"fails"| P
+  C -->|"passes"| V["test-plan-verifier, fresh and read-only,<br/>or a council"]
+  V -->|"score below 9, gaps logged"| P
+  V -->|"9/10 or 10/10,<br/>every required case met"| OK["Plan stamped verified<br/>story-sha + plan-sha"]
+  P -.->|"round limit below 9/10"| E["Escalation for a human"]
 ```
 
 - Output: `.factory/plans/<story-slug>/_index.md` (`plansDir`; the slug is kept in the ticket's metadata) plus one `TC-<KEY>-NN-<slug>.md` per case, covering every happy and sad path. Each case has front matter (`id`, `type` happy or sad, `sad-path` for sad cases, `covers`, `layer`: `unit`, `functional` or `e2e`), a `# <id>: <title>` heading that holds its title, and the sections `Why`, `Preconditions`, `Steps` and `Expected result`. The title is not in the front matter: Markdown linters count a front-matter `title` as a second top-level heading (markdownlint MD025), and the structural check refuses it.
@@ -26,14 +27,15 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  R[review stage approves<br/>the implementation] -->|same Stop hook| A[test-automation agent<br/>background: scenario + tests]
-  A --> T{Deterministic checks<br/>ids, story tags, scenario, tests pass}
-  T -->|fails| A
-  T -->|passes| V[test-automation-verifier<br/>fresh process, read-only]
-  V -->|test gaps| A
-  V -->|case gaps, root_stage plan| P[Workflow 1 plan loop]
+  R["review stage approves<br/>the implementation"] -->|"same Stop hook"| A["test-automation agent<br/>background: scenario + tests"]
+  A --> T{"Deterministic checks<br/>ids, story tags, scenario, tests pass,<br/>static analysis"}
+  T -->|"fails"| A
+  T -->|"passes"| V["test-automation-verifier, fresh and read-only,<br/>or a council"]
+  V -->|"test gaps"| A
+  V -->|"case gaps, root_stage plan"| P["Workflow 1 plan loop"]
   P --> A
-  V -->|9/10 or 10/10| OK[Tests stamped verified]
+  V -->|"gap that needs code"| PB["product bug: back to the implementer"]
+  V -->|"9/10 or 10/10,<br/>every required case met"| OK["Tests stamped verified"]
 ```
 
 1. The implementation agent runs `factory start <KEY>` and, when the line of work is complete, `factory done`.

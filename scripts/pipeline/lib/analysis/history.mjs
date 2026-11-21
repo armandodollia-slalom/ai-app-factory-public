@@ -8,6 +8,7 @@
 //   foldStoryBranch(config, cwd, findings, { branch, base, prOpen, push }) -> { rewritten, pushed, reason, record }
 // The second is the secret decision table's way out for a fake value already pushed on the story's own branch with no
 // PR open (secret-table.mjs): the branch's commits since the base fold into one, and the branch is pushed with a lease.
+import { writeText } from '../redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { git } from '../git.mjs';
@@ -85,7 +86,7 @@ function fold(config, cwd, findings, { branch, base, env = process.env, log = nu
     appendJsonl(metricsFile({ root: cwd, metricsDir: config?.metricsDir ?? '.factory/metrics', stateDir: config?.stateDir ?? '.factory/state' }, REWRITES_METRICS), [record]);
     const dir = path.join(cwd, config?.stateDir ?? '.factory/state', 'analysis-rewrites');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${fresh}.json`), `${JSON.stringify(record, null, 1)}\n`);
+    writeText(path.join(dir, `${fresh}.json`), `${JSON.stringify(record, null, 1)}\n`);
   } catch {
     /* records are best effort; the git reflog keeps the move */
   }

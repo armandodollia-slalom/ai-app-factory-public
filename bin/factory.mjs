@@ -19,6 +19,7 @@ export const TOOLS = {
   'review-gate': 'scripts/review-gate/review-gate.mjs',
   'review-quorum': 'scripts/review-gate/quorum.mjs',
   'pr-video': 'scripts/pr-video/pr-video.mjs',
+  video: 'scripts/pr-video/video.mjs',
   models: 'scripts/models/models.mjs',
   retro: 'scripts/retro/retro.mjs',
   stack: 'scripts/stack/slots.mjs',

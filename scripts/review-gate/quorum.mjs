@@ -9,6 +9,7 @@
 // The PR number may also come from PR_NUMBER, CI_MERGE_REQUEST_IID (GitLab) or
 // SYSTEM_PULLREQUEST_PULLREQUESTID (Azure Pipelines); the repository from host.repo in
 // .factory/config.json, the origin remote, --repo or GITHUB_REPOSITORY (GitHub).
+import { appendText } from '../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { hostFor } from '../pipeline/lib/hosts/index.mjs';
@@ -68,5 +69,5 @@ if (h.capabilities?.labels === false) {
 }
 const result = quorum({ labels, reviews, author: p.author, headSha: p.headSha });
 console.log(`review-quorum: ${result.pass ? 'pass' : 'fail'}: ${result.summary}`);
-if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `### review-quorum: ${result.pass ? 'pass' : 'waiting for approvals'}\n\n${result.summary}\n`);
+if (env.GITHUB_STEP_SUMMARY) appendText(env.GITHUB_STEP_SUMMARY, `### review-quorum: ${result.pass ? 'pass' : 'waiting for approvals'}\n\n${result.summary}\n`);
 process.exit(result.pass ? 0 : 1);

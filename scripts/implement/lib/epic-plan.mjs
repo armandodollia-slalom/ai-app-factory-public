@@ -11,6 +11,16 @@ const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export const EPIC_PLAN_STAGE = 'implement-epic-plan';
 
+// The PR title of a feature epic's group: "<epic>: <group> (<keys>)", never the epic's title twice (a group the
+// orchestrator named after the epic, or a group title that already starts with it, keeps only its own words).
+export function featureGroupTitle(epicTitle, groupTitle, keys) {
+  const flat = (t) => String(t ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const e = flat(epicTitle);
+  const g = flat(groupTitle);
+  const own = !g ? epicTitle : g === e || g.startsWith(`${e} `) || !e ? groupTitle : `${epicTitle}: ${groupTitle}`;
+  return `${own} (${keys.join(', ')})`;
+}
+
 // `epic-promotions` -> `promotions`, the slug of the epic branch and worktree.
 export const epicSlug = (epicKey) =>
   String(epicKey)
@@ -40,11 +50,53 @@ export const isBugTicket = (t) => t?.type === 'bug' || /^BUG-\d+$/i.test(t?.key 
 // How an epic is delivered: "epic" (one branch and one PR) or "groups" (bug epics: the orchestrator
 // groups the tickets into PRs). `grouping` auto picks groups when most tickets are bugs; "ticket" is one
 // PR per ticket without asking the orchestrator; "epic" forces one PR.
-export function deliveryShape(tickets, grouping = 'auto') {
+//
+// A feature epic (not mostly bugs) is split by `prSplit` (implement.epic.prSplit, `--pr-split`): "epic" (default) one PR
+// for the epic; "story" one PR per story; "groups" PRs of stories the orchestrator groups (validated by the harness as
+// bug-epic groups are, at most implement.epic.maxStoriesPerGroup stories each). Its groups are feature units
+// (`feature: true`): feature branches, no bug-fix rating, cross-story journeys verified on one group (journeyGroup).
+export const PR_SPLITS = ['epic', 'story', 'groups'];
+export function deliveryShape(tickets, grouping = 'auto', prSplit = 'epic') {
   if (grouping === 'epic') return { kind: 'epic' };
   if (grouping === 'ticket') return { kind: 'groups', planned: false };
   const bugs = tickets.filter(isBugTicket).length;
-  return bugs > 0 && bugs * 2 > tickets.length ? { kind: 'groups', planned: true } : { kind: 'epic' };
+  if (bugs > 0 && bugs * 2 > tickets.length) return { kind: 'groups', planned: true };
+  if (prSplit === 'story') return { kind: 'groups', planned: false, feature: true };
+  if (prSplit === 'groups') return { kind: 'groups', planned: true, feature: true };
+  return { kind: 'epic' };
+}
+
+// The group that verifies the epic's cross-story journeys when a feature epic is split into PRs: the last group in
+// dependency order that holds a journey story; it is stacked on every other group holding one (its branch then has
+// every story a journey crosses), so all journeys are planned, automated and checked once, on one branch, under the
+// epic's test key. Returns { id, deps: Map(groupId -> added deps) } or null when there is no journey.
+export function journeyGroup(groups, deps, journeys) {
+  const inJourney = new Set((journeys ?? []).flatMap((j) => j.stories));
+  if (!inJourney.size) return null;
+  const holding = groups.filter((g) => g.tickets.some((k) => inJourney.has(k))).map((g) => g.id);
+  if (!holding.length) return null;
+  // Dependency order: a group after everything it depends on (groupDeps has no cycle).
+  const order = [];
+  const seen = new Set();
+  const visit = (id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    for (const d of deps.get(id) ?? []) visit(d);
+    order.push(id);
+  };
+  for (const g of groups) visit(g.id);
+  const closing = [...order].reverse().find((id) => holding.includes(id));
+  const reach = new Set();
+  const walk = (id) => {
+    for (const d of deps.get(id) ?? []) {
+      if (reach.has(d)) continue;
+      reach.add(d);
+      walk(d);
+    }
+  };
+  walk(closing);
+  const added = holding.filter((id) => id !== closing && !reach.has(id));
+  return { id: closing, added };
 }
 
 // One PR per ticket, in Blocked-by order: the fallback when the orchestrator's grouping stays invalid,
@@ -57,7 +109,7 @@ const prerequisites = (story, note) => [...new Set([...(story?.blockedBy ?? []),
 // Validates the orchestrator's PR groups: every ticket in exactly one group, at most `maxPerGroup`
 // tickets per group (only when a positive cap is configured; none by default), and a ticket's Blocked-by
 // tickets (and the note's dependsOn) in the same group or an earlier one.
-export function validateGroups(raw, { stories, maxPerGroup = null, note = null }) {
+export function validateGroups(raw, { stories, maxPerGroup = null, note = null, capName = 'maxBugsPerGroup' }) {
   const errors = [];
   const known = new Map(stories.map((s) => [s.key, s]));
   const seen = new Map();
@@ -71,7 +123,7 @@ export function validateGroups(raw, { stories, maxPerGroup = null, note = null }
     ids.add(id);
     const tickets = strings(g?.tickets).map((k) => k.toUpperCase());
     if (!tickets.length) errors.push(`prGroups.${id}: no tickets`);
-    if (maxPerGroup > 0 && tickets.length > maxPerGroup) errors.push(`prGroups.${id}: ${tickets.length} tickets, more than maxBugsPerGroup (${maxPerGroup}); split it`);
+    if (maxPerGroup > 0 && tickets.length > maxPerGroup) errors.push(`prGroups.${id}: ${tickets.length} tickets, more than ${capName} (${maxPerGroup}); split it`);
     for (const k of tickets) {
       if (!known.has(k)) errors.push(`prGroups.${id}: "${k}" is not a ticket of this epic`);
       else if (seen.has(k)) errors.push(`prGroups: ${k} is in both ${seen.get(k)} and ${id}; every ticket belongs to exactly one group`);
@@ -149,20 +201,34 @@ export const noteSchema = `{
 }`;
 
 // The orchestrator's task in EPIC PLAN mode (read mode, every ticket of the epic inline).
-export function epicPlanTask({ epic, stories, mockups = [], errors = null, groups = false, maxPerGroup = null }) {
+export function epicPlanTask({ epic, stories, mockups = [], errors = null, groups = false, maxPerGroup = null, featureGroups = false }) {
   const lines = [
     `Plan epic ${epic.key}: ${epic.title}`,
     '',
     'You are the orchestrator, running headless under `pipeline implement` in EPIC PLAN mode: read the epic, every story of it and the code (graphify first), then write the epic design note. Do not edit files.',
     '',
-    'The epic is delivered as ONE branch: each story runs the usual flow (your story plan, verifier pairs, architecture review, feature verification) on a story branch from the epic branch, and is merged into the epic branch once its tests verify. Every story orchestrator gets this note, so decide once what the stories share:',
+    featureGroups ? "Each story runs the usual flow (your story plan, verifier pairs, architecture review, feature verification) on a story branch from its group's branch, and is merged into it once its tests verify. Every story orchestrator gets this note, so decide once what the stories share:" : 'The epic is delivered as ONE branch: each story runs the usual flow (your story plan, verifier pairs, architecture review, feature verification) on a story branch from the epic branch, and is merged into the epic branch once its tests verify. Every story orchestrator gets this note, so decide once what the stories share:',
     '- shared contracts (API routes, DTOs, interfaces, tables), migrations, components and integration events, each with ONE owner (a story key, or `foundation`);',
     '- an optional **foundation**: shared groundwork several stories need first (a migration, a shared DTO, a common component). It runs before any story, implemented by you and checked by a verifier. Leave it null when the stories do not share groundwork; keep it small;',
     '- per story, the files it will change (`owns` globs). Stories whose owns overlap never run at the same time; dependsOn adds ordering beyond the stories\' Blocked by lines;',
     '- the build order, and the cross-story user **journeys** (a user path that crosses two or more stories) that the epic-level end-to-end tests will cover.',
     '',
     'Rules the harness enforces: `stories` uses only the keys below; foundation `owns` is non-empty when there is a foundation; journey ids are unique [a-z0-9-] and name only keys below; no dependency cycles.',
-    ...(groups
+    ...(!groups && featureGroups
+      ? [
+          '',
+          'This feature epic is **delivered as one PR per story**: each story gets its own branch from the base (stacked on the branches of the stories it depends on) and its own PR. `foundation` must be null: shared groundwork belongs to the first story that needs it. Cross-story journeys are verified on ONE story\'s PR, the last one (in dependency order) of the stories they cross; the harness stacks it on the others.',
+        ]
+      : groups && featureGroups
+      ? [
+          '',
+          'This feature epic is **delivered as several PRs**, grouped by you (`prGroups`): each group gets its own branch from the base, its stories run the usual per-story flow and merge into it, and the group gets one PR. Guidance:',
+          '- group stories that build on each other or change the same service or screens, so a reviewer reads one coherent change; a story whose Blocked-by or dependsOn story is in another group goes in a later group, which is stacked on that group\'s branch and waits for its PR;',
+          `- keep each PR reviewable${maxPerGroup > 0 ? `; the harness allows at most ${maxPerGroup} stories per group` : ''}; a single-story group is fine; keep a risky story (security, data migration) apart;`,
+          '- every story in exactly one group. `foundation` must be null: shared groundwork goes into the first group that needs it, owned by one of its stories;',
+          '- cross-story journeys are verified on ONE group, the last one (in dependency order) holding a journey story; the harness stacks it on the other groups that hold journey stories, so list only journeys a user really takes across stories.',
+        ]
+      : groups
       ? [
           '',
           'This is a **bug epic**: its tickets are not delivered as one PR. Decide which bug tickets ship together as one PR (`prGroups`); each group gets its own branch from the base, its tickets run the usual per-ticket flow and merge into it, and the group gets one PR. Guidance:',
@@ -192,7 +258,7 @@ const arr = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object
 
 // Validates the design note against the epic's stories. Returns { ok, note, errors }; a valid note is
 // normalized (every story present, unknown fields dropped).
-export function validateNote(raw, { keys, groups = false, stories: tickets = null, maxPerGroup = null }) {
+export function validateNote(raw, { keys, groups = false, stories: tickets = null, maxPerGroup = null, featureGroups = false }) {
   const errors = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, errors: ['no design note found: end your reply with `AGENT_RESULT: <note JSON on one line>`'] };
   const known = new Set(keys);
@@ -214,6 +280,8 @@ export function validateNote(raw, { keys, groups = false, stories: tickets = nul
     if (!foundation.goal) errors.push('foundation.goal is required (or set foundation to null)');
     if (!foundation.owns.length) errors.push('foundation.owns needs at least one glob (or set foundation to null)');
     if (foundation.owns.some((g) => g === '**' || g === '*' || g.startsWith('/') || g.includes('..'))) errors.push('foundation.owns must be relative globs inside the repo, not the whole repo');
+    // Split into PRs, there is no epic branch for a foundation to land on before the groups.
+    if (featureGroups) errors.push('foundation must be null when the epic is split into PRs: put shared groundwork in the first group that needs it, owned by one of its stories');
   }
   const ids = new Set();
   const journeys = [];
@@ -247,7 +315,7 @@ export function validateNote(raw, { keys, groups = false, stories: tickets = nul
   // back to one PR per ticket instead of failing the epic.
   let groupErrors = [];
   if (groups) {
-    const g = validateGroups(raw.prGroups, { stories: tickets ?? keys.map((key) => ({ key, blockedBy: [] })), maxPerGroup, note });
+    const g = validateGroups(raw.prGroups, { stories: tickets ?? keys.map((key) => ({ key, blockedBy: [] })), maxPerGroup, note, capName: featureGroups ? 'implement.epic.maxStoriesPerGroup' : 'maxBugsPerGroup' });
     note.prGroups = g.groups;
     groupErrors = g.errors;
   }
@@ -415,7 +483,7 @@ export function epicPrBody({ epic, branch, stories, results, fv = null, prChecks
   const side = [...new Set(Object.values(prChecks ?? {}).flatMap((p) => p?.sideEffects ?? []))];
   if (side.length) lines.push(sideEffectsSection(side), '');
   if (noteFile) lines.push(`The epic design note is in \`${noteFile}\` on the runner.`, '');
-  lines.push('Each story passed the architecture review and has a verified test plan and automated tests. The demo video of the changed e2e specs is added below by the PR demo video workflow once it has recorded them.', '');
+  lines.push('Each story passed the architecture review and has a verified test plan and automated tests. The demo video of the changed e2e specs is added below by the local demo-video step before the PR opens.', '');
   const closes = stories.filter((s) => s.number).map((s) => `Closes #${s.number}`);
   if (closes.length) lines.push(...closes, '');
   if (epic.number) lines.push(`Part of #${epic.number}`);

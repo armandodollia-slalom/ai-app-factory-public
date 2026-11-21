@@ -2,6 +2,8 @@
 // with its `feature-verification / check` red). The gate's own approval check (`review-quorum`) is not CI and is not
 // waited for. A red check goes back through the fixing loop once, as a finding with its log; still red, the run says
 // so and does not call the PR delivered. Checks still running when the wait ends are reported as pending.
+import { gatePushedRecords, pushBase } from '../../pipeline/lib/record-gate.mjs';
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -172,7 +174,7 @@ export async function ciGate({ ciOptions = {}, fixTimeoutSec = null, fixRounds =
   }
   log(`${ci.state === 'flaky' ? 'CI passed only with retries' : 'CI is red'} on ${pr} (${ci.failing.join(', ')}); one fixing round on the failures`);
   fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-  fs.writeFileSync(seedFile, JSON.stringify({ score: 6, lensScores: {}, upheldFindings: ciFindings(gh, repo, pr, ci.failing, { branch }) }, null, 2));
+  writeText(seedFile, JSON.stringify({ score: 6, lensScores: {}, upheldFindings: ciFindings(gh, repo, pr, ci.failing, { branch }) }, null, 2));
   // The fix round knows its PR (council C7, live #120): what it changed goes into the PR body's "Changed by the PR check"
   // section, the ticket's notes and the PR's side effects, not only onto the branch.
   const prNumber = String(pr ?? '').match(/(?:\/pull\/)?(\d+)\/?$/)?.[1];
@@ -222,6 +224,8 @@ function defaultResolveDirty(cwd, branch, base) {
     const m = mergeLatestBase(cwd, base);
     if (m.conflict) return { merged: false, reason: `merging ${base} conflicts in ${(m.files ?? []).join(', ')}` };
     if (!m.merged) return { merged: Boolean(m.upToDate), reason: m.error ?? null };
+    const from = pushBase(cwd, branch);
+    if (from) gatePushedRecords(cwd, from);
     const p = runCmd('git', ['push', '-q', 'origin', `HEAD:${branch}`], { cwd });
     return p.status === 0 ? { merged: true } : { merged: false, reason: `push failed: ${String(p.stderr ?? '').trim().split('\n').pop()}` };
   };

@@ -1,9 +1,11 @@
 import { raiseUserErrors } from '../../pipeline/lib/user-errors.mjs';
+import { resolvesOf } from '../../pipeline/lib/finding-route.mjs';
+import { addRequired } from '../../feature-verification/lib/required.mjs';
 import { evidenceText, readReport } from '../../pipeline/lib/analysis/report.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
-import { changedSince, contestedText, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, councilActionsText, councilFor, memberRunEnv, guardProtectedTests, protectedTestFinding, runDetachedMember, takeLate, councilRounds, disputesFor, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection } from '../../pipeline/lib/council.mjs';
+import { changedSince, contestedText, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, councilActionsText, councilFor, memberRunEnv, guardProtectedTests, protectedTestFinding, runDetachedMember, takeLate, councilRounds, disputesFor, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { decisionsBlock, readDecisions } from '../../pipeline/lib/human-decisions.mjs';
 import { git, implChanges, implDiff, mergeBase } from '../../pipeline/lib/git.mjs';
@@ -147,7 +149,8 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   const opts = (m, task) => ({ name: 'architecture-reviewer', mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.review.timeoutSec, task, extraEnv: memberRunEnv(m), usage: { stage: 'review', story: story.key, round, step: m.name } });
   // The detached job file holds the member's env as configured (`${NAME}` references unexpanded): the runner expands it,
   // so no value read from the environment is ever written to disk.
-  const call = runMember ?? ((m, task) => (m.blocking ? runAgentAsync(config, opts(m, task)) : runDetachedMember({ root: config.root, stageDir: 'review', dir: lateDir, round, member: m, run: { ...opts(m, task), extraEnv: { PIPELINE_COUNCIL_MEMBER: m.name } } })));
+  // A follow-up question to a member (its `resolves`) runs attached: it is not a round's result file.
+  const call = runMember ?? ((m, task, o) => (m.blocking || o?.purpose ? runAgentAsync(config, opts(m, task)) : runDetachedMember({ root: config.root, stageDir: 'review', dir: lateDir, round, member: m, run: { ...opts(m, task), extraEnv: { PIPELINE_COUNCIL_MEMBER: m.name } } })));
   const parse = (output) => {
     const raw = extractResult(output);
     if (!raw || !['APPROVED', 'CHANGES_REQUESTED'].includes(raw.verdict)) return null;
@@ -170,7 +173,21 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   });
   // A detached member's result used in this round is consumed here; a late one stays for the next round.
   for (const r of out.results) if (r.res?.resultFile) fs.rmSync(r.res.resultFile, { force: true });
-  const merged = mergeCouncil(council, out.results, { protect: (f) => testProtection(f, { keys: [story.key], cases: planCases(config.root, config.plansDir, story.key) }), violation: out.violation, changed: changedSince(config.root, mergeBase(config.root, config.baseRef), git), feedback, earlier: memory, root: config.root });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases: planCases(config.root, config.plansDir, story.key) }), violation: out.violation, changed: changedSince(config.root, mergeBase(config.root, config.baseRef), git), feedback, earlier: memory, root: config.root };
+  // A scope objection on lines declared for an earlier upheld finding stands unless every blocking member accepts, asked
+  // fresh, that the finding's agreed fix requires it (council.mjs adjudicate).
+  const merged = await adjudicate({
+    config,
+    council,
+    merged: mergeCouncil(council, out.results, mergeOpts),
+    remerge: (adjudications) => mergeCouncil(council, out.results, { ...mergeOpts, adjudications }),
+    run: runMember ?? ((m, task) => runAgentAsync(config, { ...opts(m, task), usage: { stage: 'review', story: story.key, round, step: `adjudication-${m.name}` } })),
+    stage: 'review',
+    story: story.key,
+    round,
+    retries: config.agent.resultParseRetries,
+    readOnly: { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+  });
   recordCouncilRound(config, { stage: 'review', story: story.key, round, council, merged });
   if (merged.error) return { verdict: 'ERROR', findings: [], summary: `architecture review council: ${merged.error}`, council: merged };
   nameFindings(merged.findings, `review-r${round}`);
@@ -179,7 +196,9 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   if (!merged.pass && !merged.findings.length) return { verdict: 'ERROR', findings: [], summary: `architecture review council gave no verdict: ${merged.summary}`, council: merged };
   const lifted = raiseUserErrors(all, { to: 'blocking' });
   const ruled = applyReviewDisputes(config, story.key, { verdict: merged.pass ? 'APPROVED' : 'CHANGES_REQUESTED', findings: lifted.findings, disputes: merged.disputes });
-  const findings = ruled.findings;
+  const handed = handOffTestGaps(config, story, ruled.findings, round);
+  const findings = handed.findings;
+  if (handed.count && !findings.some((f) => f.severity === 'blocking')) ruled.verdict = 'APPROVED';
   // Remembered after the rulings: a finding its raisers withdrew on a dispute was not upheld.
   memory.remember(findings.filter((f) => f.severity === 'blocking'));
   const verdict = ruled.verdict === 'APPROVED' && findings.some((f) => f.severity === 'blocking') ? 'CHANGES_REQUESTED' : ruled.verdict;
@@ -187,6 +206,32 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   appendJsonl(metricsFile(config, REVIEWS_FILE), { ts: nowIso(), story: story.key, round, verdict, reviewer: 'council', reviewer_ver: null, findings: findings.map(loggedFinding) });
   logReviewDecision(config, story, round, { agent: 'council', agentVer: null, verdict, summary: merged.summary, findings, ...(ruled.rulings.length ? { disputes: ruled.rulings.map((r) => ({ finding: r.id, kind: r.kind, ruling: r.ruling, reason: r.reason, evidence: r.evidence ?? null })) } : {}) });
   return { verdict, findings, summary: merged.summary, council: merged, contradictions: merged.contradictions };
+}
+
+// The review sees the implementation without its tests (they are written after it approves), so a blocking finding that
+// only asks for tests cannot be resolved by the implementer it would go back to (dogfood C23 class). It becomes a required
+// case for the test plan and test automation (feature-verification/lib/required.mjs) and stops blocking here.
+export function handOffTestGaps(config, story, findings, round, { add = addRequired } = {}) {
+  const out = [];
+  const items = [];
+  for (const f of findings) {
+    if (f.severity !== 'blocking') {
+      out.push(f);
+      continue;
+    }
+    const r = resolvesOf({ ...f, issue: f.issue ?? f.text });
+    if (r.includes('code') || !r.some((x) => x === 'tests' || x === 'plan')) {
+      out.push(f);
+      continue;
+    }
+    items.push({ id: f.id ?? `review-r${round}-${items.length + 1}`, source: `architecture review round ${round}`, title: String(f.issue ?? f.text ?? '').slice(0, 300), fix: f.fix ?? null });
+    out.push({ ...f, severity: 'minor', handedOff: 'feature-verification' });
+  }
+  if (items.length) {
+    add(config, story.key, items);
+    log(`${story.key}: ${items.length} review finding(s) only ask for tests; handed to feature verification as required cases`);
+  }
+  return { findings: out, count: items.length };
 }
 
 // One review round by a fresh reviewer process that sees only the story and the diff.
@@ -205,7 +250,9 @@ export function architectureReview(config, story, round, { derivedClasses = [] }
       const lifted = raiseUserErrors(Array.isArray(raw.findings) ? raw.findings : [], { to: 'blocking' });
       for (const f of lifted.raised) log(`${story.key}: review finding raised to blocking: ${String(f.issue ?? '').slice(0, 140)} (${f.raisedReason})`);
       const ruled = applyReviewDisputes(config, story.key, { verdict: raw.verdict, findings: lifted.findings, disputes: raw.disputes });
-      const findings = ruled.findings;
+      const handed = handOffTestGaps(config, story, ruled.findings, round);
+      const findings = handed.findings;
+      if (handed.count && !findings.some((f) => f.severity === 'blocking')) ruled.verdict = 'APPROVED';
       const verdict = ruled.verdict === 'APPROVED' && findings.some((f) => f.severity === 'blocking') ? 'CHANGES_REQUESTED' : ruled.verdict;
       appendJsonl(metricsFile(config, REVIEWS_FILE), {
         ts: nowIso(),
@@ -488,28 +535,34 @@ export async function hookStop(config, story, payload = {}) {
   }
   // Council members who contradict each other on the same subject two rounds running: a question for the ticket's owner.
   const contested = (result.contradictions ?? []).map((c) => String(c.subject));
-  const repeated = contested.filter((c) => (review.contested ?? []).includes(c));
+  // The council contradicting its own earlier ruling after an adjudication (council.mjs: `escalate`) goes to the owner at once.
+  const repeated = [...new Set([...contested.filter((c) => (review.contested ?? []).includes(c)), ...(result.contradictions ?? []).filter((c) => c.escalate).map((c) => String(c.subject))])];
   updateState(config, story.key, (s) => (s.review.contested = contested));
   if (repeated.length && result.verdict === 'CHANGES_REQUESTED') {
     updateState(config, story.key, (s) => Object.assign(s.review, { rounds: round, lastHash: hash, lastVerdict: 'ESCALATED', lastReason: result.summary, unchangedBlocks: 0 }));
+    // not-an-agent: an escalation to a person
     escalate(config, story, 'review', 'council members contradict each other', `The architecture review council disagrees on ${repeated.join('; ')} two rounds running, and the evidence has not settled it. The ticket's owner decides.\n\n${formatFindings(result.findings)}`);
     return notice(`Review: the architecture review council of ${story.key} contradicts itself on ${repeated.join('; ')}; the ticket's owner decides. See .factory/state/escalations/${story.key}-review.md.`);
   }
   if (result.verdict === 'ESCALATE') {
     updateState(config, story.key, (s) => Object.assign(s.review, { rounds: round, lastHash: hash, lastVerdict: 'ESCALATED', lastReason: result.summary, unchangedBlocks: 0 }));
+    // not-an-agent: an escalation to a person
     escalate(config, story, 'review', 'a person must extend the architecture policy profile', `The architecture policy cannot classify a project this change adds, and only a person can extend the profile (.factory/policy). No code change by the agent can clear it.\n\n${formatFindings(result.findings)}`);
+    // not-an-agent: a notice that a person decides
     return notice(`Review: ${story.key} needs a person: ${formatFindings(result.findings.filter((f) => f.needsPerson))}\nSee .factory/state/escalations/${story.key}-review.md.`);
   }
   if (result.verdict === 'CHANGES_REQUESTED') {
     const lessons = result.lessons ? `\n\nYou have been denied for these rules before. Lessons from your review history (follow them for the rest of this story):\n\n${result.lessons}` : '';
     const declare = councilFor(config, 'review') ? fixDeclarationText(fixesFile(config.root, config.stateDir, { stage: 'review', story: story.key }), result.findings) : '';
     const actions = councilFor(config, 'review') ? `\n\n${councilActionsText()}${declare ? `\n\n${declare}` : ''}` : '';
+    // route: handOffTestGaps (in the review round: test-only findings went to feature verification)
     const reason = `Architecture review round ${round}/${reviewMaxRounds(config)} for ${story.key} requested changes. ${result.summary}\n\n${formatFindings(result.findings)}${lessons}${actions}\n\nMake these corrections, then finish your turn; the review runs again automatically.`;
     updateState(config, story.key, (s) => Object.assign(s.review, { rounds: round, lastHash: hash, lastVerdict: 'CHANGES_REQUESTED', lastReason: reason, unchangedBlocks: 0 }));
     return block(reason);
   }
   updateState(config, story.key, (s) => Object.assign(s.review, { rounds: 0, lastHash: hash, lastVerdict: 'APPROVED', lastReason: result.summary, approvedHash: hash, unchangedBlocks: 0, policyReviewId: null }));
   clearEscalation(config, story, 'review');
+  // route: handOffTestGaps (notes; test gaps handed off already)
   const extra = result.findings.length ? `\nNon-blocking notes:\n${formatFindings(result.findings)}` : '';
   return notice(`Review: architecture review approved ${story.key} (round ${round}).${extra}`);
 }

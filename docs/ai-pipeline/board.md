@@ -8,17 +8,18 @@ The stage CLI is `factory board` (`scripts/board/board.mjs` in the factory). Its
 
 ```mermaid
 flowchart LR
-  B[Backlog<br/>not ready] -->|you move it when ready| T[Ready]
-  T -->|implement run / factory start<br/>claims it| P[In Progress<br/>implementer, review]
-  P -->|review approved,<br/>feature verification starts| Q[Testing<br/>tests are written and verified]
-  Q -->|the tests find a product bug| P
-  Q -->|tests verified, PR opened| R[Pending Review<br/>PR + evidence]
-  R -->|PR merged: Closes #issue<br/>board sync| D[Done]
-  R -.->|bug fix sent back by a person:<br/>review gate, board sync| P
-  D -.->|bug fix reopened:<br/>review gate, board sync| P
-  P -.->|pipeline stops| F[Failed<br/>needs-human, reason in a comment]
-  Q -.->|pipeline stops| F
-  F -.->|you answer the questions and tick Resolved:<br/>escalation-resolved, board sync| T
+  B["Backlog<br/>not ready"] -->|"you move it when ready"| T["Ready"]
+  T -->|"implement run or factory start<br/>claims it"| P["In Progress<br/>implementer, review"]
+  P -->|"review approved,<br/>feature verification starts"| Q["Testing<br/>tests written and verified, PR check"]
+  Q -->|"product bug, or the PR check<br/>sends the change back"| P
+  Q -->|"CI green on the branch,<br/>PR opened once"| R["Pending Review<br/>PR + evidence"]
+  R -->|"PR merged, board sync"| D["Done"]
+  R -.->|"bug fix sent back by a person:<br/>review gate, board sync"| P
+  D -.->|"bug fix reopened:<br/>review gate, board sync"| P
+  P -.->|"pipeline stops, no PR"| F["Failed<br/>needs-human, reason and questions"]
+  Q -.->|"pipeline stops, no PR"| F
+  R -.->|"checks still red after the hold"| F
+  F -.->|"you answer the questions and tick Resolved:<br/>escalation-resolved, board sync"| T
 ```
 
 ## Lanes

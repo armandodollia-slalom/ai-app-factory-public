@@ -5,7 +5,7 @@
 // Registered in the app repo's .mcp.json (Claude Code and Copilot CLI) and .codex/config.toml, as
 // `factory lsp mcp` or `node <install root>/scripts/lsp/mcp.mjs`.
 // LSP_OWNS (comma-separated globs) narrows scoped servers when this session is the one starting the daemon.
-import fs from 'node:fs';
+import { appendText } from '../pipeline/lib/redact.mjs';
 import path from 'node:path';
 import { RUNTIME_NAME, connect, daemonPaths, realWorktree, stateDir, worktreeOf } from './lib/common.mjs';
 import { ensureDaemon } from './lspd.mjs';
@@ -38,7 +38,7 @@ function logCall(msg) {
   const symbol = args.query ?? args.name ?? args.new_name ?? (args.line ? `${args.line}:${args.column ?? ''}` : null);
   const entry = { ts: new Date().toISOString(), agent, tool: msg.params?.name ?? null, file: args.file_path ?? null, symbol };
   try {
-    fs.appendFileSync(callLog, `${JSON.stringify(entry)}\n`);
+    appendText(callLog, `${JSON.stringify(entry)}\n`);
   } catch {
     // metrics are best effort
   }

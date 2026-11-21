@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // feature verification stage of the AI pipeline: verified test plans and automated tests. See docs/ai-pipeline/feature-verification.md.
+import fs from 'node:fs';
 import { parseArgs as parse, readPayload, readStdin, requireStory, runMain } from '../pipeline/lib/cli.mjs';
 import { isDisabled, loadConfig } from '../pipeline/lib/config.mjs';
 import { changedFiles, fsReader, git, gitReader, mergeBase, revExists } from '../pipeline/lib/git.mjs';
@@ -9,9 +10,10 @@ import { keysFromPaths, keysInText, loadTicket, storyOf } from '../pipeline/lib/
 import { selfProcess, setLogTag } from '../pipeline/lib/util.mjs';
 import { calibrateCommand, lessonsCommand } from '../retro/lib/lessons.mjs';
 import { isTestFile } from './lib/runners.mjs';
+import { addRequired } from './lib/required.mjs';
 import { computeMetrics, formatMetrics } from './lib/metrics.mjs';
 import { automationFiles, automationStatus, planStatus, tidyPlan } from './lib/plans.mjs';
-import { automationLoop, formatRecovery, hookStop, planLoop, precheckAutomation, recoverAll, sessionContext, spawnFv } from './lib/workflows.mjs';
+import { automationLoop, formatRecovery, hookStop, planLoop, precheckAutomation, recoverAll, requireCases, sessionContext, spawnFv } from './lib/workflows.mjs';
 
 setLogTag('feature-verification');
 
@@ -190,6 +192,22 @@ async function main() {
       const result = await automationLoop(config, story, { implHash: flags['impl-hash'] ?? null, skipTests: Boolean(flags['skip-tests']), resume: Boolean(flags.resume), verifyFirst: Boolean(flags['verify-first']) });
       console.log(`${story.key}: ${result.status}`);
       return ['verified', 'busy'].includes(result.status) ? 0 : 1;
+    }
+
+    case 'require': {
+      // Required cases from a later stage (JSON list on stdin or --file): recorded, then automation starts on them.
+      const story = requireStory(config, positional[0], { fallbackActive: true });
+      const raw = flags.file ? fs.readFileSync(flags.file, 'utf8') : await readStdin();
+      const items = JSON.parse(raw);
+      const head = git(config.root, ['rev-parse', 'HEAD']).stdout.trim() || null;
+      if (flags['no-start']) {
+        const required = addRequired(config, story.key, Array.isArray(items) ? items : [items], { head });
+        console.log(`${story.key}: ${required.length} required case(s); automation runs after the implementation.`);
+        return 0;
+      }
+      const r = requireCases(config, story, Array.isArray(items) ? items : [items], { head });
+      console.log(`${story.key}: ${r.required.length} required case(s); automation ${r.queued ? 'queued' : 'started'}.`);
+      return 0;
     }
 
     case 'precheck': {

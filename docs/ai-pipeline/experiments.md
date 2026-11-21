@@ -1,6 +1,6 @@
 # Delivery experiments
 
-Does delivering an epic on one branch (an epic plan, stories merged into the epic branch, one PR) cost less and produce better code than a branch and PR per story? `factory experiment` runs the same epic both ways from the same base commit, grades every result with the same tests and the same PR check, and reports the numbers side by side. See [implement](implement.md#delivery-modes) for the two modes.
+Does delivering an epic on one branch (an epic plan, stories merged into the epic branch, one PR) cost less and produce better code than a branch and PR per story? `factory experiment` runs the same epic both ways from the same base commit, grades every result with the same tests and the same PR check, and reports the numbers side by side. See [implement](implement.md#delivery-modes) for the two modes. The feature-epic PR split (`--pr-split story|groups`) is not an experiment mode: an epic arm runs with the repository's `implement.epic.prSplit`, and no arm pushes or opens a PR.
 
 ```bash
 factory experiment run --epic checkout --modes epic,story [--repeat 2] [--sequential]

@@ -103,7 +103,7 @@ Nothing below has been run against a real GitLab, Azure DevOps or Jira; every re
 
 - `factory doctor`'s rows were checked against fake adapters and the fakes above, not against real permission models.
 - `board migrate --apply` to Jira or Azure Boards is implemented but has no test.
-- Pipeline schedules, scheduled triggers, cleanup of a closed pull request's demo videos, comment-triggered PR checks and re-running `review-quorum` after an approval are manual on GitLab CI and Azure Pipelines (see the footnotes above).
+- Pipeline schedules, scheduled triggers, comment-triggered PR checks and re-running `review-quorum` after an approval are manual on GitLab CI and Azure Pipelines (see the footnotes above).
 
 The jobs call `factory` commands; those reach the host and tracker through the adapters (`scripts/pipeline/lib/hosts/`, `scripts/board/lib/trackers/`). The generated GitLab CI and Azure Pipelines files are checked by the factory's tests for structure (they parse, every include and template resolves to a generated file, every job has a trigger, a stage and a script); they have not been run on GitLab or Azure DevOps by the factory's own CI.
 
@@ -131,9 +131,9 @@ By hand, once:
 | Pipeline schedules with `FACTORY_JOB=retro`, `FACTORY_JOB=tracker` (every 15 minutes) and `FACTORY_JOB=graphify-cache-prune` (weekly) | Build → Pipeline schedules | GitLab CI has no schedule in the file |
 | **Auto-merge** ("merge when pipeline succeeds") | allowed by default | the review gate's auto-merge |
 
-Self-managed: set `url` to the instance (with its path when GitLab is served under one, such as `https://code.example.com/gitlab`). The API is `<url>/api/v4`. Use a runner that can run Docker-in-Docker (privileged) for the demo video job, or redefine that job in your `.gitlab-ci.yml`.
+Self-managed: set `url` to the instance (with its path when GitLab is served under one, such as `https://code.example.com/gitlab`). The API is `<url>/api/v4`.
 
-Known limits: comments do not start pipelines (no comment-triggered PR check; use the label or a pipeline trigger token with `FACTORY_PR_CHECK_MR=<iid>`); a closed merge request's demo videos are not cleaned up automatically.
+Known limits: comments do not start pipelines (no comment-triggered PR check; use the label or a pipeline trigger token with `FACTORY_PR_CHECK_MR=<iid>`).
 
 ### Azure DevOps (Services and Server)
 
@@ -147,8 +147,8 @@ By hand, once:
 
 | What | Where | Why |
 | --- | --- | --- |
-| One pipeline per `.azure-pipelines/factory-*.yml` (`factory-pr`, `factory-review-quorum`, `factory-pr-check`, `factory-pr-demo-video` with the feature, `factory-retro`, `factory-tracker`, `factory-graphify-cache-prune` with the feature) | Pipelines → New pipeline → Azure Repos Git → Existing YAML file | Azure DevOps runs only pipelines someone created |
-| Build validation: `factory-pr` and `review-quorum` required, `factory-pr-check` and `factory-pr-demo-video` optional | Repos → Branches → the target branch → Branch policies | the pull request triggers on Azure Repos |
+| One pipeline per `.azure-pipelines/factory-*.yml` (`factory-pr`, `factory-review-quorum`, `factory-pr-check`, `factory-retro`, `factory-tracker`, `factory-graphify-cache-prune` with the feature) | Pipelines → New pipeline → Azure Repos Git → Existing YAML file | Azure DevOps runs only pipelines someone created |
+| Build validation: `factory-pr` and `review-quorum` required, `factory-pr-check` optional | Repos → Branches → the target branch → Branch policies | the pull request triggers on Azure Repos |
 | A Status policy requiring `factory/review-quorum`, and a Required reviewers policy for `.factory/` and the generated files | Repos → Branches → the target branch → Branch policies | `factory review-gate enforce` adds the Status policy (`--dry-run` first) and lists the Required reviewers policy, whose reviewers a person chooses; keep "Make secrets available to builds of forks" off |
 | Scheduled triggers: `factory-tracker` every 15 minutes, `factory-graphify-cache-prune` weekly, `factory-retro` as you like | the pipeline → Edit → Triggers | no schedule is set in the files, so they never depend on a branch name |
 | Pipeline variables: `FACTORY_TOKEN` (private factory), `PIPELINE_AGENT_CLI`, the agent credential and the tracker's, as secrets | the pipeline → Edit → Variables | secrets reach a step only when mapped; the generated steps map every name the config uses |
@@ -206,7 +206,6 @@ The same jobs are generated for each CI system. `factory render` writes them, `f
 | Gate, lint, feature verification | `factory-gate.yml`, `factory-feature-verification-check.yml` | `factory-gate`, `factory-lint`, `factory-feature-verification` | `factory-pr.yml` |
 | Review quorum | `factory-review-quorum.yml` | `review-quorum` | `factory-review-quorum.yml` |
 | PR check | `factory-pr-check.yml` (label) | `factory-pr-check` (label, Run pipeline, trigger token) | `factory-pr-check.yml` (label, `pr` parameter) |
-| Demo video (feature `demoVideo`) | `factory-pr-demo-video.yml` | `factory-pr-demo-video` | `factory-pr-demo-video.yml` |
 | Retro | `factory-retro.yml` | `factory-retro` (schedule, `FACTORY_JOB=retro`) | `factory-retro.yml` |
 | Tracker automations | `factory-board-*.yml` (GitHub issues) or `factory-tracker-sweep.yml` | `factory-tracker` (schedule) | `factory-tracker.yml` (schedule) |
 | Cache prune (feature `graphify`) | `factory-graphify-cache-prune.yml` | `factory-graphify-cache-prune` (schedule) | `factory-graphify-cache-prune.yml` |

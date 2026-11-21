@@ -2,6 +2,7 @@
 // Tools run one at a time per process and at most `analysis.maxConcurrent` at once on the machine (a semaphore under
 // the git common dir, beside the agent slots), each with its own timeout. Outputs go under the factory state
 // directory; merge-base results are cached per merge-base commit and tool settings, so a story pays for them once.
+import { writeText } from '../redact.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,6 +11,8 @@ import { INSTALL_ROOT } from '../config.mjs';
 import { git } from '../git.mjs';
 import { changedLines, lintable } from '../lint.mjs';
 import { runAsync, tail } from '../util.mjs';
+import { redact, rememberSecret } from '../redact.mjs';
+import { findingLine, matchedSecret } from './secrets.mjs';
 import { acquire } from '../../../implement/lib/semaphore.mjs';
 import { PRECHECK_TOOL, resolveAnalysis } from './config.mjs';
 import { dedupe, expandSecretEnv, severityOf, triageOf } from './commercial.mjs';
@@ -188,6 +191,16 @@ export async function runTool(config, tool, { cwd, files = [], base = null, merg
   if (!raw.length && r.status !== 0 && !(tool.okExit ?? [0, 1]).includes(r.status)) return done({ status: 'error', error: `${tool.id} failed (exit ${r.status}) and reported nothing`, output: tail(`${r.stdout}${r.stderr}`, 2000) });
   // A tool that reports more than this tool entry is for (a build's every analyzer) keeps the rules it names.
   if (dirs.length) raw = raw.map((f) => ({ ...f, rule: stripRulePrefix(f.rule, dirs, cwd) }));
+  // A secret scanner's findings keep rule, file, line and fingerprint, never the matched text: the snippet is dropped and
+  // the message passes the redaction boundary; the value on the line is remembered (as a hash) so it is redacted wherever
+  // it turns up later in the run (redact.mjs).
+  if (isSecretTool(tool)) {
+    for (const f of raw) {
+      const v = matchedSecret(findingLine(cwd, { ...f, file: f.file }), { column: f.column ?? null, endColumn: f.endColumn ?? null });
+      if (v) rememberSecret(v, f.rule);
+    }
+    raw = raw.map((f) => ({ ...f, snippet: null, message: redact(String(f.message ?? '')), redacted: true }));
+  }
   if (tool.ruleFilter?.length) raw = raw.filter((f) => tool.ruleFilter.some((r) => (r.endsWith('*') ? String(f.rule).startsWith(r.slice(0, -1)) : r === f.rule)));
   return done({ status: raw.length ? 'findings' : 'ok', findings: identify(cwd, tool.id, raw) });
 }
@@ -316,7 +329,7 @@ export async function baseFindings(config, tool, { cwd, mergeBase, files, exec =
     const r = await runTool(config, tool, { cwd: wt, files: there, base: mergeBase, mergeBase, outDir: path.join(wt, '.factory-analysis-out'), exec, signal, extraVars });
     if (!['ok', 'findings', 'skipped'].includes(r.status)) return null;
     fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
-    fs.writeFileSync(cacheFile, JSON.stringify(r.findings));
+    writeText(cacheFile, JSON.stringify(r.findings));
     return r.findings;
   } finally {
     git(cwd, ['worktree', 'remove', '--force', wt]);

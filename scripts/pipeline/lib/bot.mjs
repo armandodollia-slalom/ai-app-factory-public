@@ -15,6 +15,8 @@
 //
 // No token ever reaches a log, an error or a thrown message: git output is redacted, and the push
 // sends the token in a header from the environment, never on the command line or in a URL.
+import { gatePushedRecords, pushBase } from './record-gate.mjs';
+import { writeText } from './redact.mjs';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -326,7 +328,13 @@ export async function prPublisher(config, deps = {}) {
   const g = deps.git ?? git;
   const repo = bot?.type ? undefined : bot?.repo;
   const host = (extra = {}) => hostFor(config ?? {}, { ...(repo ? { repo } : {}), ...(bot && !bot.type ? { env: { ...process.env, GH_TOKEN: bot.token } } : {}), ...(bot?.type ? { token: bot.token } : {}), ...extra });
-  if (!bot) return { bot: null, env: undefined, token: undefined, config, host, push: (cwd, branch, { upstream = true, lease = null } = {}) => g(cwd, ['push', ...(upstream ? ['-u'] : []), ...(lease ? [`--force-with-lease=refs/heads/${branch}:${lease}`] : []), 'origin', branch]) };
+  // Every push of a story branch scans the records it carries first (record-gate.mjs).
+  const gated = (fn) => (cwd, branch, opts) => {
+    const from = deps.git ? null : pushBase(cwd, branch);
+    if (from) gatePushedRecords(cwd, from);
+    return fn(cwd, branch, opts);
+  };
+  if (!bot) return { bot: null, env: undefined, token: undefined, config, host, push: gated((cwd, branch, { upstream = true, lease = null } = {}) => g(cwd, ['push', ...(upstream ? ['-u'] : []), ...(lease ? [`--force-with-lease=refs/heads/${branch}:${lease}`] : []), 'origin', branch])) };
   (deps.log ?? defaultLog)(`publishing as ${bot.name}`);
   return {
     bot: bot.name,
@@ -335,7 +343,7 @@ export async function prPublisher(config, deps = {}) {
     config,
     repo,
     host,
-    push: (cwd, branch, { upstream = true, lease = null } = {}) => pushWithToken(cwd, branch, { repo: bot.repo, token: bot.token, upstream, git: g, remote: bot.remote ?? null, lease }),
+    push: gated((cwd, branch, { upstream = true, lease = null } = {}) => pushWithToken(cwd, branch, { repo: bot.repo, token: bot.token, upstream, git: g, remote: bot.remote ?? null, lease })),
   };
 }
 
@@ -384,7 +392,7 @@ export async function openPullRequest(publisher, { cwd, branch, base, title, bod
   const record = (data) => {
     try {
       fs.mkdirSync(path.dirname(records.json), { recursive: true });
-      fs.writeFileSync(records.json, `${JSON.stringify({ branch, title, ...data }, null, 2)}\n`);
+      writeText(records.json, `${JSON.stringify({ branch, title, ...data }, null, 2)}\n`);
     } catch {
       // the records are best effort; the PR is what matters
     }
@@ -395,7 +403,7 @@ export async function openPullRequest(publisher, { cwd, branch, base, title, bod
     const fullBody = withDerivedClasses(body, cwd, base ? `origin/${base.replace(/^origin\//, '')}` : null, { runner: r ?? run });
     try {
       fs.mkdirSync(path.dirname(records.body), { recursive: true });
-      fs.writeFileSync(records.body, fullBody);
+      writeText(records.body, fullBody);
     } catch {
       // best effort
     }

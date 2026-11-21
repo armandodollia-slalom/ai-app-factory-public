@@ -1,3 +1,4 @@
+import { writeText, appendText } from './redact.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -89,14 +90,14 @@ const escalationFile = (config, key, stage) => path.join(stateDir(config), 'esca
 export function escalate(config, story, stage, title, details) {
   const file = escalationFile(config, story.key, stage);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `# ${story.key} ${stage}: ${title}\n\n${new Date().toISOString()}\n\n${details}\n`);
+  writeText(file, `# ${story.key} ${stage}: ${title}\n\n${new Date().toISOString()}\n\n${details}\n`);
   // Also a metric, so the retro and the metrics see every escalation (the file above is replaced when the
   // stage escalates again, and the state folder is not committed).
   try {
     if (config.metricsDir) {
       const m = metricsFile(config, 'escalations.jsonl');
       fs.mkdirSync(path.dirname(m), { recursive: true });
-      fs.appendFileSync(m, `${JSON.stringify({ ts: new Date().toISOString(), story: story.key, stage, title, details: String(details ?? '').slice(0, 2000) })}\n`);
+      appendText(m, `${JSON.stringify({ ts: new Date().toISOString(), story: story.key, stage, title, details: String(details ?? '').slice(0, 2000) })}\n`);
     }
   } catch {
     // a metric must never stop an escalation
@@ -116,7 +117,7 @@ export function listEscalations(config) {
 
 export function setActiveStory(config, key) {
   fs.mkdirSync(stateDir(config), { recursive: true });
-  fs.writeFileSync(path.join(stateDir(config), 'active-story'), `${key}\n`);
+  writeText(path.join(stateDir(config), 'active-story'), `${key}\n`);
 }
 const stateFile = (config, key) => path.join(stateDir(config), 'stories', `${key}.json`);
 

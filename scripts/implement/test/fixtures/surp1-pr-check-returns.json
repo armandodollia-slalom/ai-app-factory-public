@@ -1,0 +1,223 @@
+{
+ "source": "dogfood C23 held-out round, SURP-1 (test repo worktree surp-1): .factory/metrics/pr-checks.jsonl.d and pr-check-returns.jsonl.d; changed files from git",
+ "memberLenses": {
+  "opus": "rewrite",
+  "sol": "test-value"
+ },
+ "prCheckRounds": [
+  {
+   "ts": "2026-11-20T00:22:00.877Z",
+   "score": 8,
+   "upheld": [
+    {
+     "id": "OPUS-1-1",
+     "lens": "opus",
+     "severity": "major",
+     "title": "No-match on /item/random adds a global NotFoundPage and a /not-found route instead of ItemPage's in-page 404"
+    },
+    {
+     "id": "OPUS-1-3",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "Unrelated BOM and re-indentation in CatalogApi.cs"
+    },
+    {
+     "id": "OPUS-1-4",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "Unrelated using reorder and brace-style edits in CatalogApiTests.cs"
+    },
+    {
+     "id": "OPUS-1-6",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "ItemPage's not-found block still duplicates the new PageMessage markup"
+    },
+    {
+     "id": "FLOW-1-1",
+     "lens": "flow",
+     "severity": "minor",
+     "title": "/item/random no-match and Catalog-unavailable branches are not exercised by any test"
+    }
+   ]
+  },
+  {
+   "ts": "2026-11-20T01:00:50.833Z",
+   "score": 8,
+   "upheld": [
+    {
+     "id": "SOL-1-1",
+     "lens": "sol",
+     "severity": "minor",
+     "title": "Remove overlapping unfiltered randomness test"
+    },
+    {
+     "id": "SOL-1-2",
+     "lens": "sol",
+     "severity": "major",
+     "title": "Add the required no-match browser regression"
+    },
+    {
+     "id": "OPUS-1-3",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "Third copy of the filter query-string builder"
+    },
+    {
+     "id": "OPUS-1-4",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "Unrelated re-indentation of untouched lambdas"
+    },
+    {
+     "id": "OPUS-1-5",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "Unrelated reformatting in existing functional tests"
+    },
+    {
+     "id": "OPUS-1-6",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "ItemPage's not-found branch repeats PageMessage's markup"
+    },
+    {
+     "id": "FLOW-1-1",
+     "lens": "flow",
+     "severity": "major",
+     "title": "/item/random 'API unavailable' fallback is untested"
+    },
+    {
+     "id": "FLOW-1-2",
+     "lens": "flow",
+     "severity": "minor",
+     "title": "ItemPage not-found branch restyled but not exercised"
+    }
+   ]
+  },
+  {
+   "ts": "2026-11-20T01:57:42.141Z",
+   "score": 8,
+   "upheld": [
+    {
+     "id": "SOL-1-1",
+     "lens": "sol",
+     "severity": "major",
+     "title": "Required no-match browser regression remains absent"
+    },
+    {
+     "id": "SOL-1-2",
+     "lens": "sol",
+     "severity": "major",
+     "title": "Required API-unavailable rendering regression remains absent"
+    },
+    {
+     "id": "OPUS-1-4",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "Shared filter-action style is named after 'Clear all filters'"
+    },
+    {
+     "id": "OPUS-1-5",
+     "lens": "opus",
+     "severity": "minor",
+     "title": "Dead File.Exists branch in the OpenAPI test"
+    },
+    {
+     "id": "FLOW-1-1",
+     "lens": "flow",
+     "severity": "major",
+     "title": "PageMessage error branches on /item/{id} and /item/random are not tested"
+    },
+    {
+     "id": "UI-1-1",
+     "lens": "design",
+     "severity": "minor",
+     "title": "Back to catalog on random-pick message pages drops the active filters"
+    }
+   ]
+  }
+ ],
+ "returns": [
+  {
+   "n": 1,
+   "at": "2026-11-20T00:22:12.655Z",
+   "head": "73554dfe157484f48bdd3b7a3d75355d572120a8",
+   "hash": "9f1fa7b5f3c7",
+   "round": 1,
+   "score": 8,
+   "findings": [
+    {
+     "id": "OPUS-1-1",
+     "lens": "rewrite",
+     "severity": "major",
+     "title": "No-match on /item/random adds a global NotFoundPage and a /not-found route instead of ItemPage's in-page 404",
+     "file": null,
+     "fix": null,
+     "reason": null,
+     "routeWhy": "rewrite finding about the production change"
+    }
+   ],
+   "light": []
+  },
+  {
+   "n": 2,
+   "at": "2026-11-20T01:01:01.476Z",
+   "head": "1559e890d56d7a977a42283337b9f6cb69ba6f5b",
+   "hash": "1cf8d072f210",
+   "round": 1,
+   "score": 8,
+   "findings": [
+    {
+     "id": "FLOW-1-1",
+     "lens": "flow",
+     "severity": "major",
+     "title": "/item/random 'API unavailable' fallback is untested",
+     "file": null,
+     "fix": null,
+     "reason": null,
+     "routeWhy": "flow finding about the production change"
+    }
+   ],
+   "light": [
+    "SOL-1-2"
+   ]
+  }
+ ],
+ "changedAfterReturn": {
+  "1": [
+   ".factory/plans/SURP-1-fe-webapp-be-catalog-api-surprise-me-open-a-product-picked-a/_index.md",
+   "src/WebApp/Components/Pages/Item/RandomItem.razor",
+   "src/WebApp/Components/Pages/NotFound.razor",
+   "src/WebApp/Components/Routes.razor"
+  ],
+  "2": [
+   "src/Catalog.API/Apis/CatalogApi.cs",
+   "src/WebApp/Components/Layout/PageMessage.razor",
+   "src/WebApp/Components/Pages/Item/ItemPage.razor",
+   "src/WebAppComponents/Services/CatalogService.cs",
+   "tests/Catalog.FunctionalTests/CatalogApiTests.cs"
+  ]
+ },
+ "outcome": "unresolved: the PR check still upholds 1 production finding(s) after 2 return(s): FLOW-1-1",
+ "planCasesAtEnd": [
+  "TC-SURP-1-01-pick-without-filters.md",
+  "TC-SURP-1-02-pick-brand-and-type-single-match.md",
+  "TC-SURP-1-04-pick-type-only.md",
+  "TC-SURP-1-05-pick-repeated-filters-in-list.md",
+  "TC-SURP-1-06-repeated-picks-vary.md",
+  "TC-SURP-1-07-every-match-reachable.md",
+  "TC-SURP-1-08-no-match-404.md",
+  "TC-SURP-1-09-unknown-brand-404.md",
+  "TC-SURP-1-10-v1-unchanged.md",
+  "TC-SURP-1-12-openapi-documents.md",
+  "TC-SURP-1-13-surprise-me-shown.md",
+  "TC-SURP-1-14-surprise-me-opens-product.md",
+  "TC-SURP-1-15-surprise-me-again-differs.md",
+  "TC-SURP-1-16-surprise-me-brand-and-type.md",
+  "TC-SURP-1-17-surprise-me-brand-only.md",
+  "TC-SURP-1-18-hidden-when-no-match.md",
+  "TC-SURP-1-19-surprise-me-type-only.md"
+ ],
+ "planCasesNote": "No case file at the final head names FLOW-1-1, SOL-1-1 or SOL-1-2 (grep over all 17 cases)."
+}

@@ -66,11 +66,34 @@ function timestamps(duration, { maxFrames, minIntervalSec }) {
   return Array.from({ length: count }, (_, i) => Math.round(((i * end) / (count - 1)) * 100) / 100);
 }
 
+// One frame per narrated step (the middle of each step), from the video's subtitles (`<name>.vtt`, a rendered demo
+// video) or the demo fixture's step log (`<name>.steps.json`, a raw recording): a slower video does not get more frames.
+// More steps than the cap: evenly chosen. null when the video has neither.
+export function stepTimes(file, { maxFrames, framesPerStep = 1 } = {}) {
+  const base = file.replace(/\.(webm|mp4)$/i, '');
+  let spans = null;
+  if (fs.existsSync(`${base}.vtt`)) {
+    const sec = (h, m, s) => Number(h) * 3600 + Number(m) * 60 + Number(s);
+    spans = [...fs.readFileSync(`${base}.vtt`, 'utf8').matchAll(/(\d+):(\d+):([\d.]+) --> (\d+):(\d+):([\d.]+)/g)].map((m) => [sec(m[1], m[2], m[3]), sec(m[4], m[5], m[6])]);
+  } else if (fs.existsSync(`${base}.steps.json`)) {
+    try {
+      spans = (JSON.parse(fs.readFileSync(`${base}.steps.json`, 'utf8')).steps ?? []).filter((s) => s.t1 > s.t0).map((s) => [s.t0 / 1000, s.t1 / 1000]);
+    } catch {
+      spans = null;
+    }
+  }
+  if (!spans?.length) return null;
+  const per = Math.max(1, Math.floor(framesPerStep));
+  const all = spans.flatMap(([a, b]) => Array.from({ length: per }, (_, k) => Math.round((a + ((k + 1) * (b - a)) / (per + 1)) * 100) / 100));
+  if (all.length <= maxFrames) return all;
+  return Array.from({ length: maxFrames }, (_, i) => all[Math.floor((i * all.length) / maxFrames)]);
+}
+
 function ffmpegFrames(file, outDir, options) {
   const probe = run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file]);
   const duration = Number(probe.stdout.trim());
   if (!(duration > 0)) throw new Error(`ffprobe could not read the duration: ${probe.stderr.trim() || probe.stdout.trim()}`);
-  const frames = timestamps(duration, options).map((t, i) => {
+  const frames = (options.times ?? timestamps(duration, options)).map((t, i) => {
     const out = path.join(outDir, `frame-${String(i + 1).padStart(3, '0')}.png`);
     const result = run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', String(t), '-i', file, '-frames:v', '1', '-vf', `scale=${options.width}:-2`, out]);
     if (result.status !== 0 || !fs.existsSync(out)) throw new Error(`ffmpeg failed at ${t}s: ${result.stderr.trim()}`);
@@ -121,7 +144,7 @@ async function browserFrames(file, outDir, options) {
     });
     if (!(duration > 0)) throw new Error('the video has no duration');
     const frames = [];
-    for (const [i, t] of timestamps(duration, options).entries()) {
+    for (const [i, t] of (options.times ?? timestamps(duration, options)).entries()) {
       await page.evaluate(
         (time) =>
           new Promise((resolve) => {
@@ -167,11 +190,19 @@ export async function extractVideoFrames(config, runDir, { sources, missing }, r
         file = path.join(dir, `video${options.extensions.includes(ext) ? ext : '.mp4'}`);
         await download(source.url, file, config);
       }
-      const { duration, frames } = useFfmpeg ? ffmpegFrames(file, dir, options) : await browserFrames(file, dir, options);
+      if (source.url) {
+        // A rendered demo video's subtitles sit next to it: one frame per step instead of one per interval.
+        const vtt = source.url.replace(/\.(webm|mp4)(\?|$)/i, '.vtt$2');
+        if (vtt !== source.url) await download(vtt, file.replace(/\.(webm|mp4)$/i, '.vtt'), config).catch(() => {});
+      }
+      const times = stepTimes(file, { maxFrames: options.maxFrames, framesPerStep: options.framesPerStep ?? 1 });
+      const opts = times ? { ...options, times } : options;
+      const { duration, frames } = useFfmpeg ? ffmpegFrames(file, dir, opts) : await browserFrames(file, dir, opts);
       videos.push({
         source: source.source,
         duration: Math.round(duration * 100) / 100,
         extractor: useFfmpeg ? 'ffmpeg' : 'chromium',
+        sampling: times ? 'per step' : 'per interval',
         frames: frames.map((f) => ({ file: path.relative(relativeTo, f.file).replace(/\\/g, '/'), t: f.t })),
       });
       log(`video ${source.source}: ${frames.length} frames over ${Math.round(duration)}s`);

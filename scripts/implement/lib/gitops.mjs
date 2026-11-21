@@ -1,5 +1,6 @@
 // Git operations of the implement stage: commits made by the runner (hooks disabled), and the subtask
 // worktrees the orchestrated flow branches off a story's worktree.
+import { gateStagedRecords } from '../../pipeline/lib/record-gate.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addWorktree, git, revExists } from '../../pipeline/lib/git.mjs';
@@ -23,6 +24,8 @@ export function commitAll(cwd, message, specs = ['.', ...HARNESS_EXCLUDES]) {
   git(cwd, ['add', '-A', '--', ...specs], { env: commitEnv });
   if (git(cwd, ['diff', '--cached', '--quiet']).status === 0) return false;
   gateStaged(cwd, { message, log: (m) => process.stderr.write(`${m}\n`) });
+  // Records are redacted and scanned before they are committed (record-gate.mjs); a hit left over blocks the commit.
+  gateStagedRecords(cwd);
   if (git(cwd, ['diff', '--cached', '--quiet']).status === 0) return false;
   mustGit(cwd, ['commit', '-q', '-m', message]);
   return true;

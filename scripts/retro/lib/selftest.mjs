@@ -2,6 +2,7 @@
 // not a proposal and changes nothing in the factory. It clones the factory source the pin names, makes a branch
 // `retro/selftest-<date>` with a one-line scratch file, pushes it, checks the branch is on the remote at that commit
 // (the retro pushes its proposal and a person opens the PR; it opens none), then deletes the branch. Every step is recorded; the result says which step failed, if one did.
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import { remoteHost } from '../../pipeline/lib/hosts/index.mjs';
 import { detectHost } from '../../pipeline/lib/products.mjs';
 import fs from 'node:fs';
@@ -40,7 +41,7 @@ export function retroSelftest(config, { run = defaultRun, now = new Date(), sour
     const cloned = run('git', ['clone', '-q', '--depth', '1', src.source, dir]);
     if (!step('clone', cloned.status === 0, cloned.status === 0 ? src.source : cloned.stderr.trim())) return;
     git(['checkout', '-q', '-b', branch]);
-    fs.writeFileSync(path.join(dir, SELFTEST_FILE), `retro self-test ${now.toISOString()}: plumbing check, no change proposed\n`);
+    writeText(path.join(dir, SELFTEST_FILE), `retro self-test ${now.toISOString()}: plumbing check, no change proposed\n`);
     git(['add', SELFTEST_FILE]);
     const committed = git(['-c', 'user.name=factory retro', '-c', 'user.email=retro@localhost', 'commit', '-q', '-m', SELFTEST_TITLE]);
     if (!step('commit', committed.status === 0, committed.stderr.trim())) return;

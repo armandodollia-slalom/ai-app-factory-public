@@ -12,7 +12,17 @@ const hintsOf = (host) => ({ checked: 'the branch rules', enforce: 'the review g
 // [ok, note] for the default branch's rules, or null when the host cannot be asked. `target`: a code host (sync), a
 // repository config, or a repository slug with an optional gh runner (GitHub; tests). `review`: { satisfiable, reason }
 // of code-owner review (review-gate/lib/codeowners.mjs). `requiredChecks`: the CI checks the rule should require.
-export function reviewEnforcement(target, gh = null, { review = null, requiredChecks = [] } = {}) {
+// The checks a host rule requires that no workflow of the checkout provides (null `provided`: the CI system cannot say,
+// nothing is flagged). review-quorum is posted by the review gate itself. Such a check holds every PR for ever (dogfood:
+// a release removed the CI demo-video workflow and its `record` job stayed required).
+export function unprovidedRequired(required = [], provided = null) {
+  if (!Array.isArray(provided)) return [];
+  const have = new Set(provided);
+  return required.filter((c) => c !== 'review-quorum' && !have.has(c) && !provided.some((p) => c.startsWith(`${p} (`) || c.startsWith(`${p} / `)));
+}
+export const unprovidedText = (repo, branch, stale) => `${repo}'s ${branch} requires ${stale.map((c) => `"${c}"`).join(', ')}, which no workflow in this checkout provides: every PR waits for ${stale.length === 1 ? 'it' : 'them'} for ever. Run 'factory review-gate enforce --dry-run', then 'factory review-gate enforce' (it requires exactly the checks the shipped workflows run); a rule it does not own (classic branch protection) is changed by hand`;
+
+export function reviewEnforcement(target, gh = null, { review = null, requiredChecks = [], provided = null } = {}) {
   if (!target) return null;
   let host;
   let bp;
@@ -39,6 +49,8 @@ export function reviewEnforcement(target, gh = null, { review = null, requiredCh
   const ownersWanted = review ? review.satisfiable : true;
   // The CI checks too (council C9): with review-quorum alone a host merges a head whose CI has not run.
   const ciMissing = requiredChecks.filter((c) => !has(c));
+  const stale = bp.pipelineGate ? [] : unprovidedRequired(checks, provided);
+  if (stale.length) return [false, unprovidedText(repo, name, stale)];
   const missing = [!has('review-quorum') && 'the review-quorum status check', ciMissing.length && `the CI checks ${ciMissing.join(', ')}`, ownersWanted && !codeOwners && host.capabilities?.codeOwners !== false && 'code-owner review'].filter(Boolean);
   if (missing.length) return [false, `${repo}'s ${name} does not require ${missing.join(' or ')} (checked ${hints.checked}): run 'factory review-gate enforce' (${hints.enforce}), or add them in ${hints.settings}`];
   const via = (bp.via ?? []).join(' and ') || 'no rule';

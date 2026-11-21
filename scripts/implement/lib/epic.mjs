@@ -9,6 +9,7 @@
 // ticket against the unit diff -> ONE PR per unit -> board (Pending Review, epic evidence).
 // Every step is persisted in .factory/state/implement/epics/<epic>.json, so `implement resume` continues
 // an interrupted epic. See docs/ai-pipeline/implement.md#epic-delivery.
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 import { prAnalysisSection } from '../../pipeline/lib/analysis/fixloop.mjs';
 import { withStaticAnalysis } from '../../pipeline/lib/analysis/report.mjs';
@@ -31,10 +32,10 @@ import { worktreeFor } from './batch.mjs';
 import { boardEvent } from './board-events.mjs';
 import { OUTCOMES_FILE } from './decisions.mjs';
 import { councilRecords, councilReviewSection, withCouncilReview } from '../../pipeline/lib/council.mjs';
-import { EPIC_PLAN_STAGE, deliveryShape, epicDeps, epicPlanDecision, epicPlanTask, epicPrBody, epicSlug, epicTestKey, groupDeps, groupOutcome, groupsDecision, journeyTicket, nextStories, noteMarkdown, singleGroups, validateNote } from './epic-plan.mjs';
+import { EPIC_PLAN_STAGE, featureGroupTitle, deliveryShape, epicDeps, journeyGroup, epicPlanDecision, epicPlanTask, epicPrBody, epicSlug, epicTestKey, groupDeps, groupOutcome, groupsDecision, journeyTicket, nextStories, noteMarkdown, singleGroups, validateNote } from './epic-plan.mjs';
 import { parityGate, paritySection } from './ci-parity.mjs';
 import { HARNESS_EXCLUDES, commitAll, commitEnv, commitRecords, headSha, mergeInProgress, mustGit, unmergedFiles } from './gitops.mjs';
-import { adoptOpenedPr, afterOpen, deliverFinished, deliveryIo, holdOpenPr, fullProjectRuns, fullProjectsSection, plan as planStories, prCheckFollowUps, runConditions, runConditionsSection, runsDir, shipMetrics, skippedOutcome, startWorker, withoutResolved, ownerDecisionBlock, waitingForPerson } from './implement.mjs';
+import { adoptOpenedPr, afterOpen, prCheckHold, deliverFinished, deliveryIo, holdOpenPr, fullProjectRuns, fullProjectsSection, plan as planStories, prCheckFollowUps, runConditions, runConditionsSection, runsDir, shipMetrics, skippedOutcome, startWorker, withoutResolved, ownerDecisionBlock, waitingForPerson } from './implement.mjs';
 import { lspAdapter } from './lsp.mjs';
 import { waitForMemory } from './resources.mjs';
 import { agentSettings, createContext, runSelf } from './orchestrate.mjs';
@@ -66,8 +67,8 @@ export const listEpicRuns = (config) => (fs.existsSync(epicsDir(config)) ? fs.re
 
 export const epicBranchFor = (config, epicKey) => `${config.implement.epic?.branchPrefix ?? 'epic/'}${epicSlug(epicKey)}`;
 export const epicWorktreeFor = (config, epicKey) => worktreeFor(config, { key: `epic-${epicSlug(epicKey)}` });
-export const groupBranchFor = (config, epicKey, id) => `${config.implement.epic?.bugfixPrefix ?? 'bugfix/'}${epicSlug(epicKey)}/${id}`;
-export const groupWorktreeFor = (config, epicKey, id) => worktreeFor(config, { key: `bugfix-${epicSlug(epicKey)}--${id}` });
+export const groupBranchFor = (config, epicKey, id, { feature = false } = {}) => (feature ? `${config.implement.branchPrefix ?? 'feat/'}${epicSlug(epicKey)}--${id}` : `${config.implement.epic?.bugfixPrefix ?? 'bugfix/'}${epicSlug(epicKey)}/${id}`);
+export const groupWorktreeFor = (config, epicKey, id, { feature = false } = {}) => worktreeFor(config, { key: `${feature ? 'feat' : 'bugfix'}-${epicSlug(epicKey)}--${id}` });
 
 // Statuses of an epic run that is finished for good: a single ticket of that epic then runs on its own.
 const SETTLED = new Set(['delivered', 'complete']);
@@ -150,7 +151,9 @@ export async function planEpic(env, opts = {}) {
 async function planEpicOnce(env, { attempts = 2 } = {}) {
   const { planConfig, cwd, epic, stories, deps, log, groups } = env;
   const keys = stories.map((s) => s.key);
-  const maxPerGroup = planConfig.implement.maxBugsPerGroup ?? null;
+  // A feature epic split into PRs (prSplit story or groups): no foundation, feature wording; the cap is its own.
+  const featureGroups = Boolean(env.shape?.feature);
+  const maxPerGroup = featureGroups ? planConfig.implement.epic?.maxStoriesPerGroup ?? null : planConfig.implement.maxBugsPerGroup ?? null;
   let errors = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const { cli, model } = agentSettings(planConfig, 'orchestrator');
@@ -162,7 +165,7 @@ async function planEpicOnce(env, { attempts = 2 } = {}) {
       noSubagents: true,
       cwd,
       timeoutSec: planConfig.implement.epic?.planTimeoutSec ?? planConfig.implement.timeouts.plannerSec,
-      task: epicPlanTask({ epic, stories, mockups: env.mockups ?? [], errors, groups, maxPerGroup }),
+      task: epicPlanTask({ epic, stories, mockups: env.mockups ?? [], errors, groups, maxPerGroup, featureGroups }),
       usage: { stage: EPIC_PLAN_STAGE, story: epic.key, step: 'epic-plan', round: attempt },
     });
     const agent = { version: res.version, cli, model };
@@ -171,9 +174,9 @@ async function planEpicOnce(env, { attempts = 2 } = {}) {
       logDecision(planConfig, { ...epicPlanDecision({ epic, attempt, accepted: false, errors: [`blocked: ${raw.reason ?? ''}`], agent }), decision: 'blocked' });
       return { ok: false, outcome: 'blocked', reason: raw.reason ?? 'the orchestrator reported the epic blocked' };
     }
-    const v = validateNote(raw, { keys, groups, stories, maxPerGroup });
+    const v = validateNote(raw, { keys, groups, stories, maxPerGroup, featureGroups });
     const last = attempt === attempts;
-    const fallback = groups && !v.ok && last && v.note && !v.noteErrors.length ? `the grouping was rejected twice (${v.groupErrors[0]}); one PR per ticket instead` : null;
+    const fallback = groups && !v.ok && last && v.note && !v.noteErrors.length ? `the grouping was rejected twice (${v.groupErrors[0]}); one PR per ${featureGroups ? 'story' : 'ticket'} instead` : null;
     const accepted = v.ok || Boolean(fallback);
     const decisionId = accepted ? randomUUID() : null;
     logDecision(planConfig, epicPlanDecision({ epic, attempt, accepted, errors: v.errors, note: v.note, agent, decisionId }));
@@ -195,7 +198,7 @@ export async function runFoundation(env, note) {
   const { wtConfig, worktree, branch, epic, deps } = env;
   const specFile = path.join(worktree, wtConfig.stateDir, 'implement', `${epic.key}.foundation.md`);
   fs.mkdirSync(path.dirname(specFile), { recursive: true });
-  fs.writeFileSync(specFile, `# ${epic.key}: epic foundation\n\n${note.foundation.goal}\n\n${noteMarkdown(note, { epic })}`);
+  writeText(specFile, `# ${epic.key}: epic foundation\n\n${note.foundation.goal}\n\n${noteMarkdown(note, { epic })}`);
   const ctx = createContext({ config: wtConfig, key: epic.key, storyFile: specFile, branch, worktree, base: headSha(worktree), deps: { runAgent: deps.runAgent, lsp: deps.lsp, ...(deps.stack ? { stack: deps.stack } : {}), ...(deps.acquire ? { acquire: deps.acquire } : {}) }, log: env.rawLog });
   ctx.decisionId = env.decisionId;
   const st = { id: 'foundation', goal: note.foundation.goal, acceptance: note.foundation.acceptance.length ? note.foundation.acceptance : [note.foundation.goal], owns: note.foundation.owns, dependsOn: [], modelClass: 'large', verify: 'code' };
@@ -395,9 +398,9 @@ export const defaultDeps = (config, log) => ({
   parityGate,
   // OPEN, MERGED or CLOSED, for a PR of this repository; null when it cannot be read.
   prState: (pr) => {
-    const host = hostFor(config).sync;
-    if (!String(host.repo ?? '') || !host.ownsPr(pr)) return null;
     try {
+      const host = hostFor(config).sync;
+      if (!String(host.repo ?? '') || !host.ownsPr(pr)) return null;
       const state = host.pr.get(pr)?.state;
       return state ? state.toUpperCase() : null;
     } catch {
@@ -424,11 +427,11 @@ const sum = (xs) => (xs.some((x) => x != null) ? Math.round(xs.reduce((n, x) => 
 // blockedBy, file), `inputs` their story files. `grouping` is auto, epic or ticket (bug epics). `only`
 // runs just those tickets in their existing unit (a single ticket joining an in-progress epic): no epic
 // plan, foundation, feature verification, PR check or PR then. Returns { results, epic: summary }.
-export async function runEpic(config, { epic, tickets, inputs, base, parallel = 1, pr = false, force = false, only = null, grouping = null, script, deps: injected = {}, log: rawLog = defaultLog }) {
+export async function runEpic(config, { epic, tickets, inputs, base, parallel = 1, pr = false, force = false, only = null, grouping = null, prSplit = null, script, deps: injected = {}, log: rawLog = defaultLog }) {
   const log = (m) => rawLog(`${epic.key}: ${m}`);
   const E = config.implement.epic ?? {};
   const prior = loadEpicRun(config, epic.key);
-  const shape = prior?.shape ?? deliveryShape(tickets, grouping ?? E.grouping ?? 'auto');
+  const shape = prior?.shape ?? deliveryShape(tickets, grouping ?? E.grouping ?? 'auto', prSplit ?? E.prSplit ?? 'epic');
   const epicBase = prior?.base ?? base;
   const deps = { ...defaultDeps(config, log), ...injected };
   const stories = tickets.map((t) => ({ key: t.key, title: t.title, type: t.type, number: t.issue?.number ?? null, blockedBy: t.blockedBy ?? [], text: readText(config.abs(t.file)) }));
@@ -447,8 +450,17 @@ export async function runEpic(config, { epic, tickets, inputs, base, parallel = 
   const env = { config, epic, stories, tickets, inputs, deps, log, rawLog, noteFile, noteJson, epicBase, parallel, pr, force, only, script, E, shape };
   try {
     return await epicFlow(env);
+  } catch (error) {
+    // A crash never leaves the epic `running` for ever: the state says where it stopped and why, and `implement resume`
+    // continues from it (the plan, merged stories and opened PRs are kept; a delivered group is not delivered again).
+    if (!only) saveEpicRun(config, epic.key, (cur) => ({ ...cur, status: 'interrupted', outcome: 'crashed', reason: `${cur.phase ?? 'the run'} stopped: ${String(error?.message ?? error).slice(0, 300)}`, pid: null, finishedAt: nowIso() }));
+    log(`CRASHED in ${loadEpicRun(config, epic.key).phase ?? 'the run'}: ${error?.message ?? error}; the epic state is saved, \`implement resume\` continues it`);
+    throw error;
   } finally {
     await deps.lsp.stopAll?.();
+    // The records the epic run wrote in this checkout (the epic plan's usage and its decisions) go to the store too,
+    // whatever happened after the plan; the groups' worktrees ship their own.
+    await deps.shipMetrics?.(config);
   }
 }
 
@@ -457,7 +469,7 @@ async function epicFlow(env) {
   const feature = shape.kind === 'epic';
   const failAll = (outcome, reason, findings = []) => {
     const results = stories.map((s) => ({ key: s.key, outcome: 'blocked', reason: `${outcome === 'foundation-failed' ? 'the epic foundation' : 'the epic plan'} failed: ${reason}`, branch: null }));
-    saveEpicRun(config, epic.key, { status: 'failed', outcome, reason, findings, finishedAt: nowIso() });
+    saveEpicRun(config, epic.key, { status: 'failed', outcome, reason, findings, phase: 'finished', pid: null, finishedAt: nowIso() });
     return { results, epic: { key: epic.key, outcome, reason } };
   };
 
@@ -467,24 +479,33 @@ async function epicFlow(env) {
   const epicWt = feature ? prepareUnitWorktree(config, { branch: epicUnit.branch, worktree: epicUnit.worktree, base: epicBase, tickets: [...(epic.file ? [epic] : []), ...tickets] }) : null;
   if (feature) await deps.lsp.start?.(epicUnit.worktree, { key: epic.key });
 
-  // 1. The epic plan (once; a resumed or joined run reuses the note).
+  // 1. The epic plan (once; a resumed or joined run reuses the note). Each step's phase is saved before it starts.
+  const phase = (name) => !only && saveEpicRun(config, epic.key, { phase: name, phaseAt: nowIso() });
+  phase('plan');
   let state = loadEpicRun(config, epic.key);
   let note = state.plan?.ok && fs.existsSync(noteJson) ? readJson(noteJson, null) : null;
   if (!note && !only) {
-    if (!feature && !shape.planned) {
+    if (!feature && !shape.planned && !shape.feature) {
       note = { summary: '', contracts: [], migrations: [], components: [], events: [], foundation: null, stories: stories.map((s) => ({ key: s.key, owns: [], dependsOn: [], notes: null })), buildOrder: [], journeys: [], risks: [], prGroups: singleGroups(stories) };
       logDecision(config, groupsDecision({ epic, groups: note.prGroups, fallback: 'grouping "ticket": one PR per ticket' }));
     } else {
-      log(`planning the epic (design note${feature ? '' : ' and PR groups'})`);
+      // A feature epic split one PR per story still gets its design note (shared contracts, journeys); its groups are
+      // fixed by the harness, one per story.
+      const storySplit = shape.feature && !shape.planned;
+      log(`planning the epic (design note${feature || storySplit ? '' : ' and PR groups'})`);
       const planConfig = feature ? epicWt : config;
-      const planned = await deps.planEpic({ ...env, planConfig, cwd: feature ? epicUnit.worktree : config.root, groups: !feature });
+      const planned = await deps.planEpic({ ...env, planConfig, cwd: feature ? epicUnit.worktree : config.root, groups: !feature && !storySplit });
+      if (planned.ok && storySplit) {
+        planned.note.prGroups = singleGroups(stories);
+        logDecision(config, groupsDecision({ epic, groups: planned.note.prGroups, decisionId: planned.decisionId ?? null, fallback: 'prSplit "story": one PR per story' }));
+      }
       if (!planned.ok) return failAll(planned.outcome, planned.reason, planned.findings);
       note = planned.note;
       if (feature) commitAll(epicUnit.worktree, `${epic.key}: Epic plan (design note)`, [epicWt.metricsDir]);
       state = saveEpicRun(config, epic.key, { plan: { ok: true, decisionId: planned.decisionId, note: noteFile, at: nowIso() } });
     }
     writeJson(noteJson, note);
-    fs.writeFileSync(noteFile, noteMarkdown(note, { epic }));
+    writeText(noteFile, noteMarkdown(note, { epic }));
     state = saveEpicRun(config, epic.key, { plan: { ...(state.plan ?? {}), ok: true, note: noteFile } });
   }
   // Tickets added to a bug epic after its plan (dogfood C4: two new tickets were "skipped: its group never ran"):
@@ -511,7 +532,7 @@ async function epicFlow(env) {
       const still = fresh.filter((s) => !note.prGroups.some((g) => g.tickets.includes(s.key)));
       if (still.length) note.prGroups.push(...singleGroups(still));
       writeJson(noteJson, note);
-      fs.writeFileSync(noteFile, noteMarkdown(note, { epic }));
+      writeText(noteFile, noteMarkdown(note, { epic }));
       logDecision(config, groupsDecision({ epic, groups: note.prGroups, fallback: null }));
     }
   }
@@ -524,12 +545,21 @@ async function epicFlow(env) {
     : (() => {
         const groups = note?.prGroups?.length ? note.prGroups : singleGroups(stories);
         const gdeps = groupDeps(groups, stories, note);
-        return groups.map((g) => ({ id: g.id, kind: 'group', group: g, branch: groupBranchFor(config, epic.key, g.id), worktree: groupWorktreeFor(config, epic.key, g.id), keys: g.tickets, deps: gdeps.get(g.id) ?? [] }));
+        // A feature epic split into PRs: every cross-story journey is verified on one group, stacked on the others that
+        // hold a journey story (journeyGroup).
+        const jg = shape.feature ? journeyGroup(groups, gdeps, note?.journeys ?? []) : null;
+        if (jg?.added.length) {
+          gdeps.set(jg.id, [...(gdeps.get(jg.id) ?? []), ...jg.added]);
+          log(`group ${jg.id} verifies the cross-story journeys; it is stacked on ${jg.added.join(', ')} so its branch has every story they cross`);
+        }
+        const feat = { feature: Boolean(shape.feature) };
+        return groups.map((g) => ({ id: g.id, kind: 'group', ...feat, journeys: jg?.id === g.id, group: g, branch: groupBranchFor(config, epic.key, g.id, feat), worktree: groupWorktreeFor(config, epic.key, g.id, feat), keys: g.tickets, deps: gdeps.get(g.id) ?? [] }));
       })();
-  for (const u of units) saveUnit(config, epic.key, u.id, { id: u.id, kind: u.kind, branch: u.branch, worktree: u.worktree, keys: u.keys, deps: u.deps, ...(u.group ? { title: u.group.title, reason: u.group.reason, risk: u.group.risk } : {}) });
+  for (const u of units) saveUnit(config, epic.key, u.id, { id: u.id, kind: u.kind, ...(u.feature ? { feature: true, journeys: u.journeys } : {}), branch: u.branch, worktree: u.worktree, keys: u.keys, deps: u.deps, ...(u.group ? { title: u.group.title, reason: u.group.reason, risk: u.group.risk } : {}) });
 
   // 2. The epic foundation (feature epics), before any story.
   if (feature && note?.foundation && !only && state.foundation?.status !== 'approved') {
+    phase('foundation');
     log(`epic foundation: ${note.foundation.goal}`);
     const f = await deps.runFoundation({ ...env, wtConfig: epicWt, worktree: epicUnit.worktree, branch: epicUnit.branch }, note);
     commitAll(epicUnit.worktree, `${epic.key}: Epic foundation`);
@@ -541,6 +571,7 @@ async function epicFlow(env) {
   // --parallel groups at once, each group's tickets one at a time. A group whose dependency group
   // failed is skipped.
   const targets = only ? units.filter((u) => u.keys.some((k) => only.includes(k))) : units;
+  phase('units');
   const unitResults = new Map();
   const groupParallel = feature ? 1 : env.parallel;
   const pending = [...targets];
@@ -600,6 +631,7 @@ async function epicFlow(env) {
     return { results, epic: { key: epic.key, outcome: 'joined' } };
   }
   const all = [...unitResults.values()];
+  phase('summary');
   // A PR closed without merging is not one of the epic's deliveries (council C7: the summary listed the closed #56).
   const prs = [...new Set(all.map((r) => r.pr).filter(Boolean))].filter((pr) => deps.prState?.(pr) !== 'CLOSED');
   // A ticket this run was asked to deliver that no group ran is a failure, said out loud (dogfood C4: the run
@@ -624,7 +656,7 @@ async function epicFlow(env) {
   // "PRs were not all opened" was printed when the only PR-less groups had nothing to deliver).
   const missingPr = all.filter((r) => !r.pr && !r.noPr);
   const delivered = outcome === 'done' && (!missingPr.length || !env.pr || prsDisabled());
-  saveEpicRun(config, epic.key, { status: outcome === 'done' ? (prs.length ? 'delivered' : 'complete') : outcome === 'waiting' ? 'waiting' : 'failed', outcome, reason, prs, waiting, finishedAt: nowIso() });
+  saveEpicRun(config, epic.key, { status: outcome === 'done' ? (prs.length ? 'delivered' : 'complete') : outcome === 'waiting' ? 'waiting' : 'failed', outcome, reason, prs, waiting, phase: 'finished', pid: null, finishedAt: nowIso() });
   if (outcome === 'done') {
     const fresh = all.filter((r) => r.pr && !r.earlier).length;
     const earlier = all.filter((r) => r.earlier && r.pr).length;
@@ -745,7 +777,8 @@ async function deliverUnit(env, unit, units, epicWt) {
 
   // Unit-level feature verification over the cross-story journeys: the whole epic's for a feature epic; for a bug group
   // only journeys the plan lists whose tickets are all in this group.
-  const journeys = feature ? note?.journeys ?? [] : (note?.journeys ?? []).filter((j) => j.stories.length && j.stories.every((k) => unit.keys.includes(k)));
+  // A feature epic split into PRs: the journey group verifies every journey (its branch is stacked on the others).
+  const journeys = feature || unit.journeys ? note?.journeys ?? [] : unit.feature ? [] : (note?.journeys ?? []).filter((j) => j.stories.length && j.stories.every((k) => unit.keys.includes(k)));
   const fvKey = epicTestKey(epic.key, epic.number);
   let fv = state.units?.[unit.id]?.fv ?? null;
   if (E.featureVerification !== false && (feature || journeys.length) && fv?.status !== 'verified') {
@@ -824,7 +857,8 @@ async function deliverUnit(env, unit, units, epicWt) {
     log(`every ticket verified and merged into ${unit.branch}${env.pr ? ' (PRs disabled)' : '; --pr opens the PR'}`);
     return finish('done', { prBody: body });
   }
-  const title = feature ? `Epic: ${(epic.title ?? epic.key).replace(/^Epic:\s*/i, '')}` : `Fix ${unit.keys.join(', ')}: ${unit.group.title}`;
+  const epicTitle = (epic.title ?? epic.key).replace(/^Epic:\s*/i, '');
+  const title = feature ? `Epic: ${epicTitle}` : unit.feature ? featureGroupTitle(epicTitle, unit.group.title, unit.keys) : `Fix ${unit.keys.join(', ')}: ${unit.group.title}`;
   // The unit's PR opens finished, through the same delivery as a standalone ticket's (implement.mjs deliverFinished):
   // every agent stage done, CI proven on the branch head, the PR opened once with its full body, and after the open only
   // deterministic steps; a failure before the open escalates on the tickets with no PR (owner requirement C16, C18).
@@ -837,6 +871,8 @@ async function deliverUnit(env, unit, units, epicWt) {
     body,
     result: {},
     questions: unitQuestions(prChecks),
+    // An escalated unit PR check (fix mode) is a pre-open failure: no PR, the findings on the tickets.
+    prcIncomplete: prCheckHold(Object.values(prChecks)[0] ?? null, { mode, fixUntil: (wtConfig.implement.prCheck ?? {}).fixUntil ?? 'major', issues: unit.keys.map((k) => uenv.stories?.find?.((st) => st.key === k)?.number ?? null).filter(Boolean) }),
     existingPr: existing,
     holds: existing ? now.delivery.holds : [],
     openedAt: existing ? now.delivery.openedAt ?? null : null,
@@ -860,7 +896,8 @@ function unitDelivery(env, unit, uenv, { feature, fvKey = null }) {
     branch: unit.branch,
     worktree: unit.worktree,
     base: uenv.prBase,
-    isBug: !feature,
+    // The review gate's bug-fix rating is for bug groups only; a feature epic's group PR is a feature PR.
+    isBug: !feature && !unit.feature,
     issues: keys.map((k) => uenv.stories?.find?.((st) => st.key === k)?.number ?? null).filter(Boolean),
     targetArgs: ['--stories', keys.join(',')],
     env: ciEnv(uenv),

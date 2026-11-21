@@ -1,0 +1,38 @@
+{
+  "$comment": "The local demo-video toolchain (docs/ai-pipeline/pr-demo-video.md). `factory video install` creates a Python virtualenv under the factory's tools folder, installs these packages at exactly these versions, and downloads the model files by pinned URL, checking size and SHA-256. Licences use the analysis allowlist (scripts/pipeline/lib/analysis/licences.mjs); items a lawyer still has to review are marked licenceReview: pending (on by default with a warning; video.licenceReview: \"strict\" turns narration off).",
+  "id": "video-1",
+  "python": { "min": "3.10", "max": "3.13" },
+  "packages": [
+    { "name": "kokoro-onnx", "version": "0.6.1", "licence": "MIT", "why": "text to speech (Kokoro-82M on ONNX Runtime, CPU)" },
+    { "name": "soundfile", "version": "0.14.0", "licence": "BSD-3-Clause", "why": "writes the narration audio (WAV)" },
+    { "name": "imageio-ffmpeg", "version": "0.8.1", "licence": "BSD-2-Clause", "why": "a pinned ffmpeg binary for every platform (render, mux)" }
+  ],
+  "bundled": [
+    { "name": "libsndfile (bundled by soundfile)", "licence": "LGPL-2.1-or-later", "use": "execute", "licenceReview": "pending", "why": "loaded unmodified as a shared library; the factory never redistributes it (pip fetches the upstream wheel)" },
+    { "name": "ffmpeg (bundled by imageio-ffmpeg)", "licence": "GPL-3.0-or-later", "use": "execute", "licenceReview": "pending", "why": "the wheel's binary is built with --enable-gpl; run unmodified as a separate program, never linked, never redistributed by the factory. A team may point video.ffmpeg at its own (for example LGPL) build" },
+    { "name": "phonemizer (dependency of kokoro-onnx)", "licence": "GPL-3.0-only", "use": "execute", "licenceReview": "pending", "why": "imported by the narration script in its own process; never redistributed by the factory" },
+    { "name": "espeak-ng (bundled by espeakng-loader, dependency of kokoro-onnx)", "licence": "GPL-3.0-or-later", "use": "execute", "licenceReview": "pending", "why": "loaded unmodified as a shared library in the narration process; never redistributed by the factory" },
+    { "name": "onnxruntime (dependency of kokoro-onnx)", "licence": "MIT", "use": "execute" }
+  ],
+  "models": {
+    "int8": {
+      "file": "kokoro-v1.0.int8.onnx",
+      "version": "model-files-v1.0",
+      "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx",
+      "size": 92361271,
+      "sha256": "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb",
+      "licence": "Apache-2.0",
+      "why": "Kokoro-82M weights, quantized (about 90 MB)"
+    },
+    "voices": {
+      "file": "voices-v1.0.bin",
+      "version": "model-files-v1.0",
+      "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+      "size": 28214398,
+      "sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+      "licence": "Apache-2.0",
+      "licenceReview": "pending",
+      "why": "the voice style vectors; the kokoro-onnx release page does not state their licence separately (Kokoro-82M is Apache-2.0)"
+    }
+  }
+}

@@ -13,7 +13,7 @@ import { workflowProblems } from './lib/workflow-safety.mjs';
 import { detect, draftProject, loadPacks } from './lib/detect.mjs';
 import { draftConfig, scaffold, unfilledPlaceholders } from './lib/init.mjs';
 import { policyPython, setupPythonVenv } from '../pipeline/lib/python.mjs';
-import { autoMergeSetting, checkoutHost, reviewEnforcement } from './lib/code-host.mjs';
+import { autoMergeSetting, checkoutHost, reviewEnforcement, unprovidedRequired, unprovidedText } from './lib/code-host.mjs';
 import { resolveToken } from '../pipeline/lib/hosts/index.mjs';
 import { ciFor } from '../pipeline/lib/ci/index.mjs';
 import { trackerFor } from '../board/lib/trackers/index.mjs';
@@ -137,7 +137,7 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
     ['.factory/config.json', Boolean(config), config ? `${config.project?.services?.length ?? 0} service(s), languages: ${(config.project?.languages ?? []).join(', ') || 'none'}` : 'run `factory init`'],
     ['engine version matches the pin', !pin.version || pin.version === engineVersion(), `pinned ${pin.version ?? 'none'}, installed ${engineVersion()}`],
     ['commands have no generator placeholders left', !config || unfilledPlaceholders(config, loadPacks(INSTALL_ROOT)).length === 0, config ? unfilledPlaceholders(config, loadPacks(INSTALL_ROOT)).map((k) => `{${k}} in .factory/config.json`).join(', ') : ''],
-    ['generated files in step', fs.existsSync(path.join(root, MANIFEST)) && check(root, INSTALL_ROOT).length === 0, 'run `factory check` for the list'],
+    ['generated files in step', fs.existsSync(path.join(root, MANIFEST)) && check(root, INSTALL_ROOT).filter((p) => !p.notice).length === 0, 'run `factory check` for the list'],
     ['git hooks', !pin.features.gitHooks || hooksPath === '.factory/githooks', hooksPath ? `core.hooksPath is ${hooksPath}` : 'run `git config core.hooksPath .factory/githooks`'],
     ['an agent CLI (claude, copilot or codex)', ['claude', 'copilot', 'codex'].some((c) => have(c)), 'needed for every agent the pipeline starts'],
     ...cliAuth.map((c) => [c.name, c.check(), c.note]),
@@ -161,9 +161,9 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
   // The PR opens finished (implement.preOpen): CI can prove a story branch's head before its PR exists, and every
   // delivered PR's run record shows no pipeline agent starting after the PR was ready (outside a hold).
   try {
-    const { preOpenSettings, storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
+    const { storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
     const full = loadConfig('implement', root);
-    if (preOpenSettings(full).enabled) {
+    {
       // The CI adapter's capability; that the rendered definitions carry the branch triggers is `factory check`'s row
       // (generated files in step).
       const ci = ciFor(full);
@@ -254,7 +254,14 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
     if (host && host.capabilities?.requiredChecks === false) warnings.push([`${name} requires review-quorum and the CI checks`, `${name} cannot require checks before a merge: the review gate itself refuses to merge until every expected pipeline of the head is green, bound to that SHA (docs/providers/capabilities.md)`]);
     // productRows already reported the host's review-quorum rule (a host it checks through its REST adapter).
     else if (![...product.rows, ...product.warnings].some((r) => /review-quorum/.test(r[0]))) {
-      const enforced = reachable ? reviewEnforcement(host, null, { review, requiredChecks }) : null;
+      const provided = (() => {
+        try {
+          return ciFor({ ...(config ?? {}), root }).providedChecks?.(root) ?? null;
+        } catch {
+          return null;
+        }
+      })();
+      const enforced = reachable ? reviewEnforcement(host, null, { review, requiredChecks, provided }) : null;
       const label = `${name} requires review-quorum and the CI checks (and code-owner review where someone can give it)`;
       if (enforced && !enforced[0]) warnings.push([label, enforced[1]]);
       else if (enforced) rows.push([label, true, enforced[1]]);
@@ -396,14 +403,44 @@ async function main() {
       return report.ok ? 0 : 1;
     }
     case 'render': {
+      const shipped = () => {
+        try {
+          return ciFor({ ...(readJsonSafe(path.join(root, '.factory', 'config.json')) ?? {}), root }).providedChecks?.(root) ?? null;
+        } catch {
+          return null;
+        }
+      };
+      const before = shipped();
       const result = render(root, INSTALL_ROOT, { version: engineVersion() });
       console.log(`Rendered ${result.total} output(s): ${result.written.length} written${result.removed.length ? `, ${result.removed.length} removed` : ''}.`);
       for (const p of [...result.written, ...result.removed.map((p) => `${p} (removed)`)]) console.log(`  ${p}`);
+      // e2e fixtures the repository edited itself: kept, and the difference from the factory's version is shown.
+      for (const k of result.kept ?? []) console.log(`kept: ${k.path} differs from the factory's version (your edit; not refreshed):\n${k.diff}`);
       for (const p of promptChecks(root)) console.log(`warning: ${p.path}: ${p.problem}`);
+      // Checks this release no longer ships (a removed workflow or job): a host rule that still requires one holds every
+      // PR. Said here, with the host's rule read when it can be (read only; enforce is a person's step).
+      const after = shipped();
+      const gone = Array.isArray(before) && Array.isArray(after) ? before.filter((c) => !after.includes(c)) : [];
+      if (gone.length) {
+        console.log(`notice: this render removed the check(s) ${gone.map((c) => `"${c}"`).join(', ')} from the workflows.`);
+        const bp = (() => {
+          try {
+            return checkoutHost(root, readJsonSafe(path.join(root, '.factory', 'config.json')) ?? {})?.repo?.branchProtection?.() ?? null;
+          } catch {
+            return null;
+          }
+        })();
+        const stale = bp && !bp.unavailable ? unprovidedRequired(bp.requiredChecks ?? [], after) : null;
+        if (stale?.length) console.log(`WARNING: ${unprovidedText('the repository', bp.branch ?? 'default branch', stale)}.`);
+        else if (!stale) console.log("  If a host rule requires any of them, run 'factory review-gate enforce --dry-run', then 'factory review-gate enforce'; 'factory doctor' checks it.");
+      }
       return 0;
     }
     case 'check': {
-      const problems = [...check(root, INSTALL_ROOT), ...promptChecks(root), ...workflowProblems(root)];
+      const all = [...check(root, INSTALL_ROOT), ...promptChecks(root), ...workflowProblems(root)];
+      // A repository's own edit of an e2e fixture is reported, not a failure (render keeps it).
+      for (const p of all.filter((x) => x.notice)) console.log(`notice: ${p.path}: ${p.problem}`);
+      const problems = all.filter((x) => !x.notice);
       if (!problems.length) return console.log('Generated files are in step with the factory.'), 0;
       for (const p of problems) console.log(`${p.path}: ${p.problem}`);
       console.log('\nRun `factory render` to write generated files again; change them through .factory/ (config, agent addenda, features), never by hand. Fix an agent instruction that contradicts the factory guard in its addendum or lessons (write-agent-addenda skill).');

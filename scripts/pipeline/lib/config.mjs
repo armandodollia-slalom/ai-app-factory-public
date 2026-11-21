@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { registerConfigSecrets } from './redact.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -229,6 +230,7 @@ export function loadConfig(stage = null, root = repoRoot()) {
   if (analysis.length) throw new Error(`${OVERLAY_FILE}: ${analysis.join('; ')}`);
   if (config.analysis) withAnalysisGate(config);
   cache.set(cacheKey, config);
+  registerConfigSecrets(config);
   return config;
 }
 

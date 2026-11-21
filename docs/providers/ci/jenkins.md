@@ -8,7 +8,7 @@
 
 **Generated files:**
 
-- `ci/jenkins/Jenkinsfile.factory`: declarative, for the Multibranch job. Its stages are gate, lint, feature verification, review-quorum, the analysis jobs, the PR check and the demo video.
+- `ci/jenkins/Jenkinsfile.factory`: declarative, for the Multibranch job. Its stages are gate, lint, feature verification, review-quorum, the analysis jobs and the PR check. Demo videos are made on the machine that runs the pipeline, not in CI.
 - `ci/jenkins/Jenkinsfile.factory-scheduled`: a Pipeline job on the default branch for the tracker sweep, the weekly retro and the cache prune.
 - `.factory/ci/factory-ci.sh`: the script every stage calls.
 

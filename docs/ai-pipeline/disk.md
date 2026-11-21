@@ -2,8 +2,8 @@
 
 A pipeline run leaves a lot on disk: every ticket has a worktree (its build output, `bin`/`obj`, test results, a test-stack
 state folder with the published services per stack slot), every stack build tags new images and leaves the previous
-ones untagged, and every `factory upgrade --install` adds an engine install under `~/.ai-app-factory/versions`. On the
-dogfood machine that reached 90 GB of worktrees, 63 GB of unused Docker images and 28 old installs (7 GB) within a week.
+ones untagged, and every `factory upgrade --install` adds an engine install under `~/.ai-app-factory/versions`. On a busy
+machine that can reach 90 GB of worktrees, 63 GB of unused Docker images and 28 old installs (7 GB) within a week.
 
 The factory keeps this in bounds by itself:
 

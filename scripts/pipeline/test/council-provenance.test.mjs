@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { councilMemory, councilReviewSection, fixDeclarationText, fixesFile, memoryFile, mergeCouncil, sealPendingFixes } from '../lib/council.mjs';
+import { adjudicate, councilMemory, councilReviewSection, fixDeclarationText, fixesFile, memoryFile, mergeCouncil, sealPendingFixes } from '../lib/council.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATE = '.factory/state';
@@ -56,12 +56,15 @@ function sitting({ files, findings, after, fixes, stage = 'pairVerify', step = '
   if (fixes) declare(l.fixes, fixes);
   return { ...r, ...l, memory: councilMemory({ file: l.file, cwd: r.dir, round: 2, fixes: l.fixes }) };
 }
+// The real merge, then the real adjudication with scripted member answers (every item answered by `votes[member]`).
+const answerAll = (task, answer) => ({ status: 0, output: `AGENT_RESULT: ${JSON.stringify({ answers: [...task.matchAll(/^## Item \d+: `([^`]+)`/gm)].map((m) => ({ key: m[1], answer, evidence: 'the agreed fix names this exact check at this line' })) })}` });
+const settle = (results, earlier, votes = { opus: 'yes', sol: 'yes' }) => adjudicate({ council: COUNCIL, merged: mergeCouncil(COUNCIL, results, { earlier }), remerge: (adjudications) => mergeCouncil(COUNCIL, results, { earlier, adjudications }), run: async (m, task) => (votes[m.name] ? answerAll(task, votes[m.name]) : { status: 0, output: '' }), stage: 'prCheck', story: 'S-1', round: 2, log: () => {} });
 const SERVICE = 'src/Api/Service.cs';
 const SPEC = 'e2e/demo.spec.ts';
 const service = (extra = {}) => lines(60, (i) => extra[i] ?? `        var step${i} = Compute(${i}, input);`);
 const spec = (extra = {}) => lines(20, (i) => extra[i] ?? `  await page.click('#step-${i}');`);
 
-test('the C11 counterexample: an unrelated limit added in the same fixing step as a caption fix is not settled', () => {
+test('the C11 counterexample: an unrelated limit added in the same fixing step as a caption fix is not settled', async () => {
   const caption = upheld('fix-caption', SPEC, `Add a caption to the demo in ${SPEC} before the checkout step.`);
   const s = sitting({
     files: { [SERVICE]: service(), [SPEC]: spec() },
@@ -73,7 +76,7 @@ test('the C11 counterexample: an unrelated limit added in the same fixing step a
   assert.equal(limit.pass, false, JSON.stringify(limit.notes));
   assert.equal(limit.earlierRound.length, 0);
   // The caption line itself is the fix's: an objection to it is settled, crediting only that finding.
-  const own = mergeCouncil(COUNCIL, objection(SPEC, 12), { earlier: s.memory });
+  const own = await settle(objection(SPEC, 12), s.memory);
   assert.equal(own.pass, true, JSON.stringify(own.findings));
   assert.deepEqual(own.earlierRound[0].earlier, ['fix-caption']);
 });
@@ -88,19 +91,20 @@ test('an over-broad declaration does not stretch a remedy: the limit declared un
   assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 50), { earlier: s.memory }).pass, false);
 });
 
-test('neighbouring and generic lines are not the fix: a line next to it, a brace in it, a line repeated in the file', () => {
+test('neighbouring and generic lines are not the fix: a line next to it, a brace in it, a line repeated in the file', async () => {
   const s = sitting({
     files: { [SERVICE]: service() },
     findings: [upheld('F1', SERVICE, 'Validate the price and answer InvalidArgument.')],
     after: { [SERVICE]: service({ 20: '        if (!decimal.TryParse(raw, out var price)) {', 21: '            throw new RpcException(new Status(StatusCode.InvalidArgument, "bad price"));', 22: '        }', 30: '        var step21 = Compute(21, input);' }) },
     fixes: [{ id: 'F1', hunks: [{ file: SERVICE, start: 20, end: 22 }] }],
   });
-  assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 21), { earlier: s.memory }).pass, true, 'the declared new line');
+  assert.equal((await settle(objection(SERVICE, 21), s.memory)).pass, true, 'the declared new line, accepted on adjudication');
+  assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 21), { earlier: s.memory }).pass, false, 'never by the harness alone');
   for (const line of [19, 23, 18]) assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, line), { earlier: s.memory }).pass, false, `neighbour ${line}`);
   assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 22), { earlier: s.memory }).pass, false, 'a closing brace names no fix');
 });
 
-test('original code moved during a fix is not the fix: the moved trim stands, the new line beside it is the fix\'s', () => {
+test('original code moved during a fix is not the fix: the moved trim stands, the new line beside it is the fix\'s', async () => {
   const trim = '        var trimmed = giftMessage?.Trim();';
   const s = sitting({
     files: { [SERVICE]: service({ 10: trim }) },
@@ -109,7 +113,8 @@ test('original code moved during a fix is not the fix: the moved trim stands, th
     fixes: [{ id: 'F1', hunks: [{ file: SERVICE, start: 40, end: 41 }] }],
   });
   assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 40), { earlier: s.memory }).pass, false, 'moved original code');
-  assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 41), { earlier: s.memory }).pass, true, 'the new validation');
+  assert.equal((await settle(objection(SERVICE, 41), s.memory)).pass, true, 'the new validation');
+  assert.equal((await settle(objection(SERVICE, 40), s.memory)).adjudicated.length, 0, 'moved code never reaches adjudication');
   // A declaration of nothing but original lines is rejected and recorded.
   const t = sitting({
     files: { [SERVICE]: service({ 10: trim }) },
@@ -144,7 +149,7 @@ test('two findings claiming one line is ambiguous, and stands', () => {
   assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 21), { earlier: s.memory }).pass, false);
 });
 
-test('cross-stage coincident text: the same text in another file, or repeated in the fix\'s file, is not the fix', () => {
+test('cross-stage coincident text: the same text in another file, or repeated in the fix\'s file, is not the fix', async () => {
   const OTHER = 'src/Api/Other.cs';
   const line = '        return Results.BadRequest("quantity must be positive");';
   const r = repo({ [SERVICE]: service(), [OTHER]: service() });
@@ -157,7 +162,7 @@ test('cross-stage coincident text: the same text in another file, or repeated in
   r.write({ [OTHER]: service({ 12: line }) });
   const pr = ledger(r.dir, 'prCheck', null);
   const memory = councilMemory({ file: pr.file, cwd: r.dir, round: 1, fixes: pr.fixes });
-  assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, 30), { earlier: memory }).pass, true, 'the review fix itself, in the later stage');
+  assert.equal((await settle(objection(SERVICE, 30), memory)).pass, true, 'the review fix itself, in the later stage');
   assert.equal(mergeCouncil(COUNCIL, objection(OTHER, 12), { earlier: memory }).pass, false, 'same text, other file');
   // And a second copy in the fix's own file makes either copy ambiguous.
   r.write({ [SERVICE]: service({ 30: line, 55: line }) });
@@ -165,7 +170,7 @@ test('cross-stage coincident text: the same text in another file, or repeated in
   for (const at of [30, 55]) assert.equal(mergeCouncil(COUNCIL, objection(SERVICE, at), { earlier: again }).pass, false, `copy at ${at}`);
 });
 
-test('the implementer\'s declaration for a PR check return is sealed against its own run, before later runs move lines', () => {
+test('the implementer\'s declaration for a PR check return is sealed against its own run, before later runs move lines', async () => {
   const r = repo({ [SERVICE]: service() });
   const pr = ledger(r.dir, 'prCheck', null);
   councilMemory({ file: pr.file, cwd: r.dir, round: 1, fixes: pr.fixes }).remember([upheld('FLOW-1', SERVICE, 'Keep the stored message when an older client omits it.')]);
@@ -177,7 +182,7 @@ test('the implementer\'s declaration for a PR check return is sealed against its
   // A later pair round inserts lines above it; the next PR check sitting still finds the fix by its line.
   r.write({ [SERVICE]: service({ 5: '        var extra = 1 + 2 + input.Length;', 34: '        var kept = request.HasGiftMessage ? request.GiftMessage : stored?.GiftMessage;' }) });
   const memory = councilMemory({ file: pr.file, cwd: r.dir, round: 1, fixes: pr.fixes });
-  const m = mergeCouncil(COUNCIL, objection(SERVICE, 34), { earlier: memory });
+  const m = await settle(objection(SERVICE, 34), memory);
   assert.equal(m.pass, true, JSON.stringify(m.findings));
   assert.deepEqual(m.earlierRound[0].earlier, ['FLOW-1']);
 });
@@ -186,7 +191,7 @@ test('the fixer is told where and how to declare, by finding id', () => {
   const text = fixDeclarationText('/w/.factory/state/council/fixes/prCheck--S-1.json', [{ id: 'FLOW-1' }, { id: 'SOL-2' }, { id: '' }]);
   assert.match(text, /\/w\/\.factory\/state\/council\/fixes\/prCheck--S-1\.json/);
   assert.match(text, /`FLOW-1`, `SOL-2`\)/);
-  assert.match(text, /only for new lines listed here under exactly one finding/);
+  assert.match(text, /only for new lines listed here under exactly one finding, and only when every council member, asked separately, agrees/);
   assert.equal(fixDeclarationText('/x.json', [{ id: '' }]), '');
 });
 
@@ -251,6 +256,11 @@ test('the PR body counts every settled objection, per sitting', () => {
   const m = (score) => [{ name: 'sol', cli: 'codex', blocking: true, score, status: 'ok' }];
   const rec = (ts, round, pass, earlierRound = 0) => ({ ts, stage: 'prCheck', story: 'S-1', round, pass, members: m(pass ? 10 : 6), ...(earlierRound ? { earlierRound } : {}) });
   const text = councilReviewSection([rec('1', 1, false, 1), rec('2', 2, true), rec('3', 1, true, 1), rec('4', 1, false, 2)]);
-  assert.match(text, /- 4 scope objections settled as a note by the recorded fix of an earlier upheld finding \(Sitting 1, round 1, Sitting 2, round 1, Sitting 3, round 1 ×2\)\./);
-  assert.doesNotMatch(councilReviewSection([rec('1', 1, true)]), /settled as a note/);
+  assert.match(text, /- 4 scope objections accepted as a note, on adjudication by every blocking member, as required by the agreed fix of an earlier upheld finding \(Sitting 1, round 1, Sitting 2, round 1, Sitting 3, round 1 ×2\)\./);
+  assert.doesNotMatch(councilReviewSection([rec('1', 1, true)]), /accepted as a note/);
+  // Adjudication sittings are listed with each outcome and counted, and never start a sitting or a round of their own.
+  const adj = (ts, round, items) => ({ ts, kind: 'adjudication', stage: 'prCheck', story: 'S-1', round, members: [{ name: 'opus', attempts: 1 }, { name: 'sol', attempts: 2 }], items });
+  const withAdj = councilReviewSection([rec('1', 1, false), adj('1b', 2, [{ file: 'a.cs', line: 3, earlier: 'F1', outcome: 'covered', acceptedBy: ['opus', 'sol'] }]), rec('2', 2, true, 1), adj('2b', 2, [{ file: 'a.cs', line: 9, earlier: 'F1', outcome: 'stands', acceptedBy: ['opus'], rejectedBy: ['sol'], missing: [] }])]);
+  assert.match(withAdj, /Rounds: 2\n/);
+  assert.match(withAdj, /- 2 adjudication sittings \(6 member executions\): round 2, a\.cs:3 against F1: covered \(yes: opus, sol\); round 2, a\.cs:9 against F1: stands \(no: sol\)\./);
 });

@@ -1,3 +1,5 @@
+import { writeText } from './redact.mjs';
+import { AGENT_SECRET_RULE } from './redact.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -48,6 +50,8 @@ export function buildPrompt(definition, task) {
     parts.push(`## Lessons from earlier reviews, verifier denials and test failures (follow these)\n\n${definition.lessons}`);
   }
   parts.push(`## Task\n\n${task}`);
+  // Every agent and council member, on every CLI (redact.mjs).
+  parts.push(AGENT_SECRET_RULE);
   return parts.join('\n\n');
 }
 
@@ -317,7 +321,7 @@ function prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promp
     // so a prompt in another worktree (a subtask's parent) would go unread.
     const file = promptFile ?? path.join(cwd, config.stateDir, 'prompts', `${name}-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}.md`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, prompt);
+    writeText(file, prompt);
     prompt = `Read the file ${path.relative(cwd, file).replace(/\\/g, '/')} and follow the instructions in it exactly; it is your complete task.`;
   }
   const alias = process.env.PIPELINE_MODEL_OVERRIDE || model || config.agent.models?.default || null;

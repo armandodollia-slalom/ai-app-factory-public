@@ -180,3 +180,48 @@ test('a run that dies in the middle of a return resumes it and finishes', { time
   assert.equal(r.record.attempts[0].outcome, 'error');
   assert.equal(r.record.totals.attempts, 2);
 });
+
+// Dogfood C23 (SURP-1): a PR-check finding that asks for tests went to the implementer twice and the ticket ran out of
+// returns. Now it is a required case for the test plan and test automation; the implementer and the review do not run
+// again, the PR check sits again once the tests verify.
+test('a test gap upheld by the PR check returns to test automation as a required case, not to the implementer', { timeout: 1_800_000 }, () => {
+  const ctx = setup('test-gap');
+  const gap = { result: { lens: 'acceptance', score: 6, summary: 'untested branch', coverage: rows, findings: [{ severity: 'major', title: 'The expired-coupon 400 branch is not tested', detail: 'no test exercises the expired coupon', evidence: 'src/Basket/Coupons.cs:1', requirement: 'Rule: an expired coupon is rejected with 400', fix: 'add a test for an expired coupon' }] } };
+  const toTests = { result: { score: 6, lensScores: { acceptance: 6 }, summary: 'test gap', rulings: [{ id: 'ACC-1-1', ruling: 'upheld', severity: 'major', reason: 'the branch is untested', fix: 'add a test for an expired coupon', resolves: 'tests' }] } };
+  const r = run(ctx, {
+    ...base,
+    implementer: [{ writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'coupon applied' } }],
+    'test-planner': [{ writePlan: [{ title: 'Valid coupon applies', type: 'happy' }, { title: 'Expired coupon rejected', type: 'sad' }] }, { writePlan: [{ title: 'Valid coupon applies', type: 'happy' }, { title: 'Expired coupon rejected', type: 'sad' }, { title: 'Expired coupon 400 branch', type: 'sad', why: 'covers ACC-1-1 (the PR check found the branch untested)' }] }],
+    'test-automation': [{ writeTests: [1, 2], result: { status: 'done' } }, { writeTests: [1, 2, 3], result: { status: 'done' } }],
+    'pr-check-acceptance': [gap, clean('acceptance')],
+    'pr-check-judge': [toTests, pass],
+  });
+  assert.match(r.stdout, /DEMO-1 +done/, `${r.stdout}\n${r.stderr}\n${r.log.slice(-3000)}`);
+  assert.match(r.log, /test gap\(s\) \(ACC-1-1\); to test automation as required cases \(return 1 of at most 2\)/);
+  assert.equal(r.calls.implementer, 1, 'the implementer, who writes no tests, did not get it');
+  assert.equal(r.calls['architecture-reviewer'], 1, 'no production change, no second review');
+  assert.equal(r.calls['test-planner'], 2);
+  assert.equal(r.calls['test-automation'], 2);
+  assert.equal(r.calls['pr-check-judge'], 2, 'the PR check sat again');
+  assert.deepEqual(r.record.prCheckReturns[0].findings.map((f) => [f.id, f.route, f.resolves]), [['ACC-1-1', 'tests', ['tests']]]);
+  assert.match(fs.readFileSync(`${path.join(ctx.root, 'agent.json')}.prompts.log`, 'utf8'), /=== test-automation-verifier #2[\s\S]*Required cases \(a later stage upheld these gaps\)[\s\S]*ACC-1-1/, 'the automation verifier saw the finding');
+});
+
+test('test automation cannot be approved while the required case is unmet: no PR on a verifier\'s 10/10', { timeout: 1_800_000 }, () => {
+  const ctx = setup('test-gap-unmet');
+  const gap = { result: { lens: 'acceptance', score: 6, summary: 'untested branch', coverage: rows, findings: [{ severity: 'major', title: 'The expired-coupon 400 branch is not tested', detail: 'no test exercises it', evidence: 'src/Basket/Coupons.cs:1', requirement: 'Rule: an expired coupon is rejected with 400', fix: 'add a test' }] } };
+  const toTests = { result: { score: 6, lensScores: { acceptance: 6 }, summary: 'test gap', rulings: [{ id: 'ACC-1-1', ruling: 'upheld', severity: 'major', reason: 'untested', fix: 'add a test', resolves: 'tests' }] } };
+  const r = run(ctx, {
+    ...base,
+    implementer: [{ writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'coupon applied' } }],
+    // The planner never names the finding; the verifiers say 10 anyway.
+    'pr-check-acceptance': [gap, clean('acceptance')],
+    'pr-check-judge': [toTests, pass],
+  });
+  assert.doesNotMatch(r.stdout, /DEMO-1 +done/, `${r.stdout}\n${r.stderr}`);
+  assert.equal(r.body, null, 'no PR');
+  assert.equal(r.calls.implementer, 1);
+  assert.ok((r.calls['test-planner'] ?? 0) >= 2, 'the planner was sent back for the required case');
+  assert.equal(r.record.outcome, 'fv-blocked-on-plan', 'the plan could not be verified without the required case');
+  assert.match(fs.readFileSync(`${path.join(ctx.root, 'agent.json')}.prompts.log`, 'utf8'), /=== test-plan-verifier #2[\s\S]*Required cases \(a later stage upheld these gaps\)[\s\S]*ACC-1-1/, 'the plan verifier saw the finding');
+});

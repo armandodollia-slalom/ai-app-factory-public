@@ -131,6 +131,37 @@ test('the GitHub adapter classifies the recorded 403 of `gh pr create` as refuse
   assert.equal(back.code, 'refused');
 });
 
+// Held-out C22 (council C12, Sol 3): GitHub refused a left-out section posted as a comment with an HTML page, and the gh
+// CLI said so in its own form; the comment was recorded as failed, not refused. The recorded message, as kept (200 chars).
+const GH_HTML_403 = 'gh pr comment 336 failed: non-200 OK status code: 403 Forbidden body: "<!DOCTYPE html>\\n\\n<html lang=\\"en\\"><head><meta http-equiv=\\"Content-Type\\" content=\\"text/html; charset=UTF-8\\">\\n\\n<title>Nonc';
+
+test('the gh CLI\'s "status code: 403" form with an HTML body is a refusal; permission and rate limits in that form are not', async () => {
+  assert.equal(refusedError(new Error(GH_HTML_403)), true, 'the recorded C22 comment refusal');
+  assert.equal(refusedError(new Error('pull request create failed: unexpected status code: 403 <html>Forbidden</html>')), true, 'the council\'s probe');
+  assert.equal(refusedError(new Error('gh pr comment 1 failed: unexpected status code: 403 Resource not accessible by integration')), false, 'permission');
+  assert.equal(refusedError(new Error('gh pr comment 1 failed: non-200 OK status code: 403 Forbidden body: "API rate limit exceeded for installation"')), false, 'rate limit');
+  assert.equal(refusedError(new Error('gh pr comment 1 failed: unexpected status code: 429 <html>Too Many Requests</html>')), false, '429');
+  assert.equal(refusedError(new Error('gh pr comment 1 failed: unexpected status code: 500 <html>oops</html>')), false, '500');
+  // Through the GitHub adapter: the structured status is kept, and the class is right for each.
+  const hostWith = (stderr) => createGithubHost({ repo: 'acme/shop' }, { gh: () => ({ status: 1, stdout: '', stderr }) });
+  assert.throws(() => hostWith(GH_HTML_403.replace(/^gh pr comment 336 failed: /, '')).pr.comment(336, 'left-out section'), (e) => e instanceof HostRefusedError && e.status === 403);
+  assert.throws(() => hostWith('non-200 OK status code: 403 Forbidden body: "Resource not accessible by integration"').pr.comment(336, 'x'), (e) => e.code !== 'refused' && e.status === 403);
+  assert.throws(() => hostWith('non-200 OK status code: 403 Forbidden body: "You have exceeded a secondary rate limit"').pr.comment(336, 'x'), (e) => e.code === 'rate-limit');
+  assert.throws(() => hostWith('unexpected status code: 403 <html>Forbidden</html>').pr.get(336), (e) => e.code !== 'refused', 'a read is never a refusal');
+  // The comments after a reduction: the recorded refusal is now `refused`.
+  const { postOmitted } = await import('../../pipeline/lib/hosts/refusal.mjs');
+  const out = await postOmitted([{ id: 'behaviour-changes', name: 'Behaviour changes', text: 'x' }], async () => { throw new Error(GH_HTML_403); });
+  assert.equal(out[0].outcome, 'refused');
+});
+
+test('the GitHub REST client (CI without gh) classes by the structured status: a bare 403 on a POST is refused, a 429 is a rate limit', async () => {
+  const { githubRest } = await import('../../pipeline/lib/hosts/github.mjs');
+  const rest = (status, text) => githubRest({ repo: 'acme/shop' }, { env: { GITHUB_TOKEN: 'fake-token-for-tests' }, fetchImpl: async () => new Response(text, { status }) });
+  await assert.rejects(rest(403, '<html>Forbidden</html>').comment(7, 'body'), (e) => e instanceof HostRefusedError && e.status === 403);
+  await assert.rejects(rest(403, '{"message":"Resource not accessible by integration"}').comment(7, 'body'), (e) => e.code !== 'refused' && e.status === 403);
+  await assert.rejects(rest(429, 'slow down').comment(7, 'body'), (e) => e.code === 'rate-limit');
+});
+
 test('the REST hosts (GitLab, Azure DevOps, Bitbucket share it) class a bare 403 on a POST as refused, on a GET as auth', async () => {
   const reply = (status, text, headers = {}) => async () => new Response(text, { status, headers });
   const post = createHttp({ baseUrl: 'https://h', fetch: reply(403, '{"message":"403 Forbidden"}'), retries: 0 });

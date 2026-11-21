@@ -1,3 +1,4 @@
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import { remoteHost } from '../../pipeline/lib/hosts/index.mjs';
 import path from 'node:path';
@@ -108,7 +109,7 @@ export function dropWaiverLessons(config, root) {
     const text = fs.readFileSync(file, 'utf8');
     const ids = [...ruleTexts(text)].filter(([, t]) => waivesCriteria(t)).map(([id]) => id);
     if (!ids.length) continue;
-    fs.writeFileSync(file, removeRules(text, ids));
+    writeText(file, removeRules(text, ids));
     for (const rule of ids) found.push({ agent, rule, definition: 'The ticket\'s Expected behaviour and acceptance criteria are the contract; the Implementation Notes never waive a criterion.', why: 'it tells the agent to accept the implementer\'s notes instead of the ticket, or to skip findings because of them' });
   }
   for (const c of found) log(`lessons: removed ${c.agent} ${c.rule}: ${c.why}`);
@@ -142,7 +143,7 @@ export function checkLessons(config, root, { runAgentImpl = runAgent } = {}) {
     // from the ticket? Those are removed like contradictions (council C5: the word list is only a backstop).
     const waived = (Array.isArray(out.waivers) ? out.waivers : []).map((w) => ({ ...w, agent: w?.agent ?? x.agent, definition: 'The ticket is the contract; only a person on the ticket can waive a criterion.', why: `waiver: ${w?.why ?? ''}` }));
     const mine = [...(out.contradictions ?? []), ...waived].filter((c) => c?.agent === x.agent && parseRules(x.text).some((r) => r.id === c.rule));
-    if (mine.length) fs.writeFileSync(x.file, removeRules(x.text, mine.map((c) => c.rule)));
+    if (mine.length) writeText(x.file, removeRules(x.text, mine.map((c) => c.rule)));
     found.push(...mine);
   }
   for (const c of found) log(`lessons: removed ${c.agent} ${c.rule}: it contradicts the agent's definition (${c.why})`);
@@ -364,7 +365,7 @@ function applyApprovalProposals(root, proposals) {
   const overlay = readJson(file, {}) ?? {};
   overlay.implement = { ...(overlay.implement ?? {}), reviewGate: { ...(overlay.implement?.reviewGate ?? {}), approvals: applyProposals(policy.table, wanted) } };
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(overlay, null, 2)}\n`);
+  writeText(file, `${JSON.stringify(overlay, null, 2)}\n`);
   return wanted;
 }
 
@@ -811,7 +812,7 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
 export function ensureLessonsHeading(file, agent) {
   const text = fs.readFileSync(file, 'utf8');
   if (/^\s*# /.test(text)) return false;
-  fs.writeFileSync(file, `# Lessons: ${agent}\n\nRules learned from this repository's reviews, verifier findings and PR checks; they are appended to the ${agent} agent's instructions on every run.\n\n${text.replace(/^\s+/, '')}`);
+  writeText(file, `# Lessons: ${agent}\n\nRules learned from this repository's reviews, verifier findings and PR checks; they are appended to the ${agent} agent's instructions on every run.\n\n${text.replace(/^\s+/, '')}`);
   return true;
 }
 

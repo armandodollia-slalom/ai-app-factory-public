@@ -11,10 +11,11 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
-import { councilFor, councilMemory, fixesFile, memberTask, mergeCouncil, memoryFile } from '../lib/council.mjs';
+import { adjudicate, councilFor, councilMemory, fixesFile, memberTask, mergeCouncil, memoryFile } from '../lib/council.mjs';
 import { readJsonl } from '../lib/util.mjs';
 import { councilArchitectureReview } from '../../review/lib/review.mjs';
 import { councilVerifier } from '../../feature-verification/lib/verify.mjs';
+import { isResolvesQuestion, RESOLVES_ANSWER } from './fixtures/resolves-question.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RECORDED = JSON.parse(fs.readFileSync(path.join(here, 'fixtures', 'council-contradiction-run.json'), 'utf8'));
@@ -72,18 +73,23 @@ function answers(rec, change = (f) => f) {
   })]));
 }
 
-async function replay({ round2 = (f) => f, declare = true } = {}) {
+// A member's scripted answer to an adjudication task (council.mjs adjudicationTask): every item answered `vote`.
+const ADJ = /^# Council adjudication/;
+const vote = (task, answer, evidence = 'src/Basket.API/Grpc/BasketService.cs:120: the agreed fix says answer InvalidArgument for a bad price') => out({ answers: [...task.matchAll(/^## Item \d+: `([^`]+)`/gm)].map((m) => ({ key: m[1], answer, evidence })) });
+
+// Round 2's members answer an adjudication with `votes` ({ opus: 'yes', sol: 'no' }; a missing name gives no parsable answer).
+async function replay({ round2 = (f) => f, declare = true, votes = { opus: 'yes', sol: 'yes' } } = {}) {
   const { dir, write } = repo(COUNCIL);
   const config = loadConfig('review', dir);
   const story = { key: 'PCHG-1', file: 'story.md' };
   const tasks = {};
   const [r1rec, r2rec] = RECORDED.rounds;
-  const r1 = await councilArchitectureReview(config, story, 1, { runMember: async (m, task) => ((tasks[`1:${m.name}`] = task), answers(r1rec)[m.name]) });
+  const r1 = await councilArchitectureReview(config, story, 1, { runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : ((tasks[`1:${m.name}`] = task), answers(r1rec)[m.name]) });
   // The implementer answers round 1's upheld findings: the price is validated and a bad one answers InvalidArgument,
   // and it declares the validation's lines as its fix of the price finding (the review's fix declaration).
   write(SERVICE, round2Service());
   if (declare) declareFix(dir, 'review', 'PCHG-1', [{ id: r1.findings.find((f) => f.line === 112).id, hunks: [{ file: SERVICE, start: 112, end: 125 }] }]);
-  const r2 = await councilArchitectureReview(config, story, 2, { runMember: async (m, task) => ((tasks[`2:${m.name}`] = task), answers(r2rec, round2)[m.name]) });
+  const r2 = await councilArchitectureReview(config, story, 2, { runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : (ADJ.test(task) ? ((tasks[`adj:${m.name}`] = task), votes[m.name] ? vote(task, votes[m.name]) : { status: 0, output: 'no answer' }) : ((tasks[`2:${m.name}`] = task), answers(r2rec, round2)[m.name])) });
   return { dir, config, r1, r2, tasks, write };
 }
 
@@ -98,11 +104,19 @@ test('replay of the recorded contradiction: round 2\'s objection to the fix roun
     assert.match(tasks[`2:${m}`], /### Findings the council upheld in earlier rounds[\s\S]*round 1[\s\S]*src\/Basket\.API\/Grpc\/BasketService\.cs:112[\s\S]*Agreed fix: Validate and convert the optional price[\s\S]*StatusCode\.InvalidArgument/);
     assert.match(tasks[`2:${m}`], /or a finding the council upheld in an earlier round \(listed below when there is one\), requires it/);
   }
+  // Now settled by adjudication: both blocking members, asked fresh, accepted that the agreed fix requires the validation.
+  for (const m of ['opus', 'sol']) {
+    assert.match(tasks[`adj:${m}`], /does the agreed fix of the earlier finding require this specific behaviour/);
+    assert.match(tasks[`adj:${m}`], /Its agreed fix: Validate and convert the optional price/);
+    assert.match(tasks[`adj:${m}`], /StatusCode\.InvalidArgument, "price_at_adding is not a valid price"/, 'the declared lines');
+    assert.match(tasks[`adj:${m}`], /The objection, at src\/Basket\.API\/Grpc\/BasketService\.cs:120/);
+  }
   assert.equal(r2.verdict, 'APPROVED', JSON.stringify(r2.findings));
   const note = r2.findings.find((f) => /no ticket line names/.test(f.issue));
   assert.equal(note.severity, 'minor');
+  assert.deepEqual(r2.council.earlierRound[0].acceptedBy, ['opus', 'sol']);
   const rounds = metrics(dir, 'council-rounds');
-  assert.deepEqual(rounds.map((r) => [r.round, r.pass, r.standing]), [[1, false, 2], [2, true, 0]]);
+  assert.deepEqual(rounds.map((r) => [r.kind ?? 'round', r.round, r.pass ?? null, r.standing ?? r.covered]), [['round', 1, false, 2], ['adjudication', 2, null, 1], ['round', 2, true, 0]]);
 });
 
 test('the earlier ruling settles the objection on its own: the same objection asking to remove the validation still does not block', async () => {
@@ -114,11 +128,13 @@ test('the earlier ruling settles the objection on its own: the same objection as
   assert.equal(settled[0].line, 120);
   // Only the finding whose declared fix made the line is credited, not every finding of round 1 (council C11, Sol 1).
   assert.equal(settled[0].earlier.length, 1);
-  assert.match(r2.council.notes[0].notUpheld, /answers \S+ \(upheld in round 1; agreed fix: Validate and convert[^;]*\); a change/);
+  assert.match(r2.council.notes[0].notUpheld, /every blocking member \(opus, sol\) accepted, on adjudication, that the agreed fix of \S+ \(upheld in round 1: Validate and convert[^)]*\) requires this behaviour/);
   assert.doesNotMatch(r2.council.notes[0].notUpheld, /optional representation/);
   assert.equal(metrics(dir, 'council-rounds').at(-1).earlierRound, 1);
   const decision = metrics(dir, 'decisions').filter((d) => d.stage === 'council-review').at(-1);
-  assert.equal(decision.items[0].sanctionedBy.length, 1);
+  assert.equal(decision.items.find((i) => i.sanctionedBy).sanctionedBy.length, 1);
+  const adj = metrics(dir, 'decisions').filter((d) => d.decision === 'adjudicated');
+  assert.deepEqual(adj.map((d) => d.items.map((i) => [i.outcome, i.acceptedBy.join('+')])), [[['covered', 'opus+sol']]]);
 });
 
 test('a real defect in the fix still blocks: a correctness finding on the validation line is not a scope objection', async () => {
@@ -128,8 +144,9 @@ test('a real defect in the fix still blocks: a correctness finding on the valida
 });
 
 test('without the fixer\'s declaration nothing is settled: the same objection goes to the council', async () => {
-  const { r2 } = await replay({ declare: false, round2: (f) => ({ ...f, fix: 'Remove the InvalidArgument path; no ticket line asks for it.' }) });
+  const { r2, tasks } = await replay({ declare: false, round2: (f) => ({ ...f, fix: 'Remove the InvalidArgument path; no ticket line asks for it.' }) });
   assert.equal(r2.verdict, 'CHANGES_REQUESTED');
+  assert.equal(tasks['adj:opus'], undefined, 'nothing to adjudicate');
   assert.equal(r2.council.earlierRound.length, 0);
 });
 
@@ -167,7 +184,9 @@ test('replay, a later stage: the PR check\'s council does not block the validati
   const memory = councilMemory({ file: memoryFile(dir, '.factory/state', { stage: 'prCheck', story: 'PCHG-1' }), cwd: dir, round: 1 });
   assert.match(memory.text, /review, round 1[\s\S]*Agreed fix: Validate and convert the optional price/);
   const objection = (line, text = 'Adds an InvalidArgument response no ticket line names') => [{ member: council.members[0], status: 'ok', score: 6, findings: [{ id: 'o1', severity: 'blocking', action: 'fix', lens: 'acceptance', file: SERVICE, line, text, fix: 'remove it', member: 'opus' }] }, { member: council.members[1], status: 'ok', score: 9, findings: [] }];
-  const moved = mergeCouncil(council, objection(125), { earlier: memory });
+  const settle = (results) => adjudicate({ council, merged: mergeCouncil(council, results, { earlier: memory }), remerge: (adjudications) => mergeCouncil(council, results, { earlier: memory, adjudications }), run: async (m, task) => vote(task, 'yes'), stage: 'prCheck', story: 'PCHG-1', round: 1, log: () => {} });
+  assert.equal(mergeCouncil(council, objection(125), { earlier: memory }).pass, false, 'not settled by the harness alone');
+  const moved = await settle(objection(125));
   assert.equal(moved.pass, true, JSON.stringify(moved.findings));
   assert.equal(moved.earlierRound[0].line, 125);
   assert.equal(mergeCouncil(council, objection(125)).pass, false, 'without the memory it blocks');
@@ -193,7 +212,23 @@ test('test automation council: an objection to a test an earlier round required 
   declareFix(dir, 'testAutomation', 'PCHG-1', [{ id: r1.gaps[0].id, hunks: [{ file: spec, start: 11, end: 22 }] }]);
   const objection = { case: 'TC-PCHG-1-01-03', category: 'other', detail: 'asserts an InvalidArgument response no ticket line names', location: `${spec}:15`, severity: 'blocking', kind: 'scope' };
   const tasks = {};
-  const r2 = await councilVerifier(config, { stage: 'automation', story: { key: 'PCHG-1' }, round: 2, task: 't', producerVersion: 'p', council, runMember: async (m, t) => ((tasks[m.name] = t), m.name === 'opus' ? out({ score: 6, gaps: [objection] }) : out({ score: 10, gaps: [] })) });
+  const r2 = await councilVerifier(config, { stage: 'automation', story: { key: 'PCHG-1' }, round: 2, task: 't', producerVersion: 'p', council, runMember: async (m, t) => isResolvesQuestion(t) ? { status: 0, output: RESOLVES_ANSWER } : (ADJ.test(t) ? vote(t, 'yes', `${spec}:15 asserts the InvalidArgument the upheld gap asks a test for`) : ((tasks[m.name] = t), m.name === 'opus' ? out({ score: 6, gaps: [objection] }) : out({ score: 10, gaps: [] }))) });
   assert.match(tasks.opus, /Findings the council upheld in earlier rounds[\s\S]*no test sends a NaN price/);
   assert.equal(r2.passed, true, JSON.stringify(r2));
+});
+
+test('the C16 replay, a split vote: the objection stands with a concrete instruction, never unresolved with nothing to do', async () => {
+  const { r2 } = await replay({ votes: { opus: 'yes', sol: 'no' } });
+  assert.equal(r2.verdict, 'CHANGES_REQUESTED');
+  const stood = r2.council.findings.find((f) => f.adjudication);
+  assert.equal(stood.adjudication.outcome, 'stands');
+  assert.deepEqual(stood.adjudication.rejectedBy, ['sol']);
+  // The recorded objection said "fix: none required": the implementer still gets something to do.
+  assert.match(stood.fix, /did not accept that \S+'s agreed fix requires the behaviour at src\/Basket\.API\/Grpc\/BasketService\.cs:120 \(sol said no\)\. Take out that behaviour, and keep the change that carries out \S+'s agreed fix: Validate and convert/);
+});
+
+test('the C16 replay, a missing answer: the objection stands', async () => {
+  const { r2 } = await replay({ votes: { opus: 'yes' } });
+  assert.equal(r2.verdict, 'CHANGES_REQUESTED');
+  assert.deepEqual(r2.council.findings.find((f) => f.adjudication).adjudication.missing, ['sol']);
 });

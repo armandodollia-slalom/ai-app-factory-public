@@ -33,11 +33,6 @@ pipeline {
       when { changeRequest() }
       steps { sh 'bash .factory/ci/factory-ci.sh review-quorum' }
     }
-    // factory:demo-video
-    stage('demo video') {
-      when { changeRequest() }
-      steps { sh 'bash .factory/ci/factory-ci.sh demo-video' }
-    }
     stage('PR check') {
       // On demand: "Build with Parameters" and tick PR_CHECK (Jenkins has no label or comment trigger).
       when { allOf { changeRequest(); expression { return params.PR_CHECK == true } } }

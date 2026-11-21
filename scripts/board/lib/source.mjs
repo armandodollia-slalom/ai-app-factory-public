@@ -10,6 +10,7 @@
 //
 // An unchanged issue (same updatedAt) is not downloaded again. Offline, the cache is used with a warning;
 // a ticket that is neither cached nor on the board is a clear error.
+import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HUMAN_DECISIONS_FILE } from '../../pipeline/lib/human-decisions.mjs';
@@ -73,10 +74,10 @@ const summaryOf = (t) => ({ number: t.id, key: t.key, title: t.title, labels: t.
 export function writeTicket(config, key, { content, meta, issue = null, origin = 'board' }) {
   const dir = ticketDir(config, key);
   fs.mkdirSync(path.join(dir, 'history'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'story.md'), content);
-  fs.writeFileSync(path.join(dir, 'history', `${storySha(content)}.md`), content);
+  writeText(path.join(dir, 'story.md'), content);
+  writeText(path.join(dir, 'history', `${storySha(content)}.md`), content);
   // Plans are stamped with the notes-independent hash (pipeline/lib/stories.mjs ticketSha); keep the version under it too.
-  fs.writeFileSync(path.join(dir, 'history', `${ticketSha(content)}.md`), content);
+  writeText(path.join(dir, 'history', `${ticketSha(content)}.md`), content);
   const contentHash = sha256(Buffer.from(content, 'utf8'));
   writeJson(path.join(dir, 'meta.json'), { ...meta, key, contentHash, storySha: storySha(content), issue, origin, fetchedAt: nowIso() });
   const index = readJson(indexFile(config), { issues: {} });
@@ -192,7 +193,7 @@ export function sourceOfIssue(config, issue, key, { run = exec, gh = defaultGh }
 export function writeDecisionsFile(dir, body) {
   const file = path.join(dir, HUMAN_DECISIONS_FILE);
   const text = extractDecisions(body);
-  if (text) fs.writeFileSync(file, `${text}\n`);
+  if (text) writeText(file, `${text}\n`);
   else fs.rmSync(file, { force: true });
 }
 
@@ -282,7 +283,7 @@ export function downloadAttachments(tr, id, assets, dir) {
     const data = tr.tickets.download(att);
     if (f.sha256 && sha256(data) !== f.sha256) throw new TicketError('corrupt', `attachment ${f.name} does not match its sha256`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, data);
+    writeText(target, data);
   }
 }
 
@@ -321,7 +322,7 @@ export function storyVersion(config, key, storyShaWanted, { gh = defaultGh } = {
     for (const body of tr.tickets.history(meta.issue.number)) {
       const parsed = tr.traits?.blockBody ? safeParse(body) : tr.format.parse({ body, meta, key, title: meta.title });
       if (parsed?.content != null && (storySha(parsed.content) === storyShaWanted || ticketSha(parsed.content) === storyShaWanted)) {
-        fs.writeFileSync(file, parsed.content);
+        writeText(file, parsed.content);
         return parsed.content;
       }
     }

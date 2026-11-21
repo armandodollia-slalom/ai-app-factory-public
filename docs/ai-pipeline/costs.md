@@ -1,6 +1,6 @@
 # Token usage and cost
 
-Every agent run the pipeline starts (implement, including the orchestrator and each verifier pair, review, feature verification plan and automation with their verifiers, PR check, the review gate's triage, the retro) records the tokens it used, which models it used, whether it hit the prompt cache, and what it cost at the API list price on the day it ran. The records are kept long term and roll up per ticket (itemized by stage, with a ticket total) and per epic (itemized by ticket and stage, with an epic total).
+Every agent run the pipeline starts (implement, including the orchestrator and each verifier pair, review, feature verification plan and automation with their verifiers, each council member and adjudication sitting, PR check and its fixer, the CI fixing rounds, the review gate's triage, the escalation questions, the retro) records the tokens it used, which models it used, whether it hit the prompt cache, and what it cost at the API list price on the day it ran. Deterministic harness steps (the policy engine, static analysis tools, CI waits, the demo video) start no agent and record no tokens. The records are kept long term and roll up per ticket (itemized by stage, with a ticket total) and per epic (itemized by ticket and stage, with an epic total).
 
 ## Reports
 
@@ -18,15 +18,17 @@ Each row shows the runs, input tokens (uncached), output tokens, cache reads, ca
 
 The notes under a report list the runs that reported no usage (timed out, crashed, or a custom agent command that wrote none), the tokens on models that have no price, and a reconciliation against the cost the agent CLI itself reported for the same runs (Claude Code reports one).
 
+**Unpriced models.** A model with no entry in `pricing.json` (Sol, served through Codex or Copilot, has none) is recorded with its tokens and `cost_usd: null`. Reports never count those tokens as zero dollars: a cost cell reads `$12.30 + 1.2M tok unpriced`, or `unpriced (1.2M tok)` when nothing in it is priced, and the notes give the total of unpriced tokens. So a report's dollar figure is the cost of the priced models only, not the cost of the run.
+
 ## Where the data lives
 
-`.factory/metrics/token-usage.jsonl` in the app repository, committed with the story's other metrics. `merge=union` keeps every record across branches, and a configured [metrics sink](../observability.md) ships the records to a remote store as well. There is one row per model per agent run:
+`.factory/metrics/token-usage.jsonl.d/<branch>.jsonl` in the app repository (one file per branch, so branches never conflict), committed with the story's other metrics; the main checkout spools its own runs to `.factory/state/metrics-spool/`. `factory costs` reads every branch file and the spool together, and a configured [metrics sink](../observability.md) ships the records to a remote store as well. There is one row per model per agent run:
 
 | Field | Meaning |
 | --- | --- |
 | `ts`, `run_id` | when the run finished; one id per agent run (a run can have several rows, one per model) |
 | `story`, `epic` | the ticket and its epic at the time (reports fill a missing epic from the ticket cache) |
-| `stage`, `round`, `step` | pipeline stage (`implement` for the orchestrator or single implementer, `implement-epic-plan` for the epic plan of [epic delivery](implement.md#epic-delivery), `implement-pair`, `implement-verify` and `implement-ui-verify` for the verifier pairs, `review`, `plan`, `plan-verify`, `automation`, `automation-verify`, `pr-check`, `lessons` for the [retro](retro.md), `bug-triage` for the [review gate](review-gate.md)'s triage agent), the round within it, and the step: `plan`, `merge <subtask>` or the subtask id for the orchestrator and pairs, the critic or fixer for the PR check |
+| `stage`, `round`, `step` | pipeline stage (`implement` for the orchestrator or single implementer, `implement-epic-plan` for the epic plan of [epic delivery](implement.md#epic-delivery), `implement-pair`, `implement-verify` and `implement-ui-verify` for the verifier pairs, `review`, `plan`, `plan-verify`, `automation`, `automation-verify`, `pr-check`, `lessons` for the [retro](retro.md) and its lessons check, `bug-triage` for the [review gate](review-gate.md)'s triage agent, `board` for the escalation questions), the round within it, and the step: `plan`, `merge <subtask>` or the subtask id for the orchestrator and pairs, the critic or fixer for the PR check, `<subtask or stage>:<member>` for a council member and `adjudication-<member>` for an adjudication sitting ([council](council.md)) |
 | `agent`, `agent_ver`, `mode`, `cli`, `requested_model` | the agent definition and its prompt version, its access mode (`read`, `write`, `implement` or `verify`), the CLI (`custom` for `PIPELINE_AGENT_CMD`) and the model alias asked for |
 | `model`, `measured` | the model that served the tokens; `measured: false` (and null tokens) when the run reported no usage |
 | `tokens` | `input` (uncached), `output`, `cache_read`, `cache_write_5m`, `cache_write_1h` |
@@ -46,7 +48,7 @@ All runs go through `runAgent` and `runAgentAsync` in `scripts/pipeline/lib/agen
 - **Codex:** `exec --json`. Usage comes from the `turn.completed` events, where `input_tokens` includes the cached tokens.
 - **A custom command (`PIPELINE_AGENT_CMD`):** it can write its usage to the file named in `PIPELINE_USAGE_FILE`, in Claude's or Copilot's format or as `{ "models": [{ "model", "input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h" }] }`.
 
-Recording usage never fails a run. A model with no price is recorded with `cost_usd: null`, and a warning names it.
+Recording usage never fails a run. A model with no price is recorded with `cost_usd: null`, and a warning names it (see [Unpriced models](#reports)).
 
 Every run's result also carries a summary of what it recorded (`usage`: tokens, `costUsd`, `premiumRequests`, `nanoAiu`; `summarizeUsage` in `usage.mjs`). The implement harness adds these up per subtask and per story, so `subtask-runs.jsonl` and `decision-outcomes.jsonl` carry `tokens`, `cost` and `premiumRequests` next to the decisions they paid for, and `implement-runs.jsonl` carries the story total (`tokens`, `cost_usd`, `premium_requests`).
 
@@ -63,5 +65,5 @@ The prices are in `scripts/pipeline/pricing.json` in the factory install (they a
 ## Not covered
 
 - Interactive sessions where a developer implements a story in their own Claude Code or Copilot session are not recorded; only the runs the pipeline starts are. A follow-up could read the session transcript from the Stop hook.
-- The default model policy refuses Codex (it has no allowed model ids), so its usage parser runs only once a repository adds ids for it ([models](models.md)).
+- Codex serves only `sol` under the default model policy ([models](models.md)); its runs are measured but unpriced.
 - A run killed on timeout usually has no usage to read, so it shows as unmeasured.

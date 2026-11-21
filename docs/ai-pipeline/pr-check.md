@@ -116,15 +116,20 @@ Hook runs are recorded in `.factory/metrics/pr-checks.jsonl` in the working tree
 
 ```mermaid
 flowchart TD
-  C[Critics in parallel<br/>acceptance, flow, design, style, video] --> D[Defender answers each finding<br/>concede, rebut or partial]
-  D --> R[Critics answer the rebuttals<br/>maintain, amend or withdraw]
-  R -->|debate turns left| D
-  R --> J[Judge rules: upheld or dismissed]
-  J --> S{Score}
-  S -->|10/10| P[PASS]
-  S -->|below 10, fixing| F[Fixer fixes the upheld findings<br/>script commits]
-  F -->|next round, fresh agents| C
-  S -->|stalled or out of rounds| E[ESCALATED]
+  IN["Verified head of the branch<br/>before any PR exists"] --> C["Critics in parallel, or council members<br/>acceptance, flow, design, style, video"]
+  C --> D["Defender answers each finding<br/>concede, rebut or partial"]
+  D --> R["Critics answer the rebuttals<br/>maintain, amend or withdraw"]
+  R -->|"debate turns left"| D
+  R --> J["Judge rules: upheld or dismissed<br/>names what resolves each"]
+  J --> S{"Score, computed by the script"}
+  S -->|"10/10, or nothing at fixUntil"| P["PASS: delivery continues"]
+  S -->|"upheld findings"| RT{"Route by what resolves it"}
+  RT -->|"production change, major or worse"| IM["Back to the implementer<br/>whole stack again, then a new check"]
+  RT -->|"test gap"| TP["Required case for test planning<br/>and automation, then a new check"]
+  RT -->|"records, PR text, docs, style, minors"| F["Fixer fixes them<br/>script commits"]
+  F -->|"next round, fresh agents"| C
+  RT -->|"owner question"| QQ["Asked on the ticket, no PR"]
+  S -->|"stalled, out of rounds or returns"| E["ESCALATED: no PR"]
 ```
 
 Every agent call is a new headless process, so each round starts with a clean context. Critics see the previous round's upheld findings and re-raise any that are not fixed, under the same id.
@@ -204,11 +209,13 @@ Bounds: `implement.prCheck.returnToImplementation.maxReturns` (2) per story. Eac
 
 Records: the run record's `prCheckReturns` (which check round sent it back, its score and head, the findings and their routing), `pr-check-returns.jsonl`, `pr_check_returns` in `implement-runs.jsonl`, the pair council's `pr-check-return-<n>` sittings in the PR body's council table, and a "Sent back to implementation by the PR check" line in the PR body. A run that dies during a return is resumed with the same fix list (`phase: pr-check-return`).
 
+**Routing by what resolves a finding (0.2.85).** The judge (or council member) fills `resolves` on every upheld finding: `code`, `tests`, `plan` or `records`, two for a mixed finding. Without it the harness reads the finding (`pipeline/lib/finding-route.mjs`: a missing test, a test to remove, the files it names). `code` returns to the implementer as above. `tests` or `plan` becomes a **required case** for feature verification (`feature-verification/lib/required.mjs`): the planner must add a case naming the finding id, test automation must implement it with a test that is new or changed since the finding, both verifiers see it, and the harness caps their verdict below the pass mark while it is unmet; the implementer and the review do not run, and the PR check sits again once the tests verify (`pr-check recheck`). A mixed finding is split, both parts keep its id. `records` stays with the PR check's fixer. **Returned, nothing addressed:** when the PR check upholds again a finding the last return was sent for, the harness compares it with what changed since: a finding sent where it cannot be resolved (a test gap to the implementer) is re-routed once without spending a return; one sent to the right place with nothing of what resolves it changed ends the story `unresolved` with "returned, nothing addressed". The same rule holds at the other hand-offs: the architecture review hands a test-only finding to feature verification instead of blocking the implementer on it; the automation verifier's gap marked `resolves: code` is a product bug for the implementer, not feedback to the test writer; a pair's finding about another subtask's files goes to the integration step and a pair's test gap to feature verification; the PR check's Stop-hook delivery gives the code agent only the findings it can resolve.
+
 Owner questions remain only for what a person must decide about the ticket: the judge gives each question a `questionKind` (`ambiguous`, `contradiction`, `two-readings`, `impossible`). A dismissed acceptance finding with a question and no such kind ("is this limit acceptable?" about behaviour no line asked for) is upheld by the harness instead, and goes back to implementation.
 
 Settings (governance, `.factory/config.json`): `implement.prCheck.returnToImplementation` with `enabled`, `maxReturns`, `minSeverity`, `implementationLenses`, `lightLenses`, `lightPaths`.
 
-A finding that names no file is routed by the paths its text names ("copied from bug-44.spec.ts" is a spec's). Only major or worse findings return: in the first live proof, each return's PR check found new minor polish on a bug that passed at 9/10, and the story spent both returns and escalated over it.
+A finding that names no file is routed by the paths its text names ("copied from bug-44.spec.ts" is a spec's). Only major or worse findings return: a return to implementation costs a full pass through the stack, and each new PR check can find new minor polish, so minors returned that way would use up the returns.
 
 ## Before the PR exists
 

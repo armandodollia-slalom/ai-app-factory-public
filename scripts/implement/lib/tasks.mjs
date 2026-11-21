@@ -152,6 +152,7 @@ export function pairImplementerTask({ key, storyFile, st, worktree, branch, base
       '',
       `### Findings from round ${round - 1} (address every blocking one)`,
       '',
+      // task-builder: its callers route (pairImplementerTask)
       formatFindings(findings),
       '',
       'Fix what the ticket needs: its acceptance criteria, correctness, security and the mockup. Do not act on nits (style, naming or preference that touches none of those) or on requests that widen the scope (features, refactors or fixes outside the acceptance criteria and owns), and do not ignore them silently: dispute each in `disputes` with the acceptance criterion, owns glob or mockup that shows why. The next verifier accepts the dispute or re-asserts the finding with evidence; a finding re-asserted twice can no longer be disputed. A real problem outside this ticket goes to `followUps` (filed as a new ticket later), not into this change.',
@@ -290,6 +291,7 @@ export function escalationTask({ key, storyFile, st, worktree, branch, outcome, 
     '',
     '### All findings from its rounds',
     '',
+    // task-builder: its callers route (escalationTask)
     findings.length ? formatFindings(findings) : '(none recorded)',
     '',
     `Other subtasks own: ${otherOwns.length ? otherOwns.join(', ') : '(none)'}. A rewritten subtask's owns must not overlap them.`,

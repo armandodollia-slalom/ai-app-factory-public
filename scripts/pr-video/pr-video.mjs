@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 // PR demo videos: records the e2e specs a pull request changes and adds the videos to the PR
-// description. Run by .github/workflows/pr-demo-video.yml; see docs/ai-pipeline/pr-demo-video.md.
+// description. Produced on the machine that runs the pipeline (`local`, called by the delivery before the PR opens),
+// never in CI; see docs/ai-pipeline/pr-demo-video.md.
+import { writeText } from '../pipeline/lib/redact.mjs';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../pipeline/lib/cli.mjs';
 import { loadConfig, repoRoot } from '../pipeline/lib/config.mjs';
 import { log, setLogTag } from '../pipeline/lib/util.mjs';
 import { hostFor } from '../pipeline/lib/hosts/index.mjs';
 import { API_MARKERS, expandOpenApiPorts, allEndpoints, apiSettings, apiSources, buildApiSummary, changeScope, changedEndpoints, changedProtos, changedFromOpenApi, loadExtractor, loadOpenApi, openApiFiles, recordedExchanges, renderApiSection } from './lib/api-summary.mjs';
 import { loadConfig as loadStackConfig, slotPorts } from '../stack/lib/ports.mjs';
-import { changedSpecs, keyFolder, prFolder, publishFolder, renderSection, stageVideos, writePrSection } from './lib/pr-video.mjs';
+import { changedSpecs, embedSections, keyFolder, prFolder, publishFolder, readPrBody, renderSection, stageVideos, writePrSection } from './lib/pr-video.mjs';
+import { produceLocal } from './lib/local.mjs';
+import { defaultSlotDeps } from '../feature-verification/lib/slots.mjs';
 
 // The host ports of the test stack slot in use, or null when the repository has no stack.
 function stackPorts(root) {
@@ -25,6 +31,11 @@ function stackPorts(root) {
 setLogTag('pr-video');
 
 const USAGE = `Usage: node scripts/pr-video/pr-video.mjs <command> [options]
+
+  local --base <ref> --key <branch> [--head-sha <sha>]
+        On this machine: lease a test-stack slot, run the changed specs in demo mode, narrate, render, check
+        for secrets, and store the videos, subtitles and the "Demo video" section (section.md) for the branch
+        on the storage branch, where the delivery reads them when it opens the PR. The API summary as with api --key.
 
   specs --base <ref>
         Print the e2e specs (prVideo.specPatterns) changed since the merge base with <ref>, one per line.
@@ -53,17 +64,24 @@ project.services[].kind) and prVideo.backendPaths / prVideo.neutralPaths.
 
 Needs git push access and the gh CLI (GH_TOKEN).`;
 
-const VALUE_FLAGS = new Set(['key', 'base', 'pr', 'specs', 'videos-dir', 'note', 'branch', 'head-sha', 'run-url', 'manifest', 'openapi', 'api', 'frontend']);
+const VALUE_FLAGS = new Set(['result', 'key', 'base', 'pr', 'specs', 'videos-dir', 'note', 'branch', 'head-sha', 'run-url', 'manifest', 'openapi', 'api', 'frontend']);
 
 // A section written for a branch before its PR exists: one file in its own folder of the storage branch, with the head.
 function storeKeyed(root, { branch, folder, file, text }) {
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-video-key-'));
   try {
-    fs.writeFileSync(path.join(stage, file), `<!-- head: ${process.env.HEAD_SHA ?? ''} -->\n${text}\n`);
+    writeText(path.join(stage, file), `<!-- head: ${process.env.HEAD_SHA ?? ''} -->\n${text}\n`);
     publishFolder(root, { branch, folder, stageDir: stage, message: `${file} of ${folder}` });
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }
+}
+
+// `factory teststack <args>` on a slot, synchronously (exit code).
+function spawnSyncStack(root, slot, args) {
+  const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'teststack', 'teststack.mjs');
+  // The stack's own report goes to stderr: stdout carries only this command's result.
+  return spawnSync(process.execPath, [cli, '--root', root, '--slot', String(slot), ...args], { cwd: root, stdio: ['ignore', 2, 2], env: { ...process.env, TESTSTACK_SLOT: String(slot) } }).status ?? 1;
 }
 
 async function main() {
@@ -77,6 +95,63 @@ async function main() {
   const branch = flags.branch ?? settings.storageBranch;
   const pr = Number(flags.pr);
 
+  if (command === 'local') {
+    if (!flags.base || !flags.key) throw new Error('local needs --base <ref> and --key <branch>');
+    // The stack runs on a slot of its own (never slot 0, which may run another checkout's code), leased only when
+    // there is something to record.
+    let lease = null;
+    const deps = {
+      // One slot for the whole step: the base's stack (a bug's before-the-fix run) and the branch's, one after the other.
+      stackUp: async (dir = root) => {
+        if (!lease?.ok) lease = await defaultSlotDeps.lease(`video-${flags.key}`, root, Number(config.prVideo?.slotWaitSec ?? 3600));
+        if (!lease?.ok) throw new Error('no free test-stack slot for the demo video');
+        process.env.TESTSTACK_SLOT = String(lease.slot);
+        return spawnSyncStack(dir, lease.slot, ['up']);
+      },
+      stackHealthy: (dir = root) => (lease?.ok ? spawnSyncStack(dir, lease.slot, ['status']) === 0 : false),
+      stackDown: (dir = root, { release = false } = {}) => {
+        if (!lease?.ok) return;
+        spawnSyncStack(dir, lease.slot, ['down']);
+        if (release) {
+          defaultSlotDeps.release(lease.slot, root);
+          lease = null;
+        }
+      },
+    };
+    // The outcome, or the error that stopped the step, goes to --result (the delivery reads it there, never from a log line).
+    const writeResult = (value) => flags.result && writeText(flags.result, `${JSON.stringify(value, null, 2)}\n`);
+    let result;
+    try {
+      result = await produceLocal({ root, config, base: flags.base, key: flags.key, headSha: flags['head-sha'], host: prHost.sync, deps });
+    } catch (error) {
+      writeResult({ video: null, error: String(error?.message ?? error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join('\n') });
+      throw error;
+    }
+    // The API summary of a backend-only change, stored for the branch the same way (OpenAPI files and route extractor;
+    // without a recording, so no example calls).
+    const api = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'api', '--base', flags.base, '--key', flags.key, ...(flags['head-sha'] ? ['--head-sha', flags['head-sha']] : [])], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, HEAD_SHA: flags['head-sha'] ?? '' } });
+    if (api.status !== 0) log(`${flags.key}: the API summary failed (exit ${api.status}); the PR opens without it`);
+    const summary = { video: result.video, note: result.note ?? null, ...(api.status !== 0 ? { apiSummary: `failed (exit ${api.status})` } : {}), narratorRuns: result.narratorRuns ?? [], findings: result.findings ?? [], block: result.block ?? null, apiEvidence: result.apiEvidence ?? [], videos: result.entries.map((e) => ({ title: e.title, file: e.file, ok: e.ok, headline: e.headline ?? null, narrator: e.narrator ?? null, pair: e.pair ?? null, missing: e.missing ?? null, blocked: e.blocked ?? null, kept: e.kept ?? null, video: e.rendered ?? null, vtt: e.renderedVtt ?? null, durationSec: e.durationSec ?? null, narration: e.narration ?? null, narrationWhyOff: e.narrationWhyOff ?? null, secretCheck: e.secretCheck ?? null, quality: e.quality ?? null })) };
+    writeResult(summary);
+    console.log(JSON.stringify(summary));
+    return 0;
+  }
+  // The sections the local step stored for a branch's head, written into its already-open PR (a PR opened before its
+  // videos were published, or re-recorded after the open). Deterministic: no agent, no recording.
+  if (command === 'embed') {
+    if (!(pr > 0) || !flags.key) throw new Error('embed needs --pr <n> and --key <branch>');
+    const { preOpenMedia } = await import('../implement/lib/pre-open.mjs');
+    const media = preOpenMedia(prHost.sync, { folder: keyFolder(flags.key), head: flags['head-sha'] ?? null, storageBranch: settings.storageBranch });
+    if (!media.video && !media.api) {
+      log(`${flags.key}: nothing stored for this head (${media.notes.join('; ')}); PR #${pr} is unchanged`);
+      return 1;
+    }
+    const current = readPrBody(config, pr);
+    const body = embedSections(current, media, API_MARKERS);
+    if (body !== current) prHost.sync.pr.update(pr, { body });
+    log(`PR #${pr}: ${[media.video && 'demo video section', media.api && 'API summary'].filter(Boolean).join(' and ')} ${body === current ? 'already up to date' : 'written'}`);
+    return 0;
+  }
   if (command === 'specs') {
     if (!flags.base) throw new Error('specs needs --base <ref>');
     if (!settings.specPatterns.length) log('no e2e spec pattern is configured (prVideo.specPatterns in .factory/config.json): no specs to record');
@@ -174,7 +249,7 @@ async function main() {
       const note = flags.note || (videos.length ? null : 'The changed e2e specs recorded no video (API-only tests have no browser, or the run failed before any test started).');
       const section = renderSection({ repo: String(prHost.repo), fileUrl: (file, opts) => prHost.fileUrl(file, branch, opts), branch, pr, headSha: flags['head-sha'], runUrl: flags['run-url'], specs, videos, note, folder });
       // Keyed (no PR yet): the section goes with the videos as section.md, with the head it was recorded on.
-      if (keyed) fs.writeFileSync(path.join(stageDir, 'section.md'), `<!-- head: ${flags['head-sha'] ?? ''} -->\n${section}\n`);
+      if (keyed) writeText(path.join(stageDir, 'section.md'), `<!-- head: ${flags['head-sha'] ?? ''} -->\n${section}\n`);
       publishFolder(root, { branch, folder, stageDir: videos.length || keyed ? stageDir : null, message: `Demo videos of ${who}${flags['head-sha'] ? ` at ${flags['head-sha'].slice(0, 7)}` : ''}` });
       if (!keyed) writePrSection(config, pr, section);
       log(`${who}: ${videos.length ? `${videos.length} video(s) published to ${branch}/${folder}` : 'note written'}`);

@@ -78,8 +78,10 @@ test('a PR is marked ready only by afterOpen, once its checks are green', () => 
 test('no setting brings back an open before the work and CI are done', async () => {
   const { preOpenProblems, preOpenSettings } = await import('../lib/pre-open.mjs');
   const off = { implement: { preOpen: { enabled: false, failedStory: 'draft-pr' } } };
-  assert.deepEqual([preOpenSettings(off).enabled, preOpenSettings(off).failedStory], [true, 'no-pr']);
-  assert.match(preOpenProblems(off).join('\n'), /enabled false is no longer supported[\s\S]*"draft-pr" is no longer supported/);
+  assert.deepEqual([preOpenSettings(off).enabled, preOpenSettings(off).failedStory], [undefined, undefined]);
+  const problems = preOpenProblems(off).join('\n');
+  assert.match(problems, /preOpen\.enabled was removed: every pipeline PR now opens finished[\s\S]*preOpen\.failedStory was removed: a story whose PR check or CI never passes now always escalates/);
+  assert.doesNotMatch(problems, /is not a setting/);
 });
 
 test('a reopened ticket whose PR is open: the PR goes on hold before any agent of the story runs', () => {

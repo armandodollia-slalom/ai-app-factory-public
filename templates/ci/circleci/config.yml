@@ -44,11 +44,6 @@ jobs:
   review-quorum:
     executor: factory
     steps: [{ factory-job: { job: review-quorum } }]
-  # factory:demo-video
-  factory-demo-video:
-    machine:
-      image: ubuntu-2404:current
-    steps: [{ factory-job: { job: demo-video } }]
   factory-scheduled:
     executor: factory
     steps: [{ factory-job: { job: << pipeline.parameters.factory-job >> } }]
@@ -64,8 +59,6 @@ workflows:
       - factory-feature-verification: { context: [factory], requires: [factory-gate] }
       - review-quorum: { context: [factory] }
       # factory:analysis-workflow
-      # factory:demo-video
-      - factory-demo-video: { context: [factory] }
   factory-scheduled:
     when:
       not:

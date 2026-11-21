@@ -11,6 +11,7 @@ import { seedTicket } from '../../pipeline/test/fixtures/tickets.mjs';
 import { loadConfig } from '../../pipeline/lib/config.mjs';
 import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { createContext, orchestrate } from '../lib/orchestrate.mjs';
+import { isResolvesQuestion, RESOLVES_ANSWER } from '../../pipeline/test/fixtures/resolves-question.mjs';
 
 const sh = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -63,6 +64,7 @@ const fakeLsp = { start: async () => ({ ok: true }), stop: async () => {}, stopA
 function fakeAgents(script) {
   const calls = [];
   const runAgent = async (config, opts) => {
+    if (isResolvesQuestion(opts.task)) return { ok: true, status: 0, timedOut: false, output: RESOLVES_ANSWER, version: 'v1', seconds: 0 };
     const member = opts.extraEnv?.PIPELINE_COUNCIL_MEMBER;
     const key = member ? `${opts.name}@${member}` : opts.name;
     calls.push({ ...opts, key, member });
@@ -79,6 +81,11 @@ function fakeAgents(script) {
 const context = (env, config, agents) => createContext({ config, key: 'DEMO-1', storyFile: env.storyFile, branch: 'feat/demo-1-thing', worktree: env.repo, base: 'main', deps: { runAgent: agents.runAgent, lsp: fakeLsp, acquire: async () => () => {} }, log: () => {} });
 const writeIn = (rel, text, extra) => async (o) => (write(o.cwd, rel, text), done(extra));
 const bug = { severity: 'blocking', category: 'correctness', file: 'src/Catalog.API/Api.cs', line: 3, issue: 'the owner check is missing', fix: 'add it' };
+
+
+// A member's answer to an adjudication task (council.mjs adjudicationTask): every item answered `answer`.
+const answerAll = (task, answer) => `AGENT_RESULT: ${JSON.stringify({ answers: [...String(task).matchAll(/^## Item \d+: `([^`]+)`/gm)].map((m) => ({ key: m[1], answer, evidence: 'src/Catalog.API/Api.cs:4: the agreed fix answers 400 for a non-numeric id here' })) })}`;
+const adjudicationYes = async (o) => answerAll(o.task, 'yes');
 
 test('a three-member council on claude, codex and copilot verifies a pair: parallel members, one merged finding, then approval', async () => {
   const env = makeRepo();
@@ -104,7 +111,8 @@ test('a three-member council on claude, codex and copilot verifies a pair: paral
   const second = agents.calls.filter((c) => c.name === 'pair-implementer')[1];
   assert.equal((second.task.match(/the owner check is missing/g) ?? []).length, 1);
   assert.match(second.task, /\[raised by opus, sol\]/);
-  assert.equal(ctx.metrics.byRole.verifier, 6, 'every member is an agent run of the story (maxAgentRunsPerStory)');
+  // 6 member runs, plus the follow-up question for `resolves` to the two members whose round-1 finding lacked it.
+  assert.equal(ctx.metrics.byRole.verifier, 8, 'every member is an agent run of the story (maxAgentRunsPerStory), the resolves question too');
   const rounds = readJsonl(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'));
   assert.deepEqual(rounds.map((x) => [x.stage, x.step, x.round, x.pass, x.members.map((m) => m.score).join(',')]), [['pairVerify', 'api', 1, false, '6,5,9'], ['pairVerify', 'api', 2, true, '9,10,9']]);
 });
@@ -250,8 +258,9 @@ test('a pair council does not block, in a later round, the change an earlier rou
       write(o.cwd, '.factory/state/council/fixes/pairVerify--DEMO-1--api.json', JSON.stringify({ fixes: [{ id: 'api-r1-1', hunks: [{ file: 'src/Catalog.API/Api.cs', start: 2, end: 5 }] }] }));
       return done();
     }],
-    'pair-verifier@opus': [async () => verdict(9), async () => verdict(8, [scope])],
-    'pair-verifier@sol': [async () => verdict(6, [crash]), async () => verdict(9)],
+    // Round 2's scope objection is on lines declared for api-r1-1: both members are asked, fresh, and accept it.
+    'pair-verifier@opus': [async () => verdict(9), async () => verdict(8, [scope]), adjudicationYes],
+    'pair-verifier@sol': [async () => verdict(6, [crash]), async () => verdict(9), adjudicationYes],
   });
   const ctx = context(env, makeConfig(env.repo, council), agents);
   const r = await orchestrate(ctx);
@@ -260,7 +269,32 @@ test('a pair council does not block, in a later round, the change an earlier rou
   assert.match(second.task, /### Findings the council upheld in earlier rounds[\s\S]*FormatException[\s\S]*Agreed fix: answer 400/);
   assert.match(agents.calls.filter((c) => c.name === 'pair-implementer')[1].task, /### Say which lines answer which finding[\s\S]*pairVerify--DEMO-1--api\.json[\s\S]*`api-r1-1`/);
   const rounds = readJsonl(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'));
-  assert.deepEqual(rounds.map((x) => [x.round, x.pass, x.earlierRound ?? 0]), [[1, false, 0], [2, true, 1]]);
+  assert.deepEqual(rounds.map((x) => [x.kind ?? 'round', x.round, x.pass ?? null, x.earlierRound ?? x.covered ?? 0]), [['round', 1, false, 0], ['adjudication', 2, null, 1], ['round', 2, true, 1]]);
+  const adj = agents.calls.filter((c) => /^# Council adjudication/.test(c.task));
+  assert.deepEqual(adj.map((c) => [c.member, c.mode]), [['opus', 'read'], ['sol', 'read']]);
+});
+
+test('a pair council: the same objection stands when one member does not accept it on adjudication', async () => {
+  const env = makeRepo();
+  const council = { members: MEMBERS.slice(0, 2), stages: { pairVerify: { rounds: 2 } } };
+  const crash = { severity: 'blocking', category: 'correctness', file: 'src/Catalog.API/Api.cs', line: 2, issue: 'a non-numeric id throws FormatException: an unhandled 500', fix: 'answer 400 for an id that is not a number' };
+  const scope = { severity: 'blocking', category: 'acceptance', lens: 'acceptance', file: 'src/Catalog.API/Api.cs', line: 4, issue: 'adds a 400 response no ticket line asks for', fix: 'remove the 400 branch' };
+  const agents = fakeAgents({
+    implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
+    'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'get(id)\nint.Parse(id)\n'), async (o) => {
+      write(o.cwd, 'src/Catalog.API/Api.cs', 'get(id)\nif (!int.TryParse(id, out var n))\n{\n    return Results.BadRequest();\n}\n');
+      write(o.cwd, '.factory/state/council/fixes/pairVerify--DEMO-1--api.json', JSON.stringify({ fixes: [{ id: 'api-r1-1', hunks: [{ file: 'src/Catalog.API/Api.cs', start: 2, end: 5 }] }] }));
+      return done();
+    }],
+    'pair-verifier@opus': [async () => verdict(9), async () => verdict(8, [scope]), adjudicationYes],
+    'pair-verifier@sol': [async () => verdict(6, [crash]), async () => verdict(9), async (o) => answerAll(o.task, 'no')],
+  });
+  const ctx = context(env, makeConfig(env.repo, council), agents);
+  const r = await orchestrate(ctx);
+  assert.equal(r.ok, false);
+  const rounds = readJsonl(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'));
+  assert.deepEqual(rounds.filter((x) => x.kind === 'adjudication').map((x) => x.items.map((i) => [i.outcome, i.rejectedBy.join('+')])), [[['stands', 'sol']]]);
+  assert.deepEqual(rounds.filter((x) => !x.kind).map((x) => [x.round, x.pass]), [[1, false], [2, false]]);
 });
 
 // Dogfood C17 (council C11, Sol 2): a UI pair's council passed round 2 with both members at 10, and a round 3 followed,

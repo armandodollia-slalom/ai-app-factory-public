@@ -162,6 +162,38 @@ export function defaultRequiredChecks(root) {
   return [...out].sort();
 }
 
+// Every check name the checkout's workflows can produce on a pull request (any job of a workflow with a pull_request
+// trigger, the jobs of reusable workflows it calls as "<job> / <called job>"; a matrix job as "<name> (" prefixes).
+// A host rule that requires a name not in this list waits for a check that never runs.
+export function providedChecks(root) {
+  const dir = path.join(root, '.github', 'workflows');
+  if (!fs.existsSync(dir)) return [];
+  const read = (f) => {
+    try {
+      return YAML.parse(fs.readFileSync(f, 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+  const out = new Set();
+  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort()) {
+    const doc = read(path.join(dir, f));
+    if (!doc) continue;
+    const on = triggers(doc);
+    if (!Object.hasOwn(on, 'pull_request') && !Object.hasOwn(on, 'pull_request_target') && !Object.hasOwn(on, 'pull_request_review')) continue;
+    for (const [id, job] of Object.entries(doc.jobs ?? {})) {
+      if (!job) continue;
+      const name = job.name ?? id;
+      out.add(name);
+      if (typeof job.uses === 'string' && job.uses.startsWith('./')) {
+        const called = read(path.join(root, job.uses));
+        for (const [cid, cjob] of Object.entries(called?.jobs ?? {})) if (cjob) out.add(`${name} / ${cjob.name ?? cid}`);
+      }
+    }
+  }
+  return [...out].sort();
+}
+
 // The jobs of the repository's own pull-request workflows that no host rule requires, and why (council C10, Opus 5: the
 // application's own test jobs were not required, both named "test", so a person merging by hand was not stopped). The
 // factory's own workflows (factory-*) are left out: enforce requires those. [{ workflow, job, name, reason }]
@@ -262,6 +294,7 @@ export function createGithubActions(settings = {}, deps = {}) {
     },
     requiredChecks: (root) => defaultRequiredChecks(root),
     uncoveredChecks: (root) => uncoveredChecks(root),
+    providedChecks: (root) => providedChecks(root),
     definitionFiles: (root) => (fs.existsSync(path.join(root, '.github/workflows')) ? fs.readdirSync(path.join(root, '.github/workflows')).filter((f) => /\.ya?ml$/.test(f)).map((f) => `.github/workflows/${f}`) : []),
     unsupported: (what) => {
       throw new UnsupportedError(what);

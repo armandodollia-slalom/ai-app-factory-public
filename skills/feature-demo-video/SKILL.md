@@ -55,7 +55,8 @@ Whenever your change affects anything a user can see or do in a browser: new pag
 
 3. **Cover the flow with an e2e test.** For a new feature, add a spec where the repository keeps its test-stack specs (the globs in `prVideo.specPatterns`, usually `e2e/teststack/<feature>.spec.ts`); it loads its scenario in `beforeAll` with `loadScenario('<scenario>')` from `e2e/teststack/scenario.ts`. Extending an existing spec is fine too. Build URLs from `e2e/teststack/ports.ts` (`BASE_URL`, `url(name)`, `port(name)`), never from literal ports, so the spec runs on any stack slot. To make the video read like a demo, import `test` and `expect` from `e2e/demo.ts` and use the `demo` fixture:
    - One `demo.chapter(title, description)` per acceptance criterion or step of the flow.
-   - `demo.caption(text)` to narrate what is happening (it stays until replaced; `''` clears it).
+   - No narration: in the pipeline the demo-narrator agent writes the headline demos' script from the recorded steps, and the other videos get automatic subtitles worded from accessible names and roles. Use accessible locators so the step list names things as a person would.
+   - `demo.caption(text)` only for a video you hand over yourself outside the pipeline (it replaces that step's automatic line; `''` clears it). Plain words, never a raw URL or selector.
    - After each step, `expect(...)` the result, then `demo.highlight(locator, label)` the element that proves it worked.
    - Without the fixture, wrap steps in `test.step('...')`: each step ends with a keyframe.
    - Cover the happy path first, then important edge or error cases as separate tests; each test gets its own video. Keep each one under about 60 seconds.
@@ -71,7 +72,7 @@ Whenever your change affects anything a user can see or do in a browser: new pag
 5. **Report it.** In your final summary to the user:
    - Embed each relevant video with Markdown using its absolute path, for example `![Add to cart](/path/to/repo/artifacts/e2e-videos/scenarios/add-to-cart--a-shopper-adds-a-product.webm)`.
    - Say what each video demonstrates and the scenario or data used.
-   - In a PR description, include the same list and the command to reproduce the videos. Commit the tests, never the videos. When the repository has the demo video workflow (`.github/workflows/factory-pr-demo-video.yml`, the `demoVideo` feature), CI also records every changed spec that matches `prVideo.specPatterns` on a PR that changes the frontend and adds the videos to a **Demo video** section of the description, so a UI spec in the PR is what puts a demo on it. Backend-only PRs get an **API changes** section instead.
+   - In a PR description, include the same list and the command to reproduce the videos. Commit the tests, never the videos. With the `demoVideo` feature, the pipeline records every changed spec that matches `prVideo.specPatterns` on this machine before the PR opens (never in CI) and adds the narrated videos to a **Demo video** section of the description, so a UI spec in the change is what puts a demo on it. Backend-only PRs get an **API changes** section instead.
 
 ## Demo API (`e2e/demo.ts`)
 
@@ -87,7 +88,7 @@ Whenever your change affects anything a user can see or do in a browser: new pag
 ## Rules
 
 - **Every UI test case shows the state it asserts.** Bring its distinguishing element into view and mark it with `demo.highlight(locator, label)` (it scrolls the element into view, waits for entrance animations such as scroll-reveal, outlines it and holds it on screen); for an absent state, mark where the element would be with `demo.absent(anchor, label)`. After a click or a navigation, highlight the result. A test that only asserts produces a one-second video of the top of a page. Feature verification refuses a UI case with no `highlight:` or `absent:` keyframe (`precheck.requireUiEvidence`), and its verifier reports what each case's keyframe shows.
-- **After a factory upgrade, refresh the copied files.** `e2e/fixtures.ts`, `e2e/demo.ts` and `e2e/video-reporter.ts` are copies of `templates/e2e/` in the factory install: compare them (`diff "$(factory version --path)/templates/e2e/demo.ts" e2e/demo.ts`) and take the engine's changes, keeping your own additions.
+- **The shared e2e files are kept in step by `factory render`.** `e2e/fixtures.ts`, `e2e/demo.ts` and `e2e/video-reporter.ts` are refreshed on every render while they match a version the factory shipped; a copy the repository edited is kept, and render and `factory check` show its difference from the factory's version. Do not edit them in a story: change the factory instead.
 
 - Every spec imports `test` and `expect` from `e2e/fixtures.ts` (or from `e2e/demo.ts`, which extends it), never from `@playwright/test`. The base `page`/`context` fixtures are always recorded. The shared fixture also records contexts a test opens with `browser.newContext()`, such as one per user in multi-user flows, with one video per page. Contexts opened in `beforeAll`/`afterAll` are setup and are not recorded, so put the flow you want on video inside the test.
 - API-only tests (only the `request` fixture) have no browser and produce no video. That is expected. For a user-facing feature, cover the flow in the UI as well.

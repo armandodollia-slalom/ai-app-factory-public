@@ -1,0 +1,27 @@
+{
+ "$comment": "Every version of these templates the factory has shipped (sha256 of the trimmed text, 16 hex): factory render refreshes a repository copy that matches one of them, and reports any other content as the repository own edit. Add the new hash when a template changes (render.test.mjs checks).",
+ "files": {
+  "fixtures.ts": [
+   "0485d3e40fd55200",
+   "ea0641884bf8978c",
+   "4d48424af77252d1",
+   "3484a3e28d7c560f",
+   "9e7a78be5c2bd39d",
+   "cb3b0fe436b35e76"
+  ],
+  "demo.ts": [
+   "435d64670947bdb3",
+   "93e7f04ab95111a6",
+   "483333b86deaea38",
+   "14a6add6fa4c1e76",
+   "0e35dfba47f8cba0",
+   "e2058a84083a3d46"
+  ],
+  "video-reporter.ts": [
+   "6826ca8135ddf4de",
+   "76df5e9183665485",
+   "8d3eca3aa3535d1d",
+   "d7458a9f0e5dea15"
+  ]
+ }
+}

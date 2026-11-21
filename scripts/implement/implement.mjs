@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Implement stage of the AI pipeline: implements every story in a folder headlessly, one worktree and
 // branch per story, driving the implementer through the review and feature verification stages. See docs/ai-pipeline/implement.md.
+import { appendText } from '../pipeline/lib/redact.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,7 +20,7 @@ import { listSubtaskWorktrees, removeWorktree } from './lib/gitops.mjs';
 import { board, boardEvent, claimStories, failedResults, skipRefused, syncBoard } from './lib/board-events.mjs';
 import { autoPrune } from '../factory/lib/prune.mjs';
 import { epicBranchFor, epicToJoin, formatEpicStatus, listEpicRuns, loadEpicRun, runEpic, saveEpicRun } from './lib/epic.mjs';
-import { GROUPINGS, deliveryShape } from './lib/epic-plan.mjs';
+import { GROUPINGS, PR_SPLITS, deliveryShape } from './lib/epic-plan.mjs';
 import { applyEnv, batchFile, describePlan, recoverDeadRun, formatSummary, implementStory, loadRun, plan, recordUnrun, runBatch, runsDir, saveRun, startResolvedReruns } from './lib/implement.mjs';
 import { parallelFor } from './lib/resources.mjs';
 import { requeue } from './lib/requeue.mjs';
@@ -32,7 +33,7 @@ const SCRIPT = fileURLToPath(import.meta.url);
 
 const USAGE = `Usage: node scripts/implement/implement.mjs <command> [options]
 
-  run <KEY...> | --epic <EPIC> [--delivery epic|story] [--grouping auto|epic|ticket] [--standalone]
+  run <KEY...> | --epic <EPIC> [--delivery epic|story] [--grouping auto|epic|ticket] [--pr-split epic|story|groups] [--standalone]
         [--parallel N|auto] [--base <ref>] [--pr] [--force] [--takeover] [--dry-run]
         implement the given board tickets (fetched into .factory/state/board/; a cached story.md or a
         <KEY>-<title>.md file works too), or every story of an epic in Blocked-by order: each gets a
@@ -42,7 +43,9 @@ const USAGE = `Usage: node scripts/implement/implement.mjs <command> [options]
         --force runs stories again that are already implemented (or whose card is in Pending Review or Done).
         Delivery (implement.delivery, default epic): with --epic, the epic is planned once (design note),
         its stories run from one epic branch and merge into it, and the epic gets ONE PR (a bug epic: one
-        PR per group of bugs the orchestrator chose; --grouping). --delivery story keeps a branch and PR
+        PR per group of bugs the orchestrator chose; --grouping). A feature epic: --pr-split (implement.epic.prSplit)
+        epic (one PR, default), story (one PR per story) or groups (PRs of stories the orchestrator groups, at most
+        implement.epic.maxStoriesPerGroup each). --delivery story keeps a branch and PR
         per story. A single ticket of an epic with an epic run in progress joins that epic's branch
         unless --standalone.
   resume [KEY] [--parallel N] [--pr] [--background] [--stopped]
@@ -110,7 +113,8 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
   if (epicRun) {
     const { epic, only } = epicRun;
     const join = only ? ` (joining the in-progress run of ${epic.key})` : '';
-    console.log(`Delivery: ${epicRun.groups ? 'bug groups' : 'epic'}${join}. ${epicRun.groups ? 'Bug epic: the orchestrator groups the tickets into PRs.' : `One branch ${epicBranchFor(config, epic.key)} and one PR for ${epic.key}.`}`);
+    const split = deliveryShape(stories, epicRun.grouping ?? config.implement.epic?.grouping ?? 'auto', epicRun.prSplit ?? config.implement.epic?.prSplit ?? 'epic');
+    console.log(`Delivery: ${epicRun.groups ? (split.feature ? `feature epic split into PRs (${split.planned ? 'groups the orchestrator chooses' : 'one per story'})` : 'bug groups') : 'epic'}${join}. ${epicRun.groups ? (split.feature ? 'Each PR group gets its own branch and PR; the cross-story journeys are verified on one of them.' : 'Bug epic: the orchestrator groups the tickets into PRs.') : `One branch ${epicBranchFor(config, epic.key)} and one PR for ${epic.key}.`}`);
     console.log(stories.map((s, i) => `${String(i + 1).padStart(2)}. ${s.key.padEnd(10)} ${s.skip ? `skip: ${s.skip}` : `${s.branch} <- ${epicRun.groups ? 'its group branch' : "the epic's branch"}`}${s.blockedBy.length ? `  (blocked by ${s.blockedBy.join(', ')})` : ''}`).join('\n'));
   } else console.log(describePlan(stories));
   if (dryRun) return 0;
@@ -146,7 +150,7 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
       process.env.FACTORY_DISK_WORKTREES = path.resolve(config.root, config.implement.worktreeDir.replace('{repo}', path.basename(config.root)));
     }
   }
-  const batch = { inputs: inputs.map((p) => path.resolve(p)), extraSources, base, parallel, pr, delivery, epic: epicRun ? { key: epicRun.epic.key, only: epicRun.only ?? null, grouping: epicRun.grouping ?? null } : null, ...selfProcess(), startedAt: nowIso(), finishedAt: null };
+  const batch = { inputs: inputs.map((p) => path.resolve(p)), extraSources, base, parallel, pr, delivery, epic: epicRun ? { key: epicRun.epic.key, only: epicRun.only ?? null, grouping: epicRun.grouping ?? null, prSplit: epicRun.prSplit ?? null } : null, ...selfProcess(), startedAt: nowIso(), finishedAt: null };
   writeJson(batchFile(config), batch);
   let results;
   let epicSummary = null;
@@ -206,7 +210,7 @@ function resumeInBackground(config, key) {
 
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
-  const { positional, flags } = parseArgs(rest, new Set(['parallel', 'base', 'since', 'file', 'branch', 'worktree', 'result', 'merge', 'story', 'epic', 'delivery', 'grouping', 'epic-note', 'epic-branch']));
+  const { positional, flags } = parseArgs(rest, new Set(['parallel', 'base', 'since', 'file', 'branch', 'worktree', 'result', 'merge', 'story', 'epic', 'delivery', 'grouping', 'pr-split', 'epic-note', 'epic-branch']));
   if (!command || command === 'help' || flags.help) {
     console.log(USAGE);
     return 0;
@@ -247,6 +251,11 @@ async function main() {
         console.error(`--grouping must be one of ${GROUPINGS.join(', ')}.`);
         return 2;
       }
+      const prSplit = typeof flags['pr-split'] === 'string' ? flags['pr-split'] : null;
+      if (prSplit && !PR_SPLITS.includes(prSplit)) {
+        console.error(`--pr-split must be one of ${PR_SPLITS.join(', ')}.`);
+        return 2;
+      }
       let epicRun = null;
       if (typeof flags.epic === 'string') {
         const stories = epicTickets(config, flags.epic);
@@ -258,7 +267,7 @@ async function main() {
         if (epic) epicDir = config.abs(epic.dir);
         console.log(`Epic ${epic?.key ?? flags.epic}${epic ? ` (${epic.title})` : ''}: ${stories.map((s) => s.key).join(', ')}`);
         positional.push(...stories.map((s) => s.key).filter((k) => !positional.includes(k)));
-        if (delivery === 'epic') epicRun = { epic: epicInfo(epic, stories[0].epic ?? flags.epic), tickets: stories, grouping, groups: deliveryShape(stories, grouping ?? config.implement.epic?.grouping ?? 'auto').kind === 'groups' };
+        if (delivery === 'epic') epicRun = { epic: epicInfo(epic, stories[0].epic ?? flags.epic), tickets: stories, grouping, prSplit, groups: deliveryShape(stories, grouping ?? config.implement.epic?.grouping ?? 'auto', prSplit ?? config.implement.epic?.prSplit ?? 'epic').kind === 'groups' };
       }
       if (!positional.length) {
         console.error(`Give story keys, --epic <EPIC>, or story files.\n\n${USAGE}`);
@@ -329,7 +338,7 @@ async function main() {
       if (batch.epic?.key) {
         const epic = loadTicket(config, batch.epic.key, { fetch: false });
         const tickets = collectStories(inputs).map((s) => loadTicket(config, s.key, { fetch: false })).filter(Boolean);
-        epicRun = { epic: epicInfo(epic, batch.epic.key), tickets, only: batch.epic.only ?? null, grouping: batch.epic.grouping ?? null, groups: deliveryShape(tickets, batch.epic.grouping ?? config.implement.epic?.grouping ?? 'auto').kind === 'groups' };
+        epicRun = { epic: epicInfo(epic, batch.epic.key), tickets, only: batch.epic.only ?? null, grouping: batch.epic.grouping ?? null, prSplit: batch.epic.prSplit ?? null, groups: deliveryShape(tickets, batch.epic.grouping ?? config.implement.epic?.grouping ?? 'auto', batch.epic.prSplit ?? config.implement.epic?.prSplit ?? 'epic').kind === 'groups' };
       }
       return runStories(config, inputs, { base: batch.base, parallel, pr: Boolean(flags.pr ?? batch.pr), extraSources: batch.extraSources ?? [], epicRun, delivery: batch.delivery ?? 'story', resumeStopped: Boolean(flags.stopped) });
     }
@@ -341,7 +350,7 @@ async function main() {
       const out = (m) => {
         const line = `${nowIso()} ${m}`;
         console.log(m);
-        if (!dryRun) fs.appendFileSync(logFile, `${line}\n`);
+        if (!dryRun) appendText(logFile, `${line}\n`);
       };
       const r = await requeue(
         config,

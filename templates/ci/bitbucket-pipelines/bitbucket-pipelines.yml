@@ -26,14 +26,6 @@ definitions:
         name: review-quorum
         script:
           - bash .factory/ci/factory-ci.sh review-quorum
-    # factory:demo-video
-    - step: &factory-demo-video
-        name: demo video
-        services: [docker]
-        script:
-          - export FACTORY_RUN_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME/pipelines/results/$BITBUCKET_BUILD_NUMBER"
-          - bash .factory/ci/factory-ci.sh demo-video
-
 pipelines:
   pull-requests:
     '**':
@@ -43,8 +35,6 @@ pipelines:
           - step: *review-quorum
           # factory:analysis-steps
       - step: *factory-fv
-      # factory:demo-video
-      - step: *factory-demo-video
   custom:
     factory-pr-check:
       - variables:
