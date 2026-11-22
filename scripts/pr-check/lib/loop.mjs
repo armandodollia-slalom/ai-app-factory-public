@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runAgentAsync } from '../../pipeline/lib/agents.mjs';
 import { changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, memberRunEnv, guardProtectedTests, lateBox, memberScore, memberTask, mergeCouncil, normalizeFinding as normalizeCouncilFinding, adjudicate, planCases, recordCouncilRound, rewriteText, testProtection, unavailableReason } from '../../pipeline/lib/council.mjs';
+import { runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { escalate, metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log, nowIso, sha, writeJson } from '../../pipeline/lib/util.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
@@ -539,7 +540,7 @@ const LATE = Symbol('late');
 // review, when it comes, goes to ctx.councilLate as feedback for the next round (its score is never recorded).
 async function critiques(config, ctx, files, round, lenses, previousUpheld) {
   const runs = lenses.map((lens) => critique(config, ctx, files, round, lens, previousUpheld));
-  if (!ctx.council) return { lenses, reviews: await Promise.all(runs) };
+  if (!ctx.council || (ctx.council.intercom?.enabled && round === 1)) return { lenses, reviews: await Promise.all(runs) };
   const nonBlocking = (lens) => lensInfo(ctx, lens).member?.blocking === false;
   const settled = new Map();
   runs.forEach((p, i) => p.then((r) => settled.set(i, r), () => settled.set(i, null)));
@@ -582,11 +583,25 @@ async function councilFindings(config, ctx, round, lenses, reviews, previousUphe
       if (member.blocking && !(why && ctx.council.onUnavailable === 'report')) failedLenses.push(lens);
       return;
     }
-    results.push({ member, status: 'ok', score: memberScore(review), verdict: null, summary: String(review.summary ?? ''), findings: review.findings.filter((f) => f && typeof f === 'object').map((f) => normalizeCouncilFinding({ ...f, text: f.title ?? f.detail }, member)), followUps: review.followUps });
+    results.push({ member, status: 'ok', score: memberScore(review), verdict: null, summary: String(review.summary ?? ''), ...(ctx.council.intercom?.enabled ? { rawResult: review } : {}), findings: review.findings.filter((f) => f && typeof f === 'object').map((f) => normalizeCouncilFinding({ ...f, text: f.title ?? f.detail }, member)), followUps: review.followUps });
   });
   const keys = (ctx.tickets ?? [ctx.story]).filter(Boolean).map((t) => t.key);
   const cases = keys.flatMap((k) => planCases(ctx.workRoot, ctx.plansDir, k));
-  const mergeOpts = { protect: (f) => testProtection(f, { keys, cases }), feedback: ctx.councilLate?.take() ?? [], changed: changedSince(ctx.workRoot, ctx.baseRev, git), earlier: ctx.councilMemory ?? null, root: ctx.workRoot };
+  // A split is ruled by the PR check judge in one bounded read-only turn that sees only the escalation record.
+  const intercom = await runIntercomDiscussion({
+    config,
+    council: ctx.council,
+    results,
+    subject: ctx.story?.key ?? 'pr',
+    stage: 'prCheck',
+    round,
+    repoRoot: ctx.workRoot,
+    reviewed: ctx.baseRev,
+    readOnly: { cwd: ctx.workRoot, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+    run: (m, task, o) => runAgentAsync(config, { name: lensInfo(ctx, m.name).agent, task, mode: 'read', model: m.model ?? null, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort ?? null, cmd: m.cli === 'custom' ? m.cmd : null, cwd: ctx.workRoot, timeoutSec: config.prCheck.timeoutSec, usage: { stage: 'pr-check', story: ctx.story?.key ?? null, round, step: `intercom-${m.name}` }, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null }),
+    ruler: (task) => runAgentAsync(config, { name: 'pr-check-judge', task, mode: 'read', model: modelFor(config, 'judge'), cwd: ctx.workRoot, timeoutSec: Math.min(300, config.prCheck.timeoutSec ?? 300), usage: { stage: 'pr-check', story: ctx.story?.key ?? null, round, step: 'intercom-ruling' } }),
+  });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys, cases }), feedback: ctx.councilLate?.take() ?? [], changed: changedSince(ctx.workRoot, ctx.baseRev, git), earlier: ctx.councilMemory ?? null, root: ctx.workRoot, ...(intercom ? { intercom } : {}) };
   // A scope objection on lines declared for an earlier upheld finding stands unless every blocking member accepts, asked
   // fresh and read-only, that the finding's agreed fix requires it (council.mjs adjudicate).
   const merged = await adjudicate({
@@ -605,7 +620,8 @@ async function councilFindings(config, ctx, round, lenses, reviews, previousUphe
   let n = 0;
   // Late feedback from a non-blocking member goes into the debate as a minor finding of the first blocking lens (it never
   // blocks: council pass ignores minor findings).
-  for (const f of [...merged.findings, ...merged.notes.filter((x) => !x.supersededBy)]) {
+  // A finding the council discussion disposed of never reaches the debate, the judge or the fixer.
+  for (const f of [...merged.findings, ...merged.notes.filter((x) => !x.supersededBy && !x.disposition)]) {
     const lens = lenses.find((l) => lensInfo(ctx, l).member?.name === f.member) ?? lenses.find((l) => lensInfo(ctx, l).member?.blocking !== false) ?? lenses[0];
     const code = lensInfo(ctx, lens).code;
     const reuse = f.id && earlier.has(String(f.id)) && !used.has(String(f.id));
@@ -627,6 +643,10 @@ function councilOutcome(config, ctx, round, lenses, council, scored) {
   const blocks = (f) => f.severity !== 'minor' && !f.notUpheld && !f.protected;
   for (const [i, c] of (merged.contradictions ?? []).entries()) {
     scored.questions.push({ id: `council-contradiction-${round}-${i + 1}`, title: `Council members contradict each other: ${String(c.subject).slice(0, 120)}`, question: c.positions.map((p) => `${p.member}: ${p.action} (${String(p.evidence ?? '').slice(0, 200)})`).join('; '), reason: 'the members disagree and the evidence has not settled it' });
+  }
+  // An owner question of the council discussion ends the check (runPrCheck): no fixing round can answer it.
+  for (const [i, q] of (merged.ownerQuestions ?? []).entries()) {
+    scored.questions.push({ id: `council-intercom-${round}-${i + 1}`, title: `Council discussion: ${q.findingId}`, question: q.question, reason: q.reason, discussion: true });
   }
   const blockingLenses = lenses.filter((l) => !lensInfo(ctx, l).member || lensInfo(ctx, l).member.blocking);
   const scores = blockingLenses.map((l) => scored.lensScores[l]).filter((x) => Number.isFinite(x));
@@ -869,8 +889,9 @@ export async function runPrCheck(config, ctx, { fix, resume = null, onProgress =
     });
     log(`round ${round}: ${result.score}/10 (${Object.entries(result.lensScores).map(([l, s]) => `${l} ${s}`).join(', ')}); ${result.upheld.length} upheld of ${result.findings.length} raised`);
 
-    // An owner question ends the check once nothing major is left to fix: the fixer cannot answer it.
-    if ((result.questions ?? []).length && (!fix || !result.upheld.some((f) => f.severity !== 'minor'))) {
+    // An owner question ends the check once nothing major is left to fix: the fixer cannot answer it. One from the
+    // council discussion ends it at once (later rounds hold no discussion, so it would be lost).
+    if ((result.questions ?? []).length && (!fix || !result.upheld.some((f) => f.severity !== 'minor') || result.questions.some((q) => q.discussion))) {
       verdict = 'QUESTION';
       reason = `needs an owner decision: ${result.questions.map((q) => `${q.id} ${q.title}`).join('; ')}`;
       break;

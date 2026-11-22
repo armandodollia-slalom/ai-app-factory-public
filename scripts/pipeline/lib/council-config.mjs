@@ -1,8 +1,9 @@
 // The `council` section of a repository's .factory/config.json: which verification stages seat a council of
 // verifiers instead of their single verifier, with which members (CLI, model, reasoning effort, lens), for how
-// many rounds, and how their results combine. Pure functions with no imports, so config.mjs can validate the
-// section at load time. The runtime (seating, merging, the PR body table) is council.mjs. See
+// many rounds, and how their results combine. Pure functions (node:net only, for IP parsing), so config.mjs can
+// validate the section at load time. The runtime (seating, merging, the PR body table) is council.mjs. See
 // docs/ai-pipeline/council.md.
+import net from 'node:net';
 
 // The stages a council can sit for, named after the code that runs them, and the setting each one's round
 // limit comes from when it has no council.
@@ -31,12 +32,97 @@ export const BLOCK_ON = ['any', 'majority', 'all'];
 export const ON_UNAVAILABLE = ['fail', 'report'];
 export const COUNCIL_DEFAULTS = { rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail' };
 
+export const INTERCOM_ON_SPLIT = ['orchestrator', 'owner'];
+export const INTERCOM_MAX_TURNS = 20;
+export const INTERCOM_MAX_ESCALATIONS = 20;
+export const INTERCOM_DEFAULTS = {
+  enabled: false,
+  host: '127.0.0.1',
+  port: 0,
+  advertiseHost: null,
+  allowInsecureRemote: false,
+  maxTurnsPerMember: 2,
+  maxEscalations: 3,
+  onSplit: 'orchestrator',
+};
+
 const MEMBER_KEYS = ['name', 'cli', 'model', 'effort', 'lens', 'blocking', 'cmd', 'timeoutSec', 'env'];
-const COUNCIL_KEYS = ['rounds', 'passScore', 'blockOn', 'onUnavailable', 'members', 'stages', 'lateGraceSec'];
-const STAGE_KEYS = ['members', 'rounds', 'lenses'];
+const COUNCIL_KEYS = ['rounds', 'passScore', 'blockOn', 'onUnavailable', 'members', 'stages', 'lateGraceSec', 'intercom'];
+const STAGE_KEYS = ['members', 'rounds', 'lenses', 'intercom'];
+const INTERCOM_KEYS = ['enabled', 'host', 'port', 'advertiseHost', 'allowInsecureRemote', 'maxTurnsPerMember', 'maxEscalations', 'onSplit'];
 const isObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const posInt = (v) => Number.isInteger(v) && v >= 1;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
+
+const HOSTNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+
+// An IP address in its canonical spelling (net.isIP parses; the WHATWG URL parser canonicalizes IPv6), or null.
+function canonicalIp(host) {
+  const h = String(host ?? '').trim().toLowerCase();
+  if (net.isIPv4(h)) return h;
+  return net.isIPv6(h) ? new URL(`http://[${h}]`).hostname.slice(1, -1) : null;
+}
+
+export const canonicalHost = (host) => canonicalIp(host) ?? String(host ?? '').trim().toLowerCase();
+
+// A hostname or an IP address, never a URL; all-numeric names that are not a valid IPv4 address (`0`, `127.1`) are refused.
+export function isValidHost(value) {
+  if (typeof value !== 'string' || value !== value.trim() || !value || value.length > 253) return false;
+  if (net.isIP(value)) return true;
+  return !value.includes(':') && !/^[\d.]+$/.test(value) && HOSTNAME_RE.test(value);
+}
+
+export function isWildcardHost(host) {
+  return ['0.0.0.0', '::', '::ffff:0:0'].includes(canonicalIp(host));
+}
+
+export function isLoopbackHost(host) {
+  const ip = canonicalIp(host);
+  if (!ip) return String(host ?? '').trim().toLowerCase() === 'localhost';
+  return ip === '::1' || ip.startsWith('127.') || /^::ffff:7f[0-9a-f]{2}:/.test(ip);
+}
+
+export function intercomProblems(intercom, at = 'council.intercom', inherited = null) {
+  if (intercom === undefined) return [];
+  if (!isObject(intercom)) return [`${at} must be an object`];
+  const problems = [];
+  for (const key of Object.keys(intercom)) {
+    if (!key.startsWith('$') && !INTERCOM_KEYS.includes(key)) {
+      problems.push(`${at}.${key} is not an intercom setting (${INTERCOM_KEYS.join(', ')})`);
+    }
+  }
+  if (intercom.enabled !== undefined && typeof intercom.enabled !== 'boolean') problems.push(`${at}.enabled must be true or false`);
+  if (intercom.host !== undefined && !isValidHost(intercom.host)) problems.push(`${at}.host must be a valid hostname or IP address (not a URL)`);
+  if (intercom.port !== undefined && !(Number.isInteger(intercom.port) && intercom.port >= 0 && intercom.port <= 65535)) problems.push(`${at}.port must be a whole number from 0 to 65535`);
+  if (intercom.advertiseHost !== undefined && intercom.advertiseHost !== null) {
+    if (!isValidHost(intercom.advertiseHost)) problems.push(`${at}.advertiseHost must be a valid hostname or IP address (not a URL)`);
+    else if (isWildcardHost(intercom.advertiseHost)) problems.push(`${at}.advertiseHost cannot be a wildcard address (${intercom.advertiseHost})`);
+  }
+  if (intercom.allowInsecureRemote !== undefined && typeof intercom.allowInsecureRemote !== 'boolean') problems.push(`${at}.allowInsecureRemote must be true or false`);
+  if (intercom.maxTurnsPerMember !== undefined && !(Number.isInteger(intercom.maxTurnsPerMember) && intercom.maxTurnsPerMember >= 1 && intercom.maxTurnsPerMember <= INTERCOM_MAX_TURNS)) {
+    problems.push(`${at}.maxTurnsPerMember must be a whole number from 1 to ${INTERCOM_MAX_TURNS}`);
+  }
+  if (intercom.maxEscalations !== undefined && !(Number.isInteger(intercom.maxEscalations) && intercom.maxEscalations >= 0 && intercom.maxEscalations <= INTERCOM_MAX_ESCALATIONS)) {
+    problems.push(`${at}.maxEscalations must be a whole number from 0 to ${INTERCOM_MAX_ESCALATIONS}`);
+  }
+  if (intercom.onSplit !== undefined && !INTERCOM_ON_SPLIT.includes(intercom.onSplit)) problems.push(`${at}.onSplit must be one of ${INTERCOM_ON_SPLIT.join(', ')}`);
+  const eff = { ...INTERCOM_DEFAULTS, ...(isObject(inherited) ? inherited : {}), ...intercom };
+  if (isValidHost(eff.host) && !isLoopbackHost(eff.host)) {
+    if (eff.allowInsecureRemote !== true) {
+      problems.push(`${at}.host "${eff.host}" is not loopback; set ${at}.allowInsecureRemote to true to allow plain-HTTP bearer tokens on the network (or bind 127.0.0.1 and tunnel with ssh -R)`);
+    }
+    if (!eff.advertiseHost || !isValidHost(eff.advertiseHost) || isWildcardHost(eff.advertiseHost)) {
+      problems.push(`${at}.advertiseHost must be a reachable hostname or IP when ${at}.host is not loopback (cannot advertise ${eff.host})`);
+    }
+  }
+  return problems;
+}
+
+export function resolveIntercom(council, stage = null) {
+  const base = isObject(council?.intercom) ? council.intercom : {};
+  const override = stage && isObject(council?.stages?.[stage]?.intercom) ? council.stages[stage].intercom : {};
+  return { ...INTERCOM_DEFAULTS, ...base, ...override };
+}
 
 // Every problem with the section, as sentences naming the key. `agent` is the merged `agent` settings (allowedModels,
 // modelIds): a member's model must be allowed and have an id for the member's CLI, the same rule agent.strictModels
@@ -51,6 +137,7 @@ export function councilProblems(council, agent = {}) {
   if (council.passScore !== undefined && !(Number.isFinite(council.passScore) && council.passScore >= 0 && council.passScore <= 10)) problems.push('council.passScore must be a number from 0 to 10');
   if (council.blockOn !== undefined && !BLOCK_ON.includes(council.blockOn)) problems.push(`council.blockOn must be one of ${BLOCK_ON.join(', ')}`);
   if (council.onUnavailable !== undefined && !ON_UNAVAILABLE.includes(council.onUnavailable)) problems.push(`council.onUnavailable must be one of ${ON_UNAVAILABLE.join(', ')}`);
+  if (council.intercom !== undefined) problems.push(...intercomProblems(council.intercom, 'council.intercom'));
   const members = council.members;
   if (!Array.isArray(members) || !members.length) problems.push('council.members must list at least one member');
   const allowed = agent.allowedModels ?? [];
@@ -95,6 +182,7 @@ export function councilProblems(council, agent = {}) {
     }
     for (const key of Object.keys(s)) if (!key.startsWith('$') && !STAGE_KEYS.includes(key)) problems.push(`${at}.${key} is not a stage setting (${STAGE_KEYS.join(', ')})`);
     if (s.rounds !== undefined && !posInt(s.rounds)) problems.push(`${at}.rounds must be a whole number of 1 or more`);
+    if (s.intercom !== undefined) problems.push(...intercomProblems(s.intercom, `${at}.intercom`, council.intercom));
     // A member's lens for this stage only (the same two members can judge code through correctness in one stage and
     // test value in another).
     if (s.lenses !== undefined) {

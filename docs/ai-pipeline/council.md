@@ -193,6 +193,22 @@ dispute goes only to the members that raised the finding, in the stage's own dis
 raiser re-asserting with evidence keeps the finding; it is accepted when every raiser that ruled accepted it. A finding
 re-asserted twice can no longer be disputed, as before.
 
+## Discussion between members
+
+With `council.intercom.enabled` (off by default), a stage's first round gets a discussion step between the members'
+independent reviews and the merge. It runs only in the first round, only when at least two members gave a result and
+there is something to discuss: a finding, or different scores or verdicts. The members read each other's results in a chat room and can
+withdraw their own findings, revise their scores, or dispute a finding:
+
+- a point settles by a majority of all the council's seats; a finding is dropped only if its author took part;
+- a split (no majority possible) is ruled by the stage's own model where it has one (the implement orchestrator for
+  pair councils, the PR check judge), otherwise it goes to the owner;
+- a product question is never voted: it goes to the owner, and the stage stops for that answer
+  ([escalations.md](escalations.md#owner-questions-from-a-council-discussion)).
+
+The merge then works as this page describes, on what is left. Settings, limits, the by-hand rulings and crash recovery:
+[council-intercom.md](council-intercom.md).
+
 ## Who sits again in a PR check round
 
 A member whose last score passed (`passScore`), with nothing it raised upheld, is carried to the next PR check round with its score when the fix touched nothing it judges. Its scope is test files for `test-value`, frontend files for `ui`, and production code for the other lenses. A member with the `acceptance` lens sits again. When every finding the last fix addressed was minor, a shorter rule replaces this one: every member that scored 10 with nothing upheld is carried, whatever the fix touched, except a member named `acceptance` (the test is the member's name, so an `acceptance`-lens member named otherwise is carried too). The record marks a carried member "carried over". A non-blocking member that answers after the last round is waited for up to `council.lateGraceSec` (120); its findings become follow-ups of the check instead of being lost.
@@ -211,12 +227,14 @@ Every member is an agent run:
 - Language servers: members read through the `lsp` MCP server's read-only tools, on the checkout's own daemon, as any
   verifier. A UI council shares the pair's one leased stack slot for all members.
 - Token usage is attributed per member (`usage.jsonl`, step `<subtask or stage>:<member>`).
+- A discussion adds runs bounded by its settings: [costs.md](costs.md#council-discussion).
 
 ## Records
 
 - `.factory/metrics/council-rounds.jsonl`: one record per council round: stage, story, step (the subtask), round,
   rounds, passScore, blockOn, pass, the lowest blocking score, and per member its name, CLI, model, effort, lens,
-  blocking, status (`ok`, `failed`, `unavailable`, `late`), score and verdict.
+  blocking, status (`ok`, `failed`, `unavailable`, `late`), score and verdict; after a discussion, also its room, its
+  journal (relative to the repository) and the counts of what it settled, with each ruling and its reason.
 - `decisions.jsonl`: stage `council-<stage>`, with every merged finding and why it stands or not.
 - The stage's own streams as before (`subtask-runs.jsonl`, `arch-reviews.jsonl`, `verifier-runs.jsonl` with the
   members, `pr-checks.jsonl`).

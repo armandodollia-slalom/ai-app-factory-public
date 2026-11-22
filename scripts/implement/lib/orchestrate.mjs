@@ -13,6 +13,7 @@ import { readDecisions } from '../../pipeline/lib/human-decisions.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log as defaultLog, nowIso, readJson, runAsync, tail, writeJson } from '../../pipeline/lib/util.mjs';
 import { agentEnv, changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, memberRunEnv, councilRounds, disputesFor, guardProtectedTests, lateBox, protectedTestFinding, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
+import { ownerQuestionsText, runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { runTags } from '../../pipeline/lib/run-tags.mjs';
 import { addUsage } from '../../pipeline/lib/usage.mjs';
@@ -128,7 +129,7 @@ export function agentSettings(config, role, modelClass, explicitModel = null) {
 const USAGE_STAGE = { orchestrator: 'implement', pairImplementer: 'implement-pair', verifier: 'implement-verify', uiVerifier: 'implement-ui-verify' };
 
 // Runs one agent under the story's budget and the machine-wide agent semaphore.
-export async function callAgent(ctx, { role, name, task, mode, modelClass = 'medium', model: explicitModel = null, cwd, timeoutSec, step = null, round = null, env = {}, member = null, signal = null }) {
+export async function callAgent(ctx, { role, name, task, mode, modelClass = 'medium', model: explicitModel = null, cwd, timeoutSec, step = null, round = null, env = {}, member = null, signal = null, intercom = null }) {
   checkBudget(ctx);
   const release = await ctx.deps.acquire(`${ctx.key}:${name}`);
   if (!release) throw limit(ctx, 'limit-wall-clock', 'no agent slot (maxConcurrentAgents) before the story deadline');
@@ -145,7 +146,7 @@ export async function callAgent(ctx, { role, name, task, mode, modelClass = 'med
     const roleEnv = member ? {} : agentEnv(ctx.s.roles?.[role]?.env);
     const extraEnv = { PIPELINE_STORY_SOURCES: [process.env.PIPELINE_STORY_SOURCES, ctx.key].filter(Boolean).join(path.delimiter), ...roleEnv, ...env };
     const memberOpts = member ? { effort: member.effort ?? null, cmd: member.cli === 'custom' ? member.cmd : null } : {};
-    const res = await ctx.deps.runAgent(ctx.config, { name, task, mode, model, cli, noSubagents: true, cwd, timeoutSec: Math.max(1, Math.min(timeoutSec, left)), signal: signal ? AbortSignal.any([ctx.abort.signal, signal]) : ctx.abort.signal, extraEnv, usage: { stage: USAGE_STAGE[role] ?? 'implement', story: ctx.key, step: member ? `${step}:${member.name}` : step, round }, ...memberOpts });
+    const res = await ctx.deps.runAgent(ctx.config, { name, task, mode, model, cli, noSubagents: true, cwd, timeoutSec: Math.max(1, Math.min(timeoutSec, left)), signal: signal ? AbortSignal.any([ctx.abort.signal, signal]) : ctx.abort.signal, extraEnv, intercom, usage: { stage: USAGE_STAGE[role] ?? 'implement', story: ctx.key, step: member ? `${step}:${member.name}` : step, round }, ...memberOpts });
     if (ctx.abort.signal.aborted) throw new AbortedError('aborted');
     if (res.outage && !member) throw limit(ctx, 'agent-unavailable', `the agent provider is unavailable: ${res.outage}`);
     if (res.timedOut && Date.now() >= ctx.deadline) throw limit(ctx, 'limit-wall-clock', `the story ran past its ${ceiling(ctx.config, ctx.s.storyWallClockSec)}s ceiling while ${name} was running`);
@@ -441,8 +442,10 @@ export function noVerdictNote(rec) {
 async function councilVerify(ctx, st, council, { worktree, base = null, round, rec, taskFor, role, name, mode, ui = false, timeoutSec, env = {} }) {
   rec.late ??= lateBox();
   const memory = councilMemory({ file: memoryFile(ctx.config.root, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }), cwd: worktree, round, fixes: fixesFile(worktree, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }) });
+  const readOnly = { cwd: worktree, exclude: [ctx.config.metricsDir, ctx.config.stateDir, ...(ctx.config.implExclude ?? []), ...(ui ? uiArtifactDirs(ctx.config) : [])] };
   const out = await runCouncil({
     council,
+    round,
     retries: ctx.config.agent.resultParseRetries,
     taskFor: (m) => memberTask(taskFor(m), { council, member: m, round, earlier: memory.text }),
     run: (m, task) => {
@@ -459,12 +462,29 @@ async function councilVerify(ctx, st, council, { worktree, base = null, round, r
     // Every member is checked for an unchanged tree, the UI pair's too (council C10, Opus 2: its Codex member runs with
     // workspace-write and network to drive the browser, and nothing checked the tree). A UI member may write only into the
     // declared artifact folders (implement.ui.artifactDirs; git-ignored files never count either).
-    readOnly: { cwd: worktree, exclude: [ctx.config.metricsDir, ctx.config.stateDir, ...(ctx.config.implExclude ?? []), ...(ui ? uiArtifactDirs(ctx.config) : [])] },
+    readOnly,
     log: ctx.log,
   });
   const keys = [ctx.key];
   const cases = planCases(ctx.worktree, ctx.config.plansDir, ctx.key);
-  const mergeOpts = { protect: (f) => testProtection(f, { keys, cases }), feedback: rec.late.take(), violation: out.violation, changed: changedSince(worktree, base, git), earlier: memory, root: worktree };
+  // A split is ruled by the implement orchestrator in one bounded read-only turn that sees only the escalation record.
+  const intercom = await runIntercomDiscussion({
+    config: ctx.config,
+    council,
+    results: out.results,
+    subject: ctx.key,
+    stage: pairStage(st),
+    step: st.id,
+    round,
+    violation: out.violation,
+    repoRoot: worktree,
+    readOnly,
+    reviewed: base,
+    run: (m, task, o) => agentFor(ctx, rec, 'verifier', { role, name: ui ? 'pair-verifier' : name, mode: 'read', member: m, cwd: worktree, timeoutSec: m.timeoutSec ?? timeoutSec, task, step: `${st.id}:intercom`, env: { ...env, ...memberRunEnv(m) }, intercom: o?.intercom ?? null }),
+    ruler: (task) => agentFor(ctx, rec, 'orchestrator', { role: 'orchestrator', name: 'implementer', mode: 'read', cwd: worktree, timeoutSec: 300, step: `${st.id}:intercom-ruling`, task }),
+    log: ctx.log,
+  });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys, cases }), feedback: rec.late.take(), violation: out.violation, changed: changedSince(worktree, base, git), earlier: memory, root: worktree, ...(intercom ? { intercom } : {}) };
   const merged = await adjudicate({
     config: ctx.config,
     council,
@@ -502,9 +522,10 @@ export function councilPairVerdict(merged) {
   };
   const findings = [...merged.findings, ...merged.notes].map((f) => ({ ...f, severity: f.severity === 'minor' || merged.notes.includes(f) ? 'minor' : 'blocking', issue: issue(f), file: f.file ?? (f.harness ? '(council)' : null) }));
   const blocking = findings.filter((f) => f.severity === 'blocking');
+  const ownerQuestions = merged.ownerQuestions ?? [];
   // Not passed and nothing to act on (a blocking member gave no result): no verdict this round.
-  if (!merged.pass && !blocking.length) return null;
-  return { verdict: merged.pass ? 'APPROVED' : 'CHANGES_REQUESTED', summary: merged.summary, findings, disputes: merged.disputes, contradictions: merged.contradictions, council: { score: merged.score, members: merged.members } };
+  if (!merged.pass && !blocking.length && !ownerQuestions.length) return null;
+  return { verdict: merged.pass ? 'APPROVED' : 'CHANGES_REQUESTED', summary: merged.summary, findings, disputes: merged.disputes, contradictions: merged.contradictions, ...(ownerQuestions.length ? { ownerQuestions } : {}), council: { score: merged.score, members: merged.members } };
 }
 
 // The implement/verify loop of one subtask. Returns { status: approved | exhausted | blocked, findings, reason }.
@@ -678,6 +699,14 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
             all.push({ severity: 'blocking', category: 'council', subtask: st.id, round, issue: reason });
             return { status: 'blocked', reason, findings: all };
           }
+        }
+        // An owner question from the council discussion: the subtask stops for the owner (its findings stay out of the
+        // pair implementer's fix list).
+        if (v.ownerQuestions?.length) {
+          const reason = `the council discussion needs an owner decision:\n${ownerQuestionsText(v.ownerQuestions)}`;
+          rec.rounds.push(roundRecord({ round, verdict: 'BLOCKED' }));
+          all.push({ severity: 'blocking', category: 'council', subtask: st.id, round, issue: reason });
+          return { status: 'blocked', reason, findings: all, ownerQuestions: v.ownerQuestions };
         }
         const blockingDiag = diagnosticFindings(diag);
         // Harness findings (compiler errors, blocking tool findings) are added after the council's merge: they are

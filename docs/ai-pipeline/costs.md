@@ -54,6 +54,10 @@ Every run's result also carries a summary of what it recorded (`usage`: tokens, 
 
 The same `delivery`, `experiment_id` and `experiment_arm` fields are on every record of `decisions.jsonl`, `implement-runs.jsonl`, `subtask-runs.jsonl` and `decision-outcomes.jsonl`, so an experiment's report can attribute every token, decision and outcome to its arm. Records outside an experiment carry only `delivery` (and older records neither).
 
+## Council discussion
+
+With `council.intercom` on, a council's first round can add a discussion ([council-intercom.md](council-intercom.md)). Each wave runs every member that is still taking part once more, as a fresh agent run with the member's own CLI and model; there are at most `maxTurnsPerMember` waves (2 by default), and they stop early once no dispute is open. So a discussion costs at most members × `maxTurnsPerMember` runs per stage council, and nothing when there is nothing to discuss. Each split adds one ruling run of the stage's own model (the implement orchestrator or the PR check judge), at most `maxEscalations` (3) per discussion. A re-run of the same round reuses a finished discussion and costs nothing. These runs are recorded like the member's others, with step `intercom-<member>` (`<subtask>:intercom:<member>` in a pair) and `intercom-ruling` (`<subtask>:intercom-ruling` in a pair).
+
 ## Copilot billing
 
 Copilot plans bill **premium requests** (a per-model multiplier per request), and Copilot meters usage in AI credits (`totalNanoAiu` in its usage file; 1e11 nano AIU is $1). Both are recorded on every Copilot run (`premium_requests`, `nano_aiu`). The cost reports add a note with the premium requests, and the AI-credit dollars next to the cost computed from `pricing.json` for the same runs, so you can see whether the list-price cost matches what Copilot metered.

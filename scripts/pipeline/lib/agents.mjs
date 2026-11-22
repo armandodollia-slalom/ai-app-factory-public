@@ -68,6 +68,7 @@ const claudeDeny = (cmds) => cmds.map((c) => `Bash(${c}:*)`);
 // Language-server tools of the `lsp` MCP server (scripts/lsp/mcp.mjs, see docs/code-intelligence.md).
 // Agents that may edit get the whole server; read-only agents get only the tools that change nothing.
 export const LSP_SERVER = 'lsp';
+export const INTERCOM_SERVER = 'council_intercom';
 export const LSP_MUTATING = ['lsp_rename', 'lsp_code_actions', 'lsp_format_document'];
 export const LSP_READ_ONLY = [
   'lsp_goto_definition', 'lsp_goto_type_definition', 'lsp_find_references', 'lsp_find_implementations', 'lsp_hover',
@@ -129,11 +130,23 @@ export function claudeEnv(config) {
 // Code's --effort, Codex's model_reasoning_effort (max becomes xhigh, its highest). Copilot's CLI documents no such
 // option, so a Copilot member runs at its model's default effort. `cmd` (a council member on cli "custom") runs
 // that command like PIPELINE_AGENT_CMD; PIPELINE_AGENT_CMD itself still wins over everything.
-export function cliInvocation(config, { prompt, mode, model, cli = null, noSubagents = false, cwd = config.root, usageFile = null, effort = null, cmd = null }) {
+// Environment variables carrying a council member's per-room intercom connection (never in the prompt text).
+export function intercomEnv(intercom) {
+  if (!intercom?.url || !intercom?.token) return {};
+  return {
+    FACTORY_INTERCOM_URL: intercom.url,
+    FACTORY_INTERCOM_TOKEN: intercom.token,
+    ...(intercom.roomId ? { FACTORY_INTERCOM_ROOM: intercom.roomId } : {}),
+    ...(intercom.seat ? { FACTORY_INTERCOM_SEAT: intercom.seat } : {}),
+  };
+}
+
+export function cliInvocation(config, { prompt, mode, model, cli = null, noSubagents = false, cwd = config.root, usageFile = null, effort = null, cmd = null, intercom = null }) {
   cli = cli || config.agent.cli;
+  const iEnv = intercomEnv(intercom);
   if (config.agent.cmd || cmd) {
     // A council member's model and effort reach its command (and a fake agent under PIPELINE_AGENT_CMD) as variables.
-    const env = effort || cmd ? { ...(model ? { PIPELINE_AGENT_MODEL: model } : {}), ...(effort ? { PIPELINE_AGENT_EFFORT: effort } : {}) } : {};
+    const env = { ...(effort || cmd ? { ...(model ? { PIPELINE_AGENT_MODEL: model } : {}), ...(effort ? { PIPELINE_AGENT_EFFORT: effort } : {}) } : {}), ...iEnv };
     return { cmd: 'sh', args: ['-c', config.agent.cmd || cmd], input: prompt, usage: 'file', cli: 'custom', model, ...(Object.keys(env).length ? { env } : {}) };
   }
   if (cli === 'claude') {
@@ -142,9 +155,21 @@ export function cliInvocation(config, { prompt, mode, model, cli = null, noSubag
     if (effort) args.push('--effort', effort);
     const tools = CLAUDE_TOOLS[mode] ?? CLAUDE_TOOLS.read;
     if (tools.permissionMode) args.push('--permission-mode', tools.permissionMode);
+    const allowed = [...tools.allowed, ...(intercom?.url ? [`mcp__${INTERCOM_SERVER}`] : [])];
     const disallowed = [...tools.disallowed, ...(noSubagents ? ['Agent', 'Task'] : [])];
-    args.push('--allowedTools', tools.allowed.join(','), '--disallowedTools', [...new Set(disallowed)].join(','));
-    return { cmd: 'claude', args, input: prompt, usage: 'claude', cli, model, env: claudeEnv(config) };
+    args.push('--allowedTools', allowed.join(','), '--disallowedTools', [...new Set(disallowed)].join(','));
+    if (intercom?.url) {
+      args.push('--mcp-config', JSON.stringify({
+        mcpServers: {
+          [INTERCOM_SERVER]: {
+            type: 'http',
+            url: intercom.url,
+            headers: { Authorization: 'Bearer ${FACTORY_INTERCOM_TOKEN}' },
+          },
+        },
+      }));
+    }
+    return { cmd: 'claude', args, input: prompt, usage: 'claude', cli, model, env: { ...claudeEnv(config), ...iEnv } };
   }
   if (cli === 'copilot') {
     const args = ['-p', prompt, '-s', '--no-color'];
@@ -164,7 +189,19 @@ export function cliInvocation(config, { prompt, mode, model, cli = null, noSubag
     } else {
       args.push('--deny-tool', 'write', '--deny-tool', 'shell', ...lspReadOnly);
     }
-    return { cmd: 'copilot', args, usage: 'copilot', cli, model };
+    if (intercom?.url) {
+      args.push('--additional-mcp-config', JSON.stringify({
+        mcpServers: {
+          [INTERCOM_SERVER]: {
+            type: 'http',
+            url: intercom.url,
+            headers: { Authorization: 'Bearer ${FACTORY_INTERCOM_TOKEN}' },
+            tools: ['*'],
+          },
+        },
+      }), '--allow-tool', INTERCOM_SERVER);
+    }
+    return { cmd: 'copilot', args, usage: 'copilot', cli, model, ...(Object.keys(iEnv).length ? { env: iEnv } : {}) };
   }
   if (cli === 'codex') {
     const outFile = path.join(os.tmpdir(), `pipeline-codex-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
@@ -182,6 +219,13 @@ export function cliInvocation(config, { prompt, mode, model, cli = null, noSubag
       '-c', `mcp_servers.${LSP_SERVER}.default_tools_approval_mode="approve"`,
     );
     if (mode === 'read' || mode === 'verify') args.push('-c', `mcp_servers.${LSP_SERVER}.disabled_tools=${JSON.stringify(LSP_MUTATING)}`);
+    if (intercom?.url) {
+      args.push(
+        '-c', `mcp_servers.${INTERCOM_SERVER}.url=${JSON.stringify(intercom.url)}`,
+        '-c', `mcp_servers.${INTERCOM_SERVER}.bearer_token_env_var="FACTORY_INTERCOM_TOKEN"`,
+        '-c', `mcp_servers.${INTERCOM_SERVER}.default_tools_approval_mode="approve"`,
+      );
+    }
     // The factory's PreToolUse guard (story guard, read and network guards: `factory hook pre-tool`), defined for this
     // run. A headless `codex exec` ignores the repository's .codex/hooks.json (an untrusted folder, and hooks need a
     // persisted trust the user grants interactively), so without this no guard reached a Codex agent; verified with
@@ -192,7 +236,7 @@ export function cliInvocation(config, { prompt, mode, model, cli = null, noSubag
     if (model) args.push('-m', model);
     if (effort) args.push('-c', `model_reasoning_effort="${effort === 'max' ? 'xhigh' : effort}"`);
     args.push('-');
-    return { cmd: 'codex', args, input: prompt, outFile, usage: 'codex', cli, model };
+    return { cmd: 'codex', args, input: prompt, outFile, usage: 'codex', cli, model, ...(Object.keys(iEnv).length ? { env: iEnv } : {}) };
   }
   throw new Error(`Unknown agent CLI "${cli}". Use claude, copilot, codex or set PIPELINE_AGENT_CMD.`);
 }
@@ -308,7 +352,7 @@ const shellQuote = (a) => (/[\s"&|<>^()]/.test(a) ? `"${a.replace(/"/g, '\\"')}"
 
 const usageFileFor = () => path.join(os.tmpdir(), `pipeline-usage-${process.pid}-${randomUUID()}.json`);
 
-function prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile, effort = null, cmd = null }) {
+function prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile, effort = null, cmd = null, intercom = null }) {
   const definition = agentDefinition(config, name);
   cli = cmd && !config.agent.cmd ? 'custom' : cli || config.agent.cli;
   let prompt = buildPrompt(definition, task);
@@ -329,7 +373,7 @@ function prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promp
   // A custom member's command gets the alias itself (PIPELINE_AGENT_MODEL), as PIPELINE_AGENT_CMD does.
   const modelId = cli === 'custom' ? alias : resolveModel(config, alias, cli);
   const usageFile = usageFileFor();
-  const invocation = cliInvocation(config, { prompt, mode, model: modelId, cli, noSubagents, cwd, usageFile, effort, cmd });
+  const invocation = cliInvocation(config, { prompt, mode, model: modelId, cli, noSubagents, cwd, usageFile, effort, cmd, intercom });
   log(`agent ${name} (${mode}, ${invocation.cli}${alias ? `, ${alias}` : ''}${effort ? `, effort ${effort}` : ''}, prompt ${definition.version}) started`);
   return { definition, invocation, alias, modelId, usageFile };
 }
@@ -405,12 +449,12 @@ const finalize = (config, prepared, { name, mode, usage, cwd }, { stdout, stderr
 // this call (for example a verifier on another provider); PIPELINE_AGENT_CMD still wins.
 // `usage` ({ stage, story, round, step }) attributes the run's tokens and cost; see usage.mjs. The
 // result's `usage` sums what was recorded ({ tokens, costUsd, premiumRequests, ... }).
-export function runAgent(config, { name, task, mode = 'read', model = null, cli = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, usage = {}, effort = null, cmd = null }) {
+export function runAgent(config, { name, task, mode = 'read', model = null, cli = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, usage = {}, effort = null, cmd = null, intercom = null }) {
   usage = withMember(usage, extraEnv);
   // On Windows, npm-installed CLIs are .cmd shims that only start through a shell, and a Copilot
   // prompt must go through a file (see prepare), exactly as in runAgentAsync.
   const useShell = process.platform === 'win32' && !config.agent.cmd && !cmd;
-  const prepared = prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile: useShell ? null : false, effort, cmd });
+  const prepared = prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile: useShell ? null : false, effort, cmd, intercom });
   const { invocation, usageFile } = prepared;
   const guard = protectedSnapshot(config, cwd, name);
   const started = Date.now();
@@ -420,7 +464,7 @@ export function runAgent(config, { name, task, mode = 'read', model = null, cli 
     input: invocation.input,
     timeoutSec: sup?.timeoutSec ?? timeoutSec,
     shell: useShell,
-    env: childEnv({ ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv }),
+    env: childEnv({ ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv, ...intercomEnv(intercom) }),
   });
   return finalize(config, prepared, { name, mode, usage, cwd }, result, started, guard);
 }
@@ -428,16 +472,16 @@ export function runAgent(config, { name, task, mode = 'read', model = null, cli 
 // Non-blocking variant of runAgent, so a stage or the implement harness can run several fresh agents in
 // parallel. `signal` (an AbortSignal) kills the agent; on Windows a Copilot prompt goes through
 // `promptFile` (see prepare).
-export function runAgentAsync(config, { name, task, mode = 'read', model = null, cli = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, promptFile = null, signal, usage = {}, effort = null, cmd = null }) {
+export function runAgentAsync(config, { name, task, mode = 'read', model = null, cli = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, promptFile = null, signal, usage = {}, effort = null, cmd = null, intercom = null }) {
   usage = withMember(usage, extraEnv);
   let prepared;
   try {
-    prepared = prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile, effort, cmd });
+    prepared = prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile, effort, cmd, intercom });
   } catch (error) {
     return Promise.reject(error);
   }
   const { invocation, usageFile } = prepared;
-  const env = childEnv({ ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv });
+  const env = childEnv({ ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv, ...intercomEnv(intercom) });
   // On Windows, npm-installed CLIs are .cmd shims that only start through a shell.
   const useShell = process.platform === 'win32' && !config.agent.cmd && !cmd;
   const guard = protectedSnapshot(config, cwd, name);

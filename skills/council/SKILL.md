@@ -61,8 +61,10 @@ fixes to code that is being replaced.
    them (a test case id, a named test in a file or a region to delete also
    locate one) never blocks and never starts a fix cycle; it is recorded as
    a question.
-5. **Work alone.** Do not read other members' output. Do not start
-   subagents. Do not edit files.
+5. **Work alone (round 1).** In round 1, review independently: do not read
+   other members' output, do not start subagents, and do not edit files. You
+   see other members' round-1 results only if the optional intercom discussion
+   opens after every member has returned.
 
 ## Lenses
 
@@ -137,8 +139,44 @@ score.
   reasserted twice can no longer be disputed. A disputed finding raised again
   without evidence does not block.
 
+## Discussion (intercom)
+
+Only when `council.intercom.enabled` is true (off by default), only in round 1,
+and only after every member has returned: the members discuss in a room of the
+MCP server `council_intercom`
+([details](../../docs/ai-pipeline/council-intercom.md)).
+
+- **What you see.** Every member's round-1 result as written, and an index of
+  findings keyed `<seat>:<n>`. Use those keys.
+- **Tools.** `read_messages` (pass `since` to move your cursor), `post_message`,
+  `open_dispute`, `vote_dispute`, `room_status`. Withdraw a finding of yours, or
+  revise your score or verdict, only with `post_message`.
+- **Disputes.** `fix` and `fact` carry an `effect` (`drop`, `keep`, `note`),
+  and a majority of all seats on the effect settles them; a `fact` position
+  cites `file:line` of an existing line in the repository (within its file's
+  first 2 MB); a `product` question
+  is never voted: the owner decides. A majority drops or notes a finding only
+  if its author took part in the room (silence on one dispute is no veto);
+  if the author never did, the owner decides. A closed dispute is never
+  reopened.
+- **Splits.** With no majority possible, the stage's orchestrating or judging
+  model rules once from a compact record, or, where there is none, the owner
+  decides. By hand, the split waits for `--rulings`.
+- **Limits.** `maxTurnsPerMember` posts and twice as many dispute and vote calls
+  each. Stay read-only: a member that changes the working tree voids the
+  discussion. Never paste a secret or a token.
+- **Recovery.** A discussion is never resumed. After a crash, a re-run of the
+  same round reuses a finished room's saved result, or marks an unfinished
+  room abandoned and discusses again from the start, once.
+- **Without the factory.** You are the orchestrator: after round 1, give each
+  member every other member's result verbatim and apply these rules yourself.
+
 ## Merging results (orchestrator)
 
+0. After a discussion, take every disposed finding (withdrawn, dropped, noted,
+   held for the owner, awaiting a ruling) out by its `<seat>:<n>` key before
+   merging anything else; keep it as a note, never a fix. Use revised scores. A
+   council with an owner question or an awaiting ruling does not pass.
 1. Merge findings that name the same defect; keep every member's evidence.
 2. Drop findings that break rules 2 or 3 above, and say which rule.
 3. Apply `blockOn` to decide what blocks.
@@ -179,6 +217,7 @@ the same table in the final reply.
 ## By hand
 
 `factory council review [--stage <stage>] [--base <ref>]` seats the
-configured council on the current branch and prints the merged result.
+configured council on the current branch and prints the merged result
+(`--rulings <file>` answers a discussion's splits without running anyone).
 Without the factory, you are the orchestrator: start one read-only subagent
 per member with the harness's own tools, and follow this file.

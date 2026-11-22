@@ -146,6 +146,11 @@ its final message with `AGENT_RESULT: {json}`, which the stage parses. See [agen
   | pr-check | the Stop-hook waiter; manual runs after each critique and fix | session start, Stop, `factory resume` ([PR check](ai-pipeline/pr-check.md#interrupted-checks)) |
   | lessons and retro | `lessons-run.json` | the next `fv lessons`, session start, `factory resume` ([retro](ai-pipeline/retro.md)) |
 
+- **Councils:** `council-config.mjs` validates the `council` section, `council.mjs` seats and merges a council. The
+  discussion between members ([council-intercom.md](ai-pipeline/council-intercom.md)) is three modules:
+  `intercom.mjs` (the step a stage calls after its first round: the process's one listener, recovery by restart and
+  the rulings), `intercom-room.mjs` (the dispute rules and the journal) and `intercom-server.mjs` (the MCP server on
+  `node:http`). Room journals are in `.factory/state/council/intercom/`.
 - **Metrics:** `.factory/metrics/` holds JSON lines, committed with the branch's work (`merge=union` keeps every
   record across branches). `decisions.jsonl` is shared: every stage records why its agents decided what they
   did, and the retro reads it. `token-usage.jsonl` holds every agent run's tokens and cost ([costs](ai-pipeline/costs.md)).

@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COUNCIL_DEFAULTS, COUNCIL_LENSES, COUNCIL_STAGES, seatedNames } from './council-config.mjs';
+import { COUNCIL_DEFAULTS, COUNCIL_LENSES, COUNCIL_STAGES, resolveIntercom, seatedNames } from './council-config.mjs';
 import { logDecision } from './decisions.mjs';
 import { metricsFile, readMetricsLocal } from './state.mjs';
 import { appendJsonl, log as defaultLog, extractResult, nowIso, parseFrontMatter, readJson, run, sha, writeJson } from './util.mjs';
@@ -46,6 +46,7 @@ export function councilFor(config, stage) {
     passScore: c.passScore ?? COUNCIL_DEFAULTS.passScore,
     blockOn: c.blockOn ?? COUNCIL_DEFAULTS.blockOn,
     onUnavailable: c.onUnavailable ?? COUNCIL_DEFAULTS.onUnavailable,
+    intercom: resolveIntercom(c, stage),
     members,
   };
 }
@@ -149,14 +150,24 @@ export function unavailableReason(res) {
   return null;
 }
 
-// A fingerprint of a checkout's working tree (tracked changes and untracked files), without the folders the harness
-// itself writes to while members run (metrics, state, prompts).
+// A fingerprint of a checkout's working tree (tracked changes, and untracked files with their contents: a member that
+// rewrites a file that was already untracked changes it too), without the folders the harness itself writes to while
+// members run (metrics, state, prompts).
 export function treeFingerprint(cwd, exclude = []) {
   const specs = ['.', ...exclude.filter(Boolean).map((e) => `:(exclude)${e}`)];
   const status = run('git', ['status', '--porcelain=v1', '-uall', '--', ...specs], { cwd });
   if (status.status !== 0) return null;
   const diff = run('git', ['diff', 'HEAD', '--', ...specs], { cwd });
-  return sha(`${status.stdout}\n${diff.stdout}`, 16);
+  const untracked = run('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', ...specs], { cwd }).stdout.split('\0').filter(Boolean);
+  const contents = untracked.map((f) => {
+    try {
+      const abs = path.join(cwd, f);
+      return `${f}\0${sha(fs.lstatSync(abs).isSymbolicLink() ? fs.readlinkSync(abs) : fs.readFileSync(abs), 16)}`;
+    } catch {
+      return `${f}\0unreadable`;
+    }
+  });
+  return sha(`${status.stdout}\n${diff.stdout}\n${contents.join('\n')}`, 16);
 }
 
 // Seats the council: every member runs at once through `run(member, task, { signal })` (the stage's own agent call,
@@ -166,7 +177,7 @@ export function treeFingerprint(cwd, exclude = []) {
 // background and its result goes to `onLate` (the caller hands it on as feedback; its score is never recorded).
 // `readOnly` (a checkout and the folders to ignore) fails the round when any member changed the working tree: every
 // CLI's read-only mode is enforced by the CLI, and this catches what got past it (a custom command).
-export async function runCouncil({ council, run: runMember, parse, taskFor, retries = 0, onLate = null, readOnly = null, log = defaultLog }) {
+export async function runCouncil({ council, run: runMember, parse, taskFor, retries = 0, onLate = null, readOnly = null, round = 1, waitAll = Boolean(council?.intercom?.enabled && round === 1), log = defaultLog }) {
   const before = readOnly ? treeFingerprint(readOnly.cwd, readOnly.exclude) : null;
   const attempt = async (m) => {
     const t0 = Date.now();
@@ -188,8 +199,10 @@ export async function runCouncil({ council, run: runMember, parse, taskFor, retr
       if (why) return { ...base, attempts: Math.max(tries, 1), status: 'unavailable', reason: why, res, seconds: Math.round((Date.now() - t0) / 1000) };
       const parsed = res?.factoryGuard ? null : parse(res?.output ?? '', m);
       if (parsed) {
+        // The member's result as written, for the intercom room's seed (only when a discussion can follow).
+        const raw = council.intercom?.enabled ? { rawResult: extractResult(res?.output ?? '') } : {};
         const filled = await fillResolves(parsed.findings ?? [], { member: m, run: runMember, stage: council.stage, log });
-        return { ...base, attempts: Math.max(tries, 1), status: 'ok', ...parsed, findings: filled.findings.map((f) => normalizeFinding(f, m)), ...(filled.reasked ? { resolvesReasked: filled.reasked } : {}), res, seconds: Math.round((Date.now() - t0) / 1000) };
+        return { ...base, attempts: Math.max(tries, 1), status: 'ok', ...parsed, ...raw, findings: filled.findings.map((f) => normalizeFinding(f, m)), ...(filled.reasked ? { resolvesReasked: filled.reasked } : {}), res, seconds: Math.round((Date.now() - t0) / 1000) };
       }
       log(`council ${council.stage}: ${m.name} returned no parsable result (attempt ${i + 1})`);
     }
@@ -198,8 +211,8 @@ export async function runCouncil({ council, run: runMember, parse, taskFor, retr
   const promises = new Map(council.members.map((m) => [m.name, attempt(m)]));
   const settled = new Map();
   for (const [name, p] of promises) p.then((r) => settled.set(name, r), (e) => settled.set(name, { member: council.members.find((m) => m.name === name), status: 'failed', reason: e?.message ?? String(e) }));
-  const blocking = council.members.filter((m) => m.blocking);
-  await Promise.all(blocking.map((m) => promises.get(m.name)));
+  const waited = waitAll ? council.members : council.members.filter((m) => m.blocking);
+  await Promise.all(waited.map((m) => promises.get(m.name)));
   await new Promise((resolve) => setImmediate(resolve));
   const results = [];
   for (const m of council.members) {
@@ -395,7 +408,21 @@ export function hasEvidence(f, root = null) {
   return false;
 }
 
-export function mergeCouncil(council, results, { protect = null, feedback = [], violation = null, changed = null, earlier = null, root = null, adjudications = null } = {}) {
+// `intercom` is a discussion's result (intercom.mjs). A finding it disposed of (by its `<seat>:<n>` key, `intercomId`) is
+// taken out before clustering: dropped, noted or withdrawn, held for the owner, or awaiting a ruling. It never joins a
+// cluster, blockOn or a severity; it stays as a note with its `disposition`, and still explains its member's low score.
+// The earlier disposition wins (a vote, then a later withdrawal: the vote). Revised scores replace round-1 scores. A
+// discussion with a read-only violation fails the council.
+export function mergeCouncil(council, results, { protect = null, feedback = [], violation = null, changed = null, earlier = null, root = null, adjudications = null, intercom = null } = {}) {
+  const ic = intercom?.violation ? null : intercom;
+  const fate = new Map(); // intercomId -> disposition { kind, why, question? }
+  const dispose = (id, d) => fate.has(id) || fate.set(id, d);
+  for (const d of ic?.settledDisputes ?? []) if (d.againstFinding && !d.withdrawn) dispose(d.findingId, { kind: d.outcome, why: `the council discussion settled ${d.outcome} (${d.kind}; votes: ${(d.tally ?? []).map((t) => `${t.effect} ${t.count}`).join(', ')})` });
+  for (const r of ic?.rulings ?? []) if (r.againstFinding) dispose(r.findingId, { kind: r.ruling, why: `ruled ${r.ruling} on a council split: ${r.reason}` });
+  for (const w of ic?.withdrawn ?? []) dispose(w.findingId, { kind: 'withdrawn', why: `withdrawn by its author (${w.by}) in the council discussion` });
+  for (const q of ic?.ownerQuestions ?? []) dispose(q.findingId, { kind: 'owner', why: `pending the owner's decision: ${q.question} (${q.reason})`, question: q });
+  for (const e of ic?.awaitingRuling ?? []) dispose(e.findingId, { kind: 'awaiting-ruling', why: `awaiting a ruling on ${e.disputeId}` });
+  if (Object.keys(ic?.scoreChanges ?? {}).length) results = results.map((r) => (r.status === 'ok' && ic.scoreChanges[r.member.name] ? { ...r, ...ic.scoreChanges[r.member.name] } : r));
   const ok = results.filter((r) => r.status === 'ok');
   const okBlocking = ok.filter((r) => r.member.blocking);
   const unavailable = results.filter((r) => r.status === 'unavailable');
@@ -419,7 +446,7 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     attempts: r.attempts ?? 1,
     ...(r.reason ? { reason: String(r.reason).slice(0, 300) } : {}),
   }));
-  let error = violation;
+  let error = violation || intercom?.violation || null;
   if (!error && unavailable.some((r) => r.member.blocking) && council.onUnavailable === 'fail') {
     error = `council member(s) unavailable: ${unavailable.filter((r) => r.member.blocking).map((r) => `${r.member.name} (${r.member.cli}): ${r.reason}`).join('; ')} (council.onUnavailable is fail; no other model is substituted)`;
   }
@@ -429,8 +456,13 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
 
   // Cluster same-defect findings across members.
   const clusters = [];
+  const disposed = [];
   for (const r of ok) {
     for (const f of r.findings) {
+      if (fate.has(f.intercomId)) {
+        disposed.push(f);
+        continue;
+      }
       const c = clusters.find((x) => x.items.some((y) => sameDefect(y, f)) && !x.items.some((y) => y.member === f.member));
       if (c) c.items.push(f);
       else clusters.push({ items: [f] });
@@ -524,6 +556,11 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     }
     return out;
   });
+  // The discussion's dispositions, each its own note for the record: never a fix, never promoted downstream.
+  for (const f of disposed) {
+    const d = fate.get(f.intercomId);
+    merged.push({ ...f, severity: 'minor', members: [f.member], upheldBy: [], notUpheld: d.why, disposition: d.kind, memberEvidence: [{ member: f.member, evidence: f.evidence, text: f.text, action: f.action, severity: f.severity, file: f.file ?? null, line: f.line ?? null }], ...(d.question ? { pendingOwner: true, ownerQuestion: d.question } : {}) });
+  }
 
   // Delete-test protections (harness-enforced): a test that is the only cover for an acceptance line, a regression test
   // kept for an upheld finding, or another story's test is never deleted.
@@ -596,7 +633,9 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
   }
   const missing = results.filter((r) => r.member.blocking && r.status !== 'ok');
   const scores = okBlocking.map((r) => r.score).filter((s) => s != null);
-  const pass = !standing.length && !low.length && (!missing.length || council.onUnavailable === 'report') && !failed.length;
+  // An owner question or a split awaiting a ruling holds the council: nobody fixes what is not decided.
+  const pendingDecisions = (ic?.ownerQuestions?.length ?? 0) + (ic?.awaitingRuling?.length ?? 0);
+  const pass = !standing.length && !low.length && (!missing.length || council.onUnavailable === 'report') && !failed.length && !pendingDecisions;
   return {
     ...base,
     pass,
@@ -616,6 +655,7 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     rewrites,
     disputes: mergeRulings(ok, merged),
     followUps: [...ok.flatMap((r) => (r.followUps ?? []).filter((u) => str(u?.title)).map((u) => ({ title: str(u.title), reason: str(u.reason), member: r.member.name }))), ...merged.filter((f) => f.outsideChange).map((f) => ({ title: String(f.text ?? f.issue ?? f.id).split('\n')[0].slice(0, 160), reason: f.notUpheld, member: (f.members ?? [])[0] ?? null }))],
+    ...(intercom ? { intercom, ownerQuestions: ic?.ownerQuestions ?? [], ...(ic?.awaitingRuling?.length ? { awaitingRuling: ic.awaitingRuling } : {}) } : {}),
     summary: summarize(council, members, standing, notes, contradictions, pass),
   };
 }
@@ -1175,6 +1215,8 @@ export function recordCouncilRound(config, { stage, story, step = null, round, c
     superseded: (merged.superseded ?? []).length,
     ...((merged.earlierRound ?? []).length ? { earlierRound: merged.earlierRound.length } : {}),
     ...((merged.questions ?? []).length ? { noEvidence: merged.questions.length } : {}),
+    // The discussion, counted; its journal relative to the repository (metrics are committed: no local absolute path).
+    ...(merged.intercom ? { intercom: { roomId: merged.intercom.roomId, transcript: merged.intercom.transcript && path.relative(config.root, merged.intercom.transcript), ...(merged.intercom.violation ? { violation: true } : {}), settled: merged.intercom.settledDisputes.length, rulings: merged.intercom.rulings.map(({ disputeId, findingId, ruling, reason, by }) => ({ disputeId, findingId, ruling, reason, by })), awaitingRuling: merged.intercom.awaitingRuling.length, ownerQuestions: merged.intercom.ownerQuestions.length, withdrawn: merged.intercom.withdrawn.length, disconnected: merged.intercom.disconnected.length } } : {}),
   };
   try {
     appendJsonl(metricsFile(config, COUNCIL_FILE), rec);

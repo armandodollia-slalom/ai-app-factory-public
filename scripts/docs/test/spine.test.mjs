@@ -32,7 +32,7 @@ test('--mermaid prints the marked spine and the node-to-page table', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.startsWith(SPINE_START));
   assert.match(r.stdout, /\| Id \| Step \| Agent or harness \| Settings \| Page \|/);
-  assert.match(r.stdout, /\| `verifier` \| Pair verifier: approved, changes, exhausted \| `pair-verifier`, `pair-ui-verifier` \| /);
+  assert.match(r.stdout, /\| `verifier` \| Pair verifier: approved, changes, exhausted, owner \| `pair-verifier`, `pair-ui-verifier` \| /);
   assert.deepEqual(checkSpine(flow, r.stdout).problems, []);
 });
 

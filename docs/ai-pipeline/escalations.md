@@ -92,6 +92,24 @@ sequenceDiagram
 6. **Re-run with the answers.** `implement run`/`resume` treat `escalation-resolved` as permission to run the ticket again, fresh (like `--force` for that ticket's earlier run, including a standing review, plan or automation escalation). `board fetch` writes the `## Decisions` next to the cached story (`decisions.md`), and the implementer, the orchestrator's plan and integration, the pair implementers and verifiers, the architecture reviewer, the test planner, the test automation agent and their verifiers get them as **Human decisions (binding requirements)**: reviewers and verifiers flag code that contradicts a decision instead of reopening it. When the re-run claims the card, it removes `escalation-resolved` and deletes the ticket's old escalation notes.
 7. **Round 2.** If the ticket fails again, a new comment asks again (round 2), and the earlier rounds stay under `## Decisions` as context. `board publish` keeps the section when it rewrites the issue body.
 
+## Owner questions from a council discussion
+
+With a [council discussion](council-intercom.md) on, the members can leave a question only the ticket's owner can
+answer: a product question (what should the product do), a split no model may rule on, or a drop whose author never
+took part. The finding it is about is never fixed meanwhile, and the stage stops:
+
+| Stage | Outcome | The question is in |
+| --- | --- | --- |
+| Pair verifier (council) | `blocked` | the implementation escalation, "the council discussion needs an owner decision" |
+| Architecture review | `review-escalated` | `.factory/state/escalations/<KEY>-review.md` |
+| Test plan, test automation | `fv-escalated` | `.factory/state/escalations/<KEY>-plan.md` or `-automation.md` |
+| PR check | `needs-decision` | the PR check's questions, titled "Council discussion: `<seat>:<n>`" |
+
+Each question names the finding (`opus:1` is the first finding of member `opus`), its kind and the question in one
+sentence, with why it came to you. Answer it like any other question on the ticket and tick **Resolved**; the re-run
+takes your answer as a decision and runs the council again. The discussion's journal
+(`.factory/state/council/intercom/`) shows how the members got there.
+
 ## Requeue on a timer
 
 `factory implement requeue` picks up every ticket you resolved and runs them in one batch, so you can answer several Failed tickets on GitHub and have them run together:

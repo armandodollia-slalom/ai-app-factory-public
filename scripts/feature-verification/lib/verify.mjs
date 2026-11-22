@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
 import { contestedText, councilFor, councilMemory, fixesFile, memoryFile, nameFindings, memberRunEnv, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
+import { runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log, nowIso } from '../../pipeline/lib/util.mjs';
@@ -155,7 +156,8 @@ export function demoteUrlCaptionGaps(verdict, { navigationProven, requiredScore 
   if (!noise.length) return verdict;
   const gaps = verdict.gaps.filter((g) => !noise.includes(g));
   const notes = [...(verdict.notes ?? []), ...noise.map((g) => ({ ...g, demoted: 'url-caption: the recorded steps prove the navigation, and the fixture draws the URL on every keyframe' }))];
-  const pass = !gaps.length && !verdict.passed;
+  // Never over an open owner question from a council discussion.
+  const pass = !gaps.length && !verdict.passed && !verdict.ownerQuestions?.length;
   return { ...verdict, gaps, notes, demotedUrlCaption: noise.length, ...(pass ? { score: Math.max(verdict.score ?? 0, requiredScore), passed: true } : {}) };
 }
 
@@ -176,10 +178,12 @@ export async function verifyRound(config, opts) {
 // `late` (council.mjs lateBox) carries a non-blocking member's late result from one round to the next as feedback.
 export async function councilVerifier(config, { stage, story, round, task, producerVersion, metrics = true, uiCases = [], council, runMember = null, late = null }) {
   const name = VERIFIER[stage];
-  const call = runMember ?? ((m, t) => runAgentAsync(config, { name, task: t, mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.timeoutsSec.verifier, extraEnv: memberRunEnv(m), usage: { stage: `${stage}-verify`, story: story.key, round, step: m.name } }));
+  const call = runMember ?? ((m, t, o) => runAgentAsync(config, { name, task: t, mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.timeoutsSec.verifier, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: `${stage}-verify`, story: story.key, round, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } }));
   const memory = councilMemory({ file: memoryFile(config.root, config.stateDir, { stage: COUNCIL_STAGE[stage], story: story.key }), cwd: config.root, round, fixes: fixesFile(config.root, config.stateDir, { stage: COUNCIL_STAGE[stage], story: story.key }) });
+  const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
   const out = await runCouncil({
     council,
+    round,
     retries: config.agent.resultParseRetries,
     taskFor: (m) => memberTask(task, { council, member: m, round, earlier: memory.text }),
     run: call,
@@ -194,11 +198,13 @@ export async function councilVerifier(config, { stage, story, round, task, produ
       });
       return { score: memberScore(raw) ?? v.score, verdict: v.score >= council.passScore ? 'APPROVED' : 'CHANGES_REQUESTED', summary: v.summary, findings, disputes: raw.disputes, followUps: raw.followUps };
     },
-    readOnly: { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+    readOnly,
     onLate: late?.push,
   });
   const cases = planCases(config.root, config.plansDir, story.key);
-  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases }), violation: out.violation, feedback: late?.take() ?? [], earlier: memory, root: config.root };
+  // No model of this stage rules on a split: it becomes an owner question.
+  const intercom = await runIntercomDiscussion({ config, council, results: out.results, subject: story.key, stage: COUNCIL_STAGE[stage], round, violation: out.violation, readOnly, reviewed: task, run: call });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases }), violation: out.violation, feedback: late?.take() ?? [], earlier: memory, root: config.root, ...(intercom ? { intercom } : {}) };
   const merged = await adjudicate({
     config,
     council,
@@ -224,8 +230,8 @@ export async function councilVerifier(config, { stage, story, round, task, produ
     root_stage: f.root_stage ?? stage,
   });
   const gaps = merged.findings.map(asGap);
-  const notes = merged.notes.map((f) => ({ ...asGap(f), note: f.protected ? `not acted on: ${f.protected}` : f.notUpheld ? `not upheld: ${f.notUpheld}` : f.supersededBy ? `superseded by ${f.supersededBy}` : f.feedback ? `feedback from non-blocking member ${f.member}` : 'minor' }));
-  const verdict = { score: merged.score ?? 0, gaps, notes, summary: merged.summary, passed: merged.pass, evidence: [], council: merged };
+  const notes = merged.notes.map((f) => ({ ...asGap(f), ...(f.pendingOwner ? { pendingOwner: true } : {}), note: f.pendingOwner ? f.notUpheld : f.protected ? `not acted on: ${f.protected}` : f.notUpheld ? `not upheld: ${f.notUpheld}` : f.supersededBy ? `superseded by ${f.supersededBy}` : f.feedback ? `feedback from non-blocking member ${f.member}` : 'minor' }));
+  const verdict = { score: merged.score ?? 0, gaps, notes, summary: merged.summary, passed: merged.pass, evidence: [], ...(merged.ownerQuestions?.length ? { ownerQuestions: merged.ownerQuestions } : {}), council: merged };
   if (metrics) {
     const common = { ts: nowIso(), stage, story: story.key, round, agent_prompt_ver: producerVersion, verifier_ver: 'council', cli: 'council' };
     appendJsonl(metricsFile(config, 'verifier-runs.jsonl'), { ...common, score: verdict.score, passed: verdict.passed, gaps: gaps.length, members: merged.members.map(({ name, cli, model, score }) => ({ name, cli, model, score })) });

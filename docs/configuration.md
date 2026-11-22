@@ -60,6 +60,12 @@ Three sections of the overlay (`lsp`, `stack`, `teststack`) belong to tools with
 
 After changing the pin or the overlay, run `factory render`. Every file it writes outside `.factory/` is listed in `.factory/manifest.json`; `factory uninstall` removes exactly those.
 
+### Upgrading from 0.2.95
+
+- New optional setting `council.intercom`, off by default: a council's members can discuss their first round with each other before the merge ([council-intercom.md](ai-pipeline/council-intercom.md#settings)). Without it nothing runs differently, except as listed under [Changes when the setting is off](ai-pipeline/council-intercom.md#changes-when-the-setting-is-off).
+- The read-only check of every council round is stricter: a member that rewrites a file that was already untracked now fails the round.
+- `factory council review --rulings <file>` is new; with the setting off it stops with an error.
+
 ### Upgrading from 0.2.92
 
 - A `video.script.scope` other than `headline`, `all` or `none` now stops every command that loads the pipeline config (it used to act as `none`).
@@ -159,6 +165,7 @@ Each stage page under [ai-pipeline/](ai-pipeline/README.md) documents its own se
 | `agent` | `cli` (`claude`, `copilot`, `codex`), `models` per agent, `modelIds`, `claude.promptCacheTtl` (`5m` by default: a headless agent run is one short session, and the 1-hour cache Claude Code picks on a subscription is written at 1.6x the price), `claude.toolSearch` (`false` by default: MCP tools such as the language servers are listed to the agent directly, not deferred behind ToolSearch) |
 | `bot` | the PR bot ([setup](ai-pipeline/setup.md#the-pipelines-pr-bot)) |
 | `council` | opt-in council verifiers (governance): `members` (each with `name`, `cli` (`claude`, `codex`, `copilot`, `custom` with `cmd`), `model`, `effort`, `lens`, `blocking`, `env`), `stages` (`pairVerify`, `pairUiVerify`, `review`, `testPlan`, `testAutomation`, `prCheck`, each with its `members` and optional `rounds`), `rounds` (3), `passScore` (9), `blockOn` (`any`, `majority`, `all`), `onUnavailable` (`fail` or `report`). Scope objections to sealed fixes are settled by an adjudication sitting of the blocking members. Without it every stage runs its single verifier ([council.md](ai-pipeline/council.md)) |
+| `council.intercom` | off by default: the council's members discuss round 1 with each other in a chat room before the merge (`enabled`, `host`, `port`, `advertiseHost`, `allowInsecureRemote`, `maxTurnsPerMember`, `maxEscalations`, `onSplit`; also per stage) ([council-intercom.md](ai-pipeline/council-intercom.md)) |
 
 ## Tool sections
 

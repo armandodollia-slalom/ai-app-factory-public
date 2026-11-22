@@ -38,6 +38,7 @@ flowchart TD
   doneNoPr[("doneNoPr: Run ends: done, no PR")]:::rec
   journeys{"journeys: Unit feature verification"}:::agent
   unitPrCheck["unitPrCheck: Unit PR check"]:::agent
+  discussion{"discussion: Council discussion"}:::agent
   prCheck{"prCheck: PR check"}:::agent
   parity{"parity: Publish, CI parity, re-verify"}:::harness
   analysisGate{"analysisGate: Pre-push analysis gate"}:::harness
@@ -135,7 +136,8 @@ flowchart TD
   approval -->|"approves and merges"| merged
   approval -->|"reviewer sends it back"| sentBack
   sentBack -->|"requeue or run again, PR still open"| requeue
-  reopenHold & claim & epicPlan & foundation & plan & verifier & review & testPlan & fv & journeys & prCheck & parity & analysisGate & push & ownerQ & branchCi & ciFixRound & triage & uiPair & apiEvidence & open & checks & hold & holdFix & ready -.-> failed
+  verifier & review & testPlan & fv & unitPrCheck & prCheck -.->|"uses"| discussion
+  reopenHold & claim & epicPlan & foundation & plan & verifier & review & testPlan & fv & journeys & prCheck & parity & analysisGate & push & ownerQ & branchCi & ciFixRound & triage & uiPair & apiEvidence & open & checks & hold & holdFix & ready & discussion -.-> failed
   classDef agent fill:#dbe8fb,stroke:#2f5fb3,color:#111
   classDef harness fill:#eeeeee,stroke:#666,stroke-dasharray:5 3,color:#111
   classDef rec fill:#dff2df,stroke:#2e7d32,color:#111
@@ -167,15 +169,16 @@ no card moves, and `factory implement resume` continues the unfinished batch onc
 | `plan` | Orchestrator plans: planned, rejected | `implementer` | none | [implement.md](implement.md#plan) |
 | `pairs` | Implementer | `pair-implementer`, `implementer` | none | [implement.md](implement.md#what-happens) |
 | `harnessChecks` | Harness checks: clean, finding | harness | `analysis`, `analysis.fixLoop.bounces` | [implement.md](implement.md#static-analysis-in-the-pair-rounds) |
-| `verifier` | Pair verifier: approved, changes, exhausted | `pair-verifier`, `pair-ui-verifier` | `council.stages.pairVerify`, `council.stages.pairUiVerify`, `implement.maxPairRounds` | [implement.md](implement.md#ui-verification) |
+| `verifier` | Pair verifier: approved, changes, exhausted, owner | `pair-verifier`, `pair-ui-verifier` | `council.stages.pairVerify`, `council.stages.pairUiVerify`, `implement.maxPairRounds` | [implement.md](implement.md#ui-verification) |
 | `policy` | Policy engine: pass, block | harness | none | [review.md](review.md#the-policy-step-engine-and-policy) |
-| `review` | Architecture review: approved, changes, escalated | `architecture-reviewer` | `council.stages.review`, `review.maxRounds` | [review.md](review.md#the-policy-step-engine-and-policy) |
-| `testPlan` | Test plan: verified, failed | `test-planner`, `test-plan-verifier` | `council.stages.testPlan` | [feature-verification.md](feature-verification.md#workflow-1-story-to-test-plan) |
-| `fv` | Test automation: verified, product-bug, failed | `test-automation`, `test-automation-verifier` | `council.stages.testAutomation`, `implement.maxBugFixCycles` | [feature-verification.md](feature-verification.md#workflow-2-implementation-to-automated-tests) |
+| `review` | Architecture review: approved, changes, escalated, owner | `architecture-reviewer` | `council.stages.review`, `review.maxRounds`, `council.intercom.enabled` | [review.md](review.md#the-policy-step-engine-and-policy) |
+| `testPlan` | Test plan: verified, failed, owner | `test-planner`, `test-plan-verifier` | `council.stages.testPlan`, `council.intercom.enabled` | [feature-verification.md](feature-verification.md#workflow-1-story-to-test-plan) |
+| `fv` | Test automation: verified, product-bug, failed, owner | `test-automation`, `test-automation-verifier` | `council.stages.testAutomation`, `implement.maxBugFixCycles`, `council.intercom.enabled` | [feature-verification.md](feature-verification.md#workflow-2-implementation-to-automated-tests) |
 | `unit` | Merged into the unit branch | harness | none | [implement.md](implement.md#epic-delivery) |
 | `doneNoPr` | Run ends: done, no PR | record | `--pr` | [escalations.md](escalations.md#outcomes) |
 | `journeys` | Unit feature verification: verified, failed | `test-planner`, `test-automation`, `verifiers` | `implement.epic.featureVerification` | [implement.md](implement.md#epic-delivery) |
-| `unitPrCheck` | Unit PR check | `pr-check critics`, `defender`, `judge`, `pr-check-fixer` | `implement.epic.prCheck`, `council.stages.prCheck` | [pr-check.md](pr-check.md#several-tickets-an-epic) |
+| `unitPrCheck` | Unit PR check | `pr-check critics`, `defender`, `judge`, `pr-check-fixer` | `implement.epic.prCheck`, `council.stages.prCheck`, `council.intercom.enabled` | [pr-check.md](pr-check.md#several-tickets-an-epic) |
+| `discussion` | Council discussion: settled, ruled, owner, unavailable | `council members`, `implement orchestrator or PR check judge` | `council.intercom.enabled`, `council.intercom.onSplit`, `council.intercom.maxTurnsPerMember` | [council-intercom.md](council-intercom.md) |
 | `prCheck` | PR check: pass, production, tests, light, unresolved | `pr-check critics`, `defender`, `judge` | `council.stages.prCheck`, `implement.prCheck.returnToImplementation.enabled`, `implement.prCheck.returnToImplementation.maxReturns` | [pr-check.md](pr-check.md#findings-about-the-production-change-go-back-to-implementation) |
 | `parity` | Publish, CI parity, re-verify: ok, failed | harness, may call `pr-check-fixer`, `feature verification` | none | [ci-parity.md](ci-parity.md) |
 | `analysisGate` | Pre-push analysis gate: pass, finding, blocked | harness | `analysis` | [analysis.md](analysis.md#ci) |
@@ -216,6 +219,8 @@ and the PR check's debate ([pr-check.md](pr-check.md)). The board lanes are in [
 | **Orchestrator** | the `implementer` agent when it plans a ticket into subtasks and integrates them |
 | **Verifier pair** | one agent writes a subtask, a second, read-only agent that never saw the writer's reasoning checks it |
 | **Council** | several verifiers on different tools and models sitting in one verifier's seat ([council.md](council.md)) |
+| **Intercom** | an optional discussion in which a council's members settle their disagreements with each other after their independent first round, through a chat room the harness hosts ([council-intercom.md](council-intercom.md)) |
+| **Ruling** | the decision on a split the members could not settle by majority: given once by the stage's own model (the implement orchestrator, the PR check judge) or by a person with `factory council review --rulings` |
 | **Lens** | what a critic or council member judges: acceptance, flow, design, style, video, correctness, security, test value |
 | **Delivery** | everything between the last agent stage and the open PR: scans, push, CI proof, rating, video, body, open |
 | **Unit** | what one PR delivers: a ticket, an epic, a PR group of an epic, or a bug group |
@@ -274,6 +279,11 @@ Behaviour that falls short of the design, stated once; each is described where i
   PR text keep it ([pr-demo-video.md](pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
 - **Video secret checks** sample the page's text and input values at each step; the finished frames are not
   scanned ([pr-demo-video.md](pr-demo-video.md#secrets-never-show)).
+- **Council discussion** ([council-intercom.md](council-intercom.md)). An interrupted discussion is never resumed: it
+  starts again from the start, once. Runs started separately (two `factory` processes) do not share a discussion
+  server, each runs its own. Copilot members are covered by tests only: no real Copilot session has joined a room.
+  A small model is a poor judge of a split, so a split is ruled by the stage's own orchestrating or judging model,
+  never by a member, and goes to the owner where the stage has none.
 - **Bitbucket Cloud** cannot bind a merge to a commit; the harness re-reads the head just before merging. Its
   `close-reopen` hold setting is reported only by `factory doctor`, as a failed row, although `draft` is used
   ([providers](../providers/README.md#capabilities-not-assumptions)).
@@ -290,7 +300,7 @@ Behaviour that falls short of the design, stated once; each is described where i
 | [review-gate.md](review-gate.md) | C, reviewers: how bug fixes are rated and merged |
 | [pr-demo-video.md](pr-demo-video.md) | B, C: demo videos, bug evidence, API changes |
 | [escalations.md](escalations.md) | C: every outcome and what to do next |
-| [council.md](council.md), [analysis.md](analysis.md), [models.md](models.md) | B, C: optional councils, static analysis, the model allowlist |
+| [council.md](council.md), [council-intercom.md](council-intercom.md), [analysis.md](analysis.md), [models.md](models.md) | B, C: optional councils and their discussion, static analysis, the model allowlist |
 | [agents.md](agents.md), [costs.md](costs.md), [disk.md](disk.md), [ci-parity.md](ci-parity.md) | C: the agents, token costs, disk use, CI parity |
 | [retro.md](retro.md), [experiments.md](experiments.md) | C, D: lessons and factory proposals; comparing delivery modes |
 | [configuration.md](../configuration.md), [providers](../providers/README.md), [hosts-and-trackers.md](../hosts-and-trackers.md) | B, C: every setting; hosts, trackers and CI systems |

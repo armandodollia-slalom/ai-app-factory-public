@@ -12,6 +12,10 @@ run them. The engine stays outside your codebase, and `factory uninstall` remove
    writes it, a second agent, which never saw the first one's reasoning, checks it.
 3. **Agents review and test it.** An architecture review, a test plan and automated tests, each checked by a
    separate agent, then the *PR check*: critic agents argue the change against the ticket and a judge rules.
+   Each check has one verifier by default. Any of them can be given to a *council* instead: several
+   verifiers on different tools and models, as many as you configure ([council.md](docs/ai-pipeline/council.md)).
+   With the intercom switched on, a council's members also discuss their findings with each other before the
+   harness merges them ([council-intercom.md](docs/ai-pipeline/council-intercom.md)).
 4. **The *harness* proves it.** The harness is the factory's own code, with no AI in it. It runs the scanners,
    pushes the branch and waits until CI is green on that exact commit (a CI system that runs only on pull
    requests gets a draft PR, marked ready when green; with the CI wait off nothing is proven).
@@ -60,10 +64,10 @@ Then follow [setup.md](docs/ai-pipeline/setup.md#add-it-to-a-repository) to fini
 | Status | What |
 | --- | --- |
 | **Proven live** | On one codebase (eShop, .NET, several services), run on macOS, with GitHub as code host, GitHub Issues and Projects as tracker and GitHub Actions as CI: see the dated list below the table |
-| **Covered by tests or fixtures only** | every other code host, tracker and CI adapter (against fakes built from the vendors' documentation; [status per adapter](docs/providers/README.md#verified-live-or-only-against-fakes)); feature epics split into several PRs (`--pr-split story` and `groups`); narration scope `all` and `none`; `video.bugPair.requireBefore`; council adjudication; crash recovery; holding an open PR whose check failed and fixing it; the commercial scanners |
+| **Covered by tests or fixtures only** | every other code host, tracker and CI adapter (against fakes built from the vendors' documentation; [status per adapter](docs/providers/README.md#verified-live-or-only-against-fakes)); feature epics split into several PRs (`--pr-split story` and `groups`); narration scope `all` and `none`; `video.bugPair.requireBefore`; council adjudication; the council intercom inside a full pipeline run, and its Copilot or custom members; crash recovery; holding an open PR whose check failed and fixing it; the commercial scanners |
 | **Not proven** | other codebases and languages end to end (the Python, Go, Java and Rust analysis tools are not exercised end to end, and the Rust and Java language servers were written from documentation); Linux and Windows machines; write access through any non-GitHub adapter. Some third-party items run with a warning while their licence review is pending ([analysis.md](docs/ai-pipeline/analysis.md#licences-and-paid-client-work), [pr-demo-video.md](docs/ai-pipeline/pr-demo-video.md#toolchain-and-licences)) |
 
-Proven live, by date (all on the codebase and services named in the table):
+Proven live, by date (on the codebase and services named in the table unless an entry says otherwise):
 
 - **2026-11-13**, from release 0.2.25: a bug epic whose group PR the review gate rated and auto-merged.
 - **2026-11-15**: single tickets delivered as PRs through the CI wait and a CI fixing round; the fixes those runs
@@ -72,6 +76,9 @@ Proven live, by date (all on the codebase and services named in the table):
 - **2026-11-20**, releases 0.2.91 and 0.2.92, on open PRs that were awaiting review at that date: the demo video
   with agent-written narration (scope `headline`) on a feature epic delivered as one PR, a UI bug's before and
   after videos, and a backend bug's request evidence posted on its ticket and PR.
+- **2026-11-21**, on a small test repository rather than the codebase above: the council intercom with Claude Code
+  and Codex members, which connected to a discussion room by themselves and discussed a toy change; one split was
+  ruled by a model and one by hand (`factory council review --rulings`).
 
 Behaviour the docs describe as it is, including where it falls short of the design, is listed under
 [Known limits](docs/ai-pipeline/README.md#known-limits).
@@ -104,6 +111,7 @@ not masked and finished video frames are not scanned ([what the video checks cov
 | The pipeline stages: implement, review, feature verification, PR check, review gate, board, retro | [ai-pipeline/README.md](docs/ai-pipeline/README.md) | `factory init`, then the [`onboard-codebase`](skills/onboard-codebase/SKILL.md) skill |
 | 24 agent definitions, plus what each repository adds | [agents.md](docs/ai-pipeline/agents.md) | [`write-agent-addenda`](skills/write-agent-addenda/SKILL.md) skill |
 | Councils: several verifiers from different tools and models in one seat | [council.md](docs/ai-pipeline/council.md) | `council` in the config |
+| Council discussion (intercom): the members settle disagreements with each other, off by default | [council-intercom.md](docs/ai-pipeline/council-intercom.md) | `council.intercom` in the config |
 | Static analysis | [analysis.md](docs/ai-pipeline/analysis.md) | `analysis` in the config |
 | Code intelligence (language servers) | [code-intelligence.md](docs/code-intelligence.md) | [`setup-lsp`](skills/setup-lsp/SKILL.md) skill |
 | Test stack (Docker Compose, seeded from scenarios) | [test-stack.md](docs/test-stack.md) | [`setup-teststack`](skills/setup-teststack/SKILL.md) skill |

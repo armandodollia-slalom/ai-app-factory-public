@@ -1,7 +1,7 @@
 {
   "$comment": "Single source of truth for docs/pipeline-explorer.html and the Mermaid spine (scripts/docs/build-explorer.mjs). It models what the runner's rules say will happen for a configuration; it does not run anything. Settings name their real config path or CLI flag and say where the code keeps their default and allowed values (`checks`, verified by scripts/docs/test/pipeline-flow.test.mjs). Conditions are data: {\"eq\":[ref,value]}, {\"in\":[ref,[values]]}, {\"is\":ref}, {\"not\":c}, {\"all\":[c]}, {\"any\":[c]}, {\"gt\":[ref,n]}; a ref is a setting id or a fact id. A fact with \"walk\": true starts false and is set by the edges the walk takes ({\"set\":{fact:true}}); an outcome with cyclesLeft or cyclesUsed (a setting id) is offered only before, or once, that many visits of its step. Doc links are relative to docs/.",
   "version": 1,
-  "factoryVersion": "0.2.95",
+  "factoryVersion": "0.2.96",
   "kinds": {
     "agent": {
       "label": "Agent",
@@ -513,6 +513,87 @@
           "json": "scripts/pipeline/config.json",
           "path": "council",
           "absent": true
+        }
+      ]
+    },
+    {
+      "id": "council.intercom.enabled",
+      "group": "council",
+      "label": "intercom (discussion)",
+      "kind": "config",
+      "config": "council.intercom.enabled",
+      "type": "boolean",
+      "default": false,
+      "help": "After a seated council's independent first round, its members discuss in a chat room before the merge: points settle by majority, a split goes to the stage's model or the owner. Off by default.",
+      "doc": "ai-pipeline/council-intercom.md",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "INTERCOM_DEFAULTS",
+          "path": "enabled"
+        },
+        {
+          "json": "scripts/pipeline/config.json",
+          "path": "council",
+          "absent": true
+        }
+      ]
+    },
+    {
+      "id": "council.intercom.onSplit",
+      "group": "council",
+      "label": "intercom onSplit",
+      "kind": "config",
+      "config": "council.intercom.onSplit",
+      "type": "enum",
+      "values": [
+        "orchestrator",
+        "owner"
+      ],
+      "default": "orchestrator",
+      "onlyWhen": {
+        "is": "council.intercom.enabled"
+      },
+      "help": "Who settles a split: the stage's orchestrating or judging model (implement, PR check; elsewhere the owner), or always the owner.",
+      "doc": "ai-pipeline/council-intercom.md#settings",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "INTERCOM_ON_SPLIT",
+          "values": true
+        },
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "INTERCOM_DEFAULTS",
+          "path": "onSplit"
+        }
+      ]
+    },
+    {
+      "id": "council.intercom.maxTurnsPerMember",
+      "group": "council",
+      "label": "intercom maxTurnsPerMember",
+      "kind": "config",
+      "config": "council.intercom.maxTurnsPerMember",
+      "type": "integer",
+      "min": 1,
+      "max": 20,
+      "default": 2,
+      "onlyWhen": {
+        "is": "council.intercom.enabled"
+      },
+      "help": "Posts per member in a discussion, and the number of discussion waves; disputes and votes are capped at twice this.",
+      "doc": "ai-pipeline/council-intercom.md#settings",
+      "checks": [
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "INTERCOM_DEFAULTS",
+          "path": "maxTurnsPerMember"
+        },
+        {
+          "module": "scripts/pipeline/lib/council-config.mjs",
+          "export": "INTERCOM_MAX_TURNS",
+          "exists": true
         }
       ]
     },
@@ -1638,6 +1719,130 @@
           "Severe": "approvals.Severe"
         }
       ]
+    },
+    {
+      "id": "discussPair",
+      "label": "the pair verifier's council discusses",
+      "is": {
+        "all": [
+          {
+            "is": "council.intercom.enabled"
+          },
+          {
+            "any": [
+              {
+                "is": "council.pairVerify"
+              },
+              {
+                "is": "council.pairUiVerify"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "discussReview",
+      "label": "the review council discusses",
+      "is": {
+        "all": [
+          {
+            "is": "council.intercom.enabled"
+          },
+          {
+            "is": "council.review"
+          }
+        ]
+      }
+    },
+    {
+      "id": "discussPlan",
+      "label": "the test plan council discusses",
+      "is": {
+        "all": [
+          {
+            "is": "council.intercom.enabled"
+          },
+          {
+            "is": "council.testPlan"
+          }
+        ]
+      }
+    },
+    {
+      "id": "discussFv",
+      "label": "the test automation council discusses",
+      "is": {
+        "all": [
+          {
+            "is": "council.intercom.enabled"
+          },
+          {
+            "is": "council.testAutomation"
+          }
+        ]
+      }
+    },
+    {
+      "id": "discussPr",
+      "label": "the PR check council discusses",
+      "is": {
+        "all": [
+          {
+            "is": "council.intercom.enabled"
+          },
+          {
+            "is": "council.prCheck"
+          }
+        ]
+      }
+    },
+    {
+      "id": "discussion",
+      "label": "some council discusses",
+      "is": {
+        "any": [
+          {
+            "is": "discussPair"
+          },
+          {
+            "is": "discussReview"
+          },
+          {
+            "is": "discussPlan"
+          },
+          {
+            "is": "discussFv"
+          },
+          {
+            "is": "discussPr"
+          }
+        ]
+      }
+    },
+    {
+      "id": "discussRuler",
+      "label": "a model rules on a split",
+      "is": {
+        "all": [
+          {
+            "eq": [
+              "council.intercom.onSplit",
+              "orchestrator"
+            ]
+          },
+          {
+            "any": [
+              {
+                "is": "discussPair"
+              },
+              {
+                "is": "discussPr"
+              }
+            ]
+          }
+        ]
+      }
     }
   ],
   "entries": [
@@ -1912,7 +2117,8 @@
       "settings": [
         "council.pairVerify",
         "council.pairUiVerify",
-        "maxPairRounds"
+        "maxPairRounds",
+        "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/implement.md#ui-verification"
     },
@@ -1949,7 +2155,8 @@
       "desc": "A fresh architecture-reviewer (or a council) approves the code on disk; approval moves the card to Testing.",
       "settings": [
         "council.review",
-        "reviewMaxRounds"
+        "reviewMaxRounds",
+        "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/review.md#the-policy-step-engine-and-policy"
     },
@@ -1972,7 +2179,8 @@
       "decision": "testPlan",
       "desc": "Feature verification workflow 1: the test plan, checked by test-plan-verifier (or a council); required cases from the PR check or the pairs are added.",
       "settings": [
-        "council.testPlan"
+        "council.testPlan",
+        "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/feature-verification.md#workflow-1-story-to-test-plan"
     },
@@ -1996,7 +2204,8 @@
       "desc": "Workflow 2: automated tests for every case, checked by test-automation-verifier (or a council); a test that finds a product bug sends the change back.",
       "settings": [
         "council.testAutomation",
-        "maxBugFixCycles"
+        "maxBugFixCycles",
+        "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/feature-verification.md#workflow-2-implementation-to-automated-tests"
     },
@@ -2087,9 +2296,50 @@
       "desc": "Every ticket of the unit checked against the unit's diff in one run; fix mode lets pr-check-fixer fix upheld findings, and an escalated check stops the unit after the push.",
       "settings": [
         "epicPrCheck",
-        "council.prCheck"
+        "council.prCheck",
+        "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/pr-check.md#several-tickets-an-epic"
+    },
+    {
+      "id": "discussion",
+      "label": "Council discussion",
+      "kind": "agent",
+      "agents": [
+        "council members",
+        "implement orchestrator or PR check judge (splits)"
+      ],
+      "lane": null,
+      "layout": {
+        "row": 11,
+        "col": 2
+      },
+      "decision": "discussion",
+      "when": {
+        "is": "discussion"
+      },
+      "desc": "With a stage's council seated and council.intercom on: after the members' independent first round, they discuss in a chat room (at most {council.intercom.maxTurnsPerMember} posts each), only once and only when there is something to discuss. A point settles by a majority of all seats; a split goes to the stage's model or the owner; a product question goes to the owner. The stage then merges and decides as usual.",
+      "settings": [
+        "council.intercom.enabled",
+        "council.intercom.onSplit",
+        "council.intercom.maxTurnsPerMember"
+      ],
+      "doc": "ai-pipeline/council-intercom.md"
+    },
+    {
+      "id": "councilMerge",
+      "label": "Back to the stage",
+      "kind": "record",
+      "lane": null,
+      "layout": {
+        "row": 12,
+        "col": 2
+      },
+      "end": true,
+      "spine": false,
+      "desc": "The stage merges round 1 with the discussion's result: withdrawn, dropped and noted findings become notes, revised scores count, and it decides as its own step shows.",
+      "settings": [],
+      "doc": "ai-pipeline/council-intercom.md#what-the-merge-does-with-it"
     },
     {
       "id": "prCheck",
@@ -2117,7 +2367,8 @@
         "council.prCheck",
         "returnEnabled",
         "maxReturns",
-        "minSeverity"
+        "minSeverity",
+        "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation"
     },
@@ -3426,6 +3677,13 @@
         {
           "id": "exhausted",
           "label": "rounds and rewrite used"
+        },
+        {
+          "id": "owner",
+          "label": "owner question (council)",
+          "when": {
+            "is": "discussPair"
+          }
         }
       ]
     },
@@ -3462,6 +3720,13 @@
         {
           "id": "escalated",
           "label": "escalated"
+        },
+        {
+          "id": "owner",
+          "label": "owner question (council)",
+          "when": {
+            "is": "discussReview"
+          }
         }
       ]
     },
@@ -3478,6 +3743,13 @@
         {
           "id": "failed",
           "label": "not verified"
+        },
+        {
+          "id": "owner",
+          "label": "owner question (council)",
+          "when": {
+            "is": "discussPlan"
+          }
         }
       ]
     },
@@ -3498,6 +3770,13 @@
         {
           "id": "failed",
           "label": "not verified"
+        },
+        {
+          "id": "owner",
+          "label": "owner question (council)",
+          "when": {
+            "is": "discussFv"
+          }
         }
       ]
     },
@@ -3892,6 +4171,33 @@
         {
           "id": "sent-back",
           "label": "reviewer sends it back"
+        }
+      ]
+    },
+    {
+      "id": "discussion",
+      "at": "discussion",
+      "label": "How did the discussion end?",
+      "outcomes": [
+        {
+          "id": "settled",
+          "label": "settled by majority",
+          "default": true
+        },
+        {
+          "id": "ruled",
+          "label": "split ruled by the stage's model",
+          "when": {
+            "is": "discussRuler"
+          }
+        },
+        {
+          "id": "owner",
+          "label": "owner question: the stage stops"
+        },
+        {
+          "id": "unavailable",
+          "label": "not held or interrupted: round 1 alone"
         }
       ]
     }
@@ -4645,6 +4951,133 @@
       "set": {
         "heldPr": true
       }
+    },
+    {
+      "from": "verifier",
+      "to": "discussion",
+      "type": "uses",
+      "when": {
+        "is": "discussPair"
+      }
+    },
+    {
+      "from": "review",
+      "to": "discussion",
+      "type": "uses",
+      "when": {
+        "is": "discussReview"
+      }
+    },
+    {
+      "from": "testPlan",
+      "to": "discussion",
+      "type": "uses",
+      "when": {
+        "is": "discussPlan"
+      }
+    },
+    {
+      "from": "fv",
+      "to": "discussion",
+      "type": "uses",
+      "when": {
+        "is": "discussFv"
+      }
+    },
+    {
+      "from": "unitPrCheck",
+      "to": "discussion",
+      "type": "uses",
+      "when": {
+        "is": "discussPr"
+      }
+    },
+    {
+      "from": "prCheck",
+      "to": "discussion",
+      "type": "uses",
+      "when": {
+        "is": "discussPr"
+      }
+    },
+    {
+      "from": "discussion",
+      "to": "councilMerge",
+      "outcome": "settled"
+    },
+    {
+      "from": "discussion",
+      "to": "councilMerge",
+      "outcome": "ruled"
+    },
+    {
+      "from": "discussion",
+      "to": "councilMerge",
+      "outcome": "unavailable",
+      "label": "round 1 alone (an interrupted discussion runs again once)"
+    },
+    {
+      "from": "discussion",
+      "to": "implFailed",
+      "outcome": "owner",
+      "when": {
+        "is": "discussPair"
+      }
+    },
+    {
+      "from": "discussion",
+      "to": "reviewFailed",
+      "outcome": "owner",
+      "when": {
+        "is": "discussReview"
+      }
+    },
+    {
+      "from": "discussion",
+      "to": "fvFailed",
+      "outcome": "owner",
+      "when": {
+        "any": [
+          {
+            "is": "discussPlan"
+          },
+          {
+            "is": "discussFv"
+          }
+        ]
+      }
+    },
+    {
+      "from": "discussion",
+      "to": "needsDecision",
+      "outcome": "owner",
+      "when": {
+        "is": "discussPr"
+      }
+    },
+    {
+      "from": "verifier",
+      "to": "implFailed",
+      "outcome": "owner",
+      "label": "owner question (council)"
+    },
+    {
+      "from": "review",
+      "to": "reviewFailed",
+      "outcome": "owner",
+      "label": "owner question (council)"
+    },
+    {
+      "from": "testPlan",
+      "to": "fvFailed",
+      "outcome": "owner",
+      "label": "owner question (council)"
+    },
+    {
+      "from": "fv",
+      "to": "fvFailed",
+      "outcome": "owner",
+      "label": "owner question (council)"
     }
   ],
   "presets": [

@@ -582,3 +582,32 @@ test('the configuration round-trips through the URL hash, and the command line m
   assert.equal(F.cliCommand(flow, { pr: true, ciFixRounds: 0 }), 'PIPELINE_CI_FIX_ROUNDS=0 factory implement run <KEY> --pr');
   for (const p of flow.presets) assert.ok(F.cliCommand(flow, p.values).startsWith('factory implement '), p.id);
 });
+
+test('council discussion: no step without a seated council or without the intercom; with both, one shared step and its four outcomes', () => {
+  const view = (e) => Object.fromEntries(F.decisionView(flow, e, 'discussion').visits[0].outcomes.map((o) => [o.id, o.possible ? o.to.sort() : null]));
+  assert.notEqual(ev({ pr: true, 'council.intercom.enabled': true }).nodes.discussion.state, 'active', 'no council seated: no discussion');
+  const councilOnly = ev({ pr: true, 'council.review': true });
+  assert.notEqual(councilOnly.nodes.discussion.state, 'active', 'council on, intercom off: no discussion');
+  assert.equal(councilOnly.decisions.review.available.includes('owner'), false);
+
+  const both = { pr: true, 'council.review': true, 'council.intercom.enabled': true };
+  const e = ev(both);
+  assert.equal(e.nodes.discussion.state, 'active');
+  assert.ok(e.edges.some((x) => x.from === 'review' && x.to === 'discussion' && x.live), 'the review council uses it');
+  assert.equal(e.edges.some((x) => x.from === 'prCheck' && x.to === 'discussion' && x.live), false, 'a stage without a council does not');
+  // Settled and "not held or interrupted" continue in the stage; a split here goes to the owner (no model rules in review).
+  assert.deepEqual(view(e), { settled: ['councilMerge'], ruled: null, owner: ['reviewFailed'], unavailable: ['councilMerge'] });
+  assert.deepEqual(pathOf(e), pathOf(ev({ pr: true })), 'settled: the same steps run');
+  assert.equal(ev(both, { review: 'owner' }).walk.end, 'reviewFailed', 'owner question: the review stops for a person');
+
+  // Where a model rules on splits (pairs, PR check), and per stage where an owner question stops.
+  const all = { pr: true, 'council.intercom.enabled': true, 'council.pairVerify': true, 'council.testPlan': true, 'council.testAutomation': true, 'council.prCheck': true };
+  assert.deepEqual(view(ev(all)), { settled: ['councilMerge'], ruled: ['councilMerge'], owner: ['fvFailed', 'implFailed', 'needsDecision'], unavailable: ['councilMerge'] });
+  assert.equal(view(ev({ ...all, 'council.intercom.onSplit': 'owner' })).ruled, null, 'onSplit owner: no ruling');
+  assert.equal(ev(all, { verifier: 'owner' }).walk.end, 'implFailed');
+  assert.equal(ev(all, { testPlan: 'owner' }).walk.end, 'fvFailed');
+  assert.equal(ev(all, { fv: 'owner' }).walk.end, 'fvFailed');
+  assert.equal(ev(all, { ownerQ: 'question' }).walk.end, 'needsDecision', 'the PR check\'s owner question stops before the PR opens');
+  const frag = F.configFragment(flow, both)['.factory/config.json'];
+  assert.deepEqual(frag.council.intercom, { enabled: true });
+});

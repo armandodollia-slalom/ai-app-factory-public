@@ -33,6 +33,7 @@ import { acquireLock, appendJsonl, extractResult, lockHolder, log, nowIso, relea
 import { coveringUnits, expandArgv as expand, fenceLang, planRuns, runnerFor, sharedFixtureErrors, tagError, taggingLines, testRunners } from './runners.mjs';
 import { servicesOfFile } from '../../implement/lib/project.mjs';
 import { PRODUCER, formatGaps, verifyRound } from './verify.mjs';
+import { ownerQuestionsText } from '../../pipeline/lib/intercom.mjs';
 import { addRequired, requiredFor, requiredProducerText, unmetRequired } from './required.mjs';
 import { resolvesGiven, routeToRole } from '../../pipeline/lib/finding-route.mjs';
 import { councilActionsText, councilFor, councilRounds, fixDeclarationText, fixesFile, guardProtectedTests, lateBox, planCases, protectedTestFinding } from '../../pipeline/lib/council.mjs';
@@ -235,6 +236,15 @@ function logPlanDecision(config, story, round, producer, feedback) {
 // planner run; the planner runs only on the gaps it finds (council C5: re-planning from the story undid the fixer's work).
 // Why a verifier loop ended without a pass: the last round's lowest score and its open gaps, against what passing needs
 // (dogfood C15: "plan did not reach 9/10" for a plan whose last rounds scored 9/10 with one open gap).
+// An owner question from the council discussion stops the stage for the owner: neither the planner nor the test writer
+// can answer it, and later rounds hold no discussion.
+export function ownerEscalation(config, story, stage, verdict) {
+  if (!verdict.ownerQuestions?.length) return null;
+  // not-an-agent: an escalation to a person
+  escalate(config, story, stage, 'the council discussion needs an owner decision', ownerQuestionsText(verdict.ownerQuestions));
+  return { status: 'escalated', reason: 'owner question' };
+}
+
 export function notPassed(config, score, gaps = []) {
   const open = gaps.length;
   return `last round: lowest score ${score ?? 'none'}/10, ${open} open gap(s); passing needs ${config.loops.requiredScore}/10 and no open gap`;
@@ -336,6 +346,11 @@ export async function planLoop(config, story, { force = false, resume = false, s
       if (verdict.error) {
         feedback = null;
         continue;
+      }
+      const owner = ownerEscalation(config, story, 'plan', verdict);
+      if (owner) {
+        finished('escalated');
+        return owner;
       }
       if (verdict.passed) {
         const plan = readPlan(config, story);
@@ -860,6 +875,8 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       consecutive = verdict.passed ? consecutive + 1 : 0;
     } while (verdict.passed && consecutive < config.loops.consecutivePasses);
     if (verdict.error) continue;
+    const owner = ownerEscalation(config, story, 'automation', verdict);
+    if (owner) return owner;
     if (verdict.passed && !fullEveryRound(config) && !skipTests && !scoped) {
       // The whole test projects, once, on the approved tests (the story's own tests and the e2e specs already passed).
       const full = await precheckAutomation(config, story, { skipTests, fix: false, e2e: false });

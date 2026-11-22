@@ -162,7 +162,8 @@ export function evaluate(flow, input = {}, choices = {}) {
       if (p) queue.push([p.to, withSet(x, p.set)]);
       continue;
     }
-    for (const e of flow.edges.filter((y) => y.from === id)) if (e.type === 'uses' || edgeLive(flow, x, e)) queue.push([e.to, withSet(x, e.set)]);
+    // A `uses` edge (a step drawing on a service or a shared step) holds when its condition does.
+    for (const e of flow.edges.filter((y) => y.from === id)) if (e.type === 'uses' ? test(e.when, x) : edgeLive(flow, x, e)) queue.push([e.to, withSet(x, e.set)]);
   }
   const statesAt = (id) => [...(reach[id]?.values() ?? [])];
   for (const st of Object.values(nodes)) st.state = st.reached ? (st.on ? 'active' : 'skipped') : 'off';
@@ -182,7 +183,7 @@ export function evaluate(flow, input = {}, choices = {}) {
   };
   const edges = flow.edges.map((e, i) => {
     const from = nodes[e.from].state === 'active' ? statesAt(e.from) : [];
-    const takenIn = e.type === 'uses' ? from : from.filter((x) => edgeLive(flow, x, e));
+    const takenIn = e.type === 'uses' ? from.filter((x) => test(e.when, x)) : from.filter((x) => edgeLive(flow, x, e));
     const live = takenIn.length > 0;
     const label = e.loop ? interpolate(e.loop.text, env) : e.label ? interpolate(e.label, env) : e.outcome ? interpolate(decisionOf(flow, e.from)?.outcomes.find((o) => o.id === e.outcome)?.label ?? e.outcome, env) : '';
     const effectiveTos = [...new Set(takenIn.map((x) => through(e.to, withSet(x, e.set))).filter(Boolean))];

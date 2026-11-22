@@ -177,7 +177,8 @@ test('D16/ADV-26: video.script.scope has one validator in config.mjs, rejects un
 
   // factory doctor must report the bad video.script.scope as a failed row rather than crashing.
   const factoryCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../factory/factory.mjs');
-  const doc = spawnSync(process.execPath, [factoryCli, 'doctor'], { cwd: root, encoding: 'utf8', timeout: 60_000 });
+  // Alone this takes seconds; under the parallel full suite it has needed more than a minute, so the bound is generous.
+  const doc = spawnSync(process.execPath, [factoryCli, 'doctor'], { cwd: root, encoding: 'utf8', timeout: 180_000 });
   assert.match(doc.stdout, /MISSING\s+demo video script settings \(video\.script\.scope\)/);
   assert.match(doc.stdout, /video\.script\.scope must be one of headline, all, none/);
   assert.doesNotMatch(doc.stderr, /Error: \.factory\/config\.json: video\.script\.scope/);

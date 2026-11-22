@@ -89,6 +89,12 @@ export function mermaidSpine(flow) {
   for (const g of flow.spineGroups ?? []) lines.push(`  ${g.id}(["${g.id}: ${esc(g.label)}"]):::fail`);
   const edges = spineEdges(flow);
   for (const e of edges.filter((x) => !x.group)) lines.push(`  ${e.from} ${e.loop ? '-.->' : '-->'}${e.label ? `|"${e.label}"|` : ''} ${e.to}`);
+  // A shared step several steps use (the council discussion): one dotted line from all of them.
+  const inSpine = new Set(spineNodes(flow).map((n) => n.id));
+  for (const id of inSpine) {
+    const from = [...new Set(flow.edges.filter((e) => e.type === 'uses' && e.to === id && inSpine.has(e.from)).map((e) => e.from))];
+    if (from.length) lines.push(`  ${from.join(' & ')} -.->|"uses"| ${id}`);
+  }
   // Every way into a group on one line: the table and the explorer say which outcome it is.
   for (const g of flow.spineGroups ?? []) {
     const from = [...new Set(edges.filter((x) => x.group && x.to === g.id).map((x) => x.from))];

@@ -152,6 +152,8 @@ Setting a variable for one command:
 
 Per-stage limits, timeouts and models: the defaults are in the factory's `scripts/<stage>/config.json`, and a repository overrides them in `.factory/config.json` ([configuration.md](../configuration.md)). See the stage pages and the [agent catalog](agents.md).
 
+A stage can seat a council of several verifiers instead of its single one, and the council's members can discuss their findings with each other: `council` and `council.intercom` in `.factory/config.json` ([council.md](council.md), [council-intercom.md](council-intercom.md)); `factory council check` validates them.
+
 ## Review gate for bug-fix PRs
 
 The [review gate](review-gate.md) needs nothing extra to assess PRs and request reviews (on GitHub, the pipeline machine's `gh` login with the `project` scope; run `factory board setup` once to create its board fields). Repository settings it relies on are the owner's call, and the gate never changes them. On GitHub (other hosts: their [provider page](../providers/README.md#pages)):

@@ -9,6 +9,7 @@ import { APP_FILE, INSTALL_ROOT, loadConfig, repoOverlay, repoRoot, splitTopolog
 import { agentTextProblems } from '../pipeline/lib/instruction-check.mjs';
 import { lintable } from '../pipeline/lib/lint.mjs';
 import { councilDoctorRows } from '../pipeline/lib/council.mjs';
+import { intercomDoctor } from '../pipeline/lib/intercom-server.mjs';
 import { workflowProblems } from './lib/workflow-safety.mjs';
 import { detect, draftProject, loadPacks } from './lib/detect.mjs';
 import { draftConfig, scaffold, unfilledPlaceholders } from './lib/init.mjs';
@@ -151,13 +152,18 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
     ...(pin.features.demoVideo ? [['Playwright in this repository', fs.existsSync(path.join(root, 'node_modules/.bin/playwright')) || fs.existsSync(path.join(root, 'node_modules/.bin/playwright.cmd')), 'needed for e2e tests and demo videos: `npm ci`, then `npx playwright install chromium`']] : []),
   ];
   // Every council member a stage seats: its CLI installed and signed in, its model resolving for that CLI (council.mjs).
+  let councilConfig = null;
   if (config?.council) {
     try {
-      rows.push(...councilDoctorRows(loadConfig(null, root), { probe: (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', env, shell: process.platform === 'win32', timeout: 60_000 }).status === 0 }));
+      councilConfig = loadConfig(null, root);
+      rows.push(...councilDoctorRows(councilConfig, { probe: (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', env, shell: process.platform === 'win32', timeout: 60_000 }).status === 0 }));
     } catch (error) {
       rows.push(['council configuration', false, error.message]);
     }
   }
+  // The council discussion setting, reported on or off (docs/ai-pipeline/council-intercom.md).
+  const intercom = await intercomDoctor(councilConfig ?? config);
+  rows.push(...intercom.rows);
   // Video script scope (single validator in pipeline/lib/config.mjs; reported here rather than aborting doctor).
   const videoScriptIssues = videoScriptProblems(config ?? {});
   if (videoScriptIssues.length) rows.push(['demo video script settings (video.script.scope)', false, videoScriptIssues.join('; ')]);
@@ -226,7 +232,7 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
   }
   // Warnings: a gate that exists but that the code host does not enforce. Reported loudly, not a failure, because
   // only the repository's owner can change it.
-  const warnings = [...analysisWarnings];
+  const warnings = [...intercom.warnings, ...analysisWarnings];
   // The application's own test jobs that the host does not require (council C10, Opus 5): a person merging by hand is not
   // stopped by them. Named, with why: a job that runs for every PR under a name of its own is required by `review-gate enforce`.
   try {

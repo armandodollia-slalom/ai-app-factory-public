@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
 import { changedSince, contestedText, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, councilActionsText, councilFor, memberRunEnv, guardProtectedTests, protectedTestFinding, runDetachedMember, takeLate, councilRounds, disputesFor, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
+import { ownerQuestionsText, runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { decisionsBlock, readDecisions } from '../../pipeline/lib/human-decisions.mjs';
 import { git, implChanges, implDiff, mergeBase } from '../../pipeline/lib/git.mjs';
@@ -146,11 +147,11 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   // A non-blocking member runs detached (council-member.mjs): the review's process ends with its round, and a member
   // still running then finishes on its own; its result is feedback for the next round (takeLate).
   const lateDir = path.join(config.root, config.stateDir, 'council', `review-${story.key}`);
-  const opts = (m, task) => ({ name: 'architecture-reviewer', mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.review.timeoutSec, task, extraEnv: memberRunEnv(m), usage: { stage: 'review', story: story.key, round, step: m.name } });
+  const opts = (m, task, o = null) => ({ name: 'architecture-reviewer', mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.review.timeoutSec, task, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: 'review', story: story.key, round, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } });
   // The detached job file holds the member's env as configured (`${NAME}` references unexpanded): the runner expands it,
   // so no value read from the environment is ever written to disk.
   // A follow-up question to a member (its `resolves`) runs attached: it is not a round's result file.
-  const call = runMember ?? ((m, task, o) => (m.blocking || o?.purpose ? runAgentAsync(config, opts(m, task)) : runDetachedMember({ root: config.root, stageDir: 'review', dir: lateDir, round, member: m, run: { ...opts(m, task), extraEnv: { PIPELINE_COUNCIL_MEMBER: m.name } } })));
+  const call = runMember ?? ((m, task, o) => (m.blocking || o?.purpose ? runAgentAsync(config, opts(m, task, o)) : runDetachedMember({ root: config.root, stageDir: 'review', dir: lateDir, round, member: m, run: { ...opts(m, task), extraEnv: { PIPELINE_COUNCIL_MEMBER: m.name } } })));
   const parse = (output) => {
     const raw = extractResult(output);
     if (!raw || !['APPROVED', 'CHANGES_REQUESTED'].includes(raw.verdict)) return null;
@@ -160,8 +161,10 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   const feedback = takeLate(lateDir, round, council.members, parse);
   // What earlier rounds upheld, with their agreed fixes: the members read it, and the merge settles a later objection to such a fix.
   const memory = councilMemory({ file: memoryFile(config.root, config.stateDir, { stage: 'review', story: story.key }), cwd: config.root, round, fixes: fixesFile(config.root, config.stateDir, { stage: 'review', story: story.key }) });
+  const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
   const out = await runCouncil({
     council,
+    round,
     retries: config.agent.resultParseRetries,
     taskFor: (m) => {
       const mine = disputesFor(m, open, (list) => disputesBlock({ open: list, overruled: d.overruled }));
@@ -169,11 +172,13 @@ export async function councilArchitectureReview(config, story, round, { derivedC
     },
     run: call,
     parse,
-    readOnly: { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+    readOnly,
   });
   // A detached member's result used in this round is consumed here; a late one stays for the next round.
   for (const r of out.results) if (r.res?.resultFile) fs.rmSync(r.res.resultFile, { force: true });
-  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases: planCases(config.root, config.plansDir, story.key) }), violation: out.violation, changed: changedSince(config.root, mergeBase(config.root, config.baseRef), git), feedback, earlier: memory, root: config.root };
+  // No model of this stage rules on a split: it becomes an owner question.
+  const intercom = await runIntercomDiscussion({ config, council, results: out.results, subject: story.key, stage: 'review', round, violation: out.violation, readOnly, reviewed: mergeBase(config.root, config.baseRef), run: call });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases: planCases(config.root, config.plansDir, story.key) }), violation: out.violation, changed: changedSince(config.root, mergeBase(config.root, config.baseRef), git), feedback, earlier: memory, root: config.root, ...(intercom ? { intercom } : {}) };
   // A scope objection on lines declared for an earlier upheld finding stands unless every blocking member accepts, asked
   // fresh, that the finding's agreed fix requires it (council.mjs adjudicate).
   const merged = await adjudicate({
@@ -193,11 +198,15 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   nameFindings(merged.findings, `review-r${round}`);
   const issue = (f) => `${f.action === 'rewrite' ? rewriteText(f) : f.action === 'delete-test' ? `DELETE TEST ${f.test || ''}${f.file ? ` in ${f.file}` : ''}: ${f.text}` : f.text}${contestedText(f)}${f.protected ? ` (not acted on: ${f.protected})` : f.notUpheld ? ` (not upheld: ${f.notUpheld})` : f.supersededBy ? ` (superseded by rewrite ${f.supersededBy})` : f.feedback ? ` (feedback from non-blocking member ${f.member})` : ''}${f.members?.length > 1 ? ` [raised by ${f.members.join(', ')}]` : ''}`;
   const all = [...merged.findings.map((f) => ({ ...f, severity: 'blocking' })), ...merged.notes.map((f) => ({ ...f, severity: 'minor' }))].map((f) => ({ ...f, issue: issue(f), category: f.category ?? f.lens }));
+  if ((merged.ownerQuestions ?? []).length) {
+    return { verdict: 'ESCALATE', findings: all, summary: merged.summary, council: merged, contradictions: merged.contradictions, ownerQuestions: merged.ownerQuestions };
+  }
   if (!merged.pass && !merged.findings.length) return { verdict: 'ERROR', findings: [], summary: `architecture review council gave no verdict: ${merged.summary}`, council: merged };
-  const lifted = raiseUserErrors(all, { to: 'blocking' });
+  // A finding the council discussion disposed of stays in the record only: never lifted, disputed or handed off.
+  const lifted = raiseUserErrors(all.filter((f) => !f.disposition), { to: 'blocking' });
   const ruled = applyReviewDisputes(config, story.key, { verdict: merged.pass ? 'APPROVED' : 'CHANGES_REQUESTED', findings: lifted.findings, disputes: merged.disputes });
   const handed = handOffTestGaps(config, story, ruled.findings, round);
-  const findings = handed.findings;
+  const findings = [...handed.findings, ...all.filter((f) => f.disposition)];
   if (handed.count && !findings.some((f) => f.severity === 'blocking')) ruled.verdict = 'APPROVED';
   // Remembered after the rulings: a finding its raisers withdrew on a dispute was not upheld.
   memory.remember(findings.filter((f) => f.severity === 'blocking'));
@@ -546,6 +555,11 @@ export async function hookStop(config, story, payload = {}) {
   }
   if (result.verdict === 'ESCALATE') {
     updateState(config, story.key, (s) => Object.assign(s.review, { rounds: round, lastHash: hash, lastVerdict: 'ESCALATED', lastReason: result.summary, unchangedBlocks: 0 }));
+    if (result.ownerQuestions?.length) {
+      // not-an-agent: an escalation to a person (a council discussion's owner question)
+      escalate(config, story, 'review', 'the council discussion needs an owner decision', ownerQuestionsText(result.ownerQuestions));
+      return notice(`Review: ${story.key} needs an owner decision:\n${ownerQuestionsText(result.ownerQuestions)}\nSee .factory/state/escalations/${story.key}-review.md.`);
+    }
     // not-an-agent: an escalation to a person
     escalate(config, story, 'review', 'a person must extend the architecture policy profile', `The architecture policy cannot classify a project this change adds, and only a person can extend the profile (.factory/policy). No code change by the agent can clear it.\n\n${formatFindings(result.findings)}`);
     // not-an-agent: a notice that a person decides
