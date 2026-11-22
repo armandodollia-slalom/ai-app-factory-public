@@ -716,6 +716,50 @@ test('carryOver: a minor-only fix re-runs only the lenses its findings were on; 
   assert.deepEqual(carryOver(ctx, history([{ lens: 'design', id: 'UI-1-1', severity: 'major' }]), gitWith(['src/Catalog.API/a.cs'])), { video: 10 }, 'a major fix: the code lenses run');
 });
 
+// A minor-only fix carried a council member with the acceptance lens when it was not named `acceptance`.
+test('carryOver: a minor-only fix never carries a member with the acceptance lens, whatever its name', async () => {
+  const { carryOver, councilLenses } = await import('../lib/loop.mjs');
+  const council = { passScore: 9, members: [{ name: 'contract', lens: 'acceptance' }, { name: 'sol', lens: 'security' }, { name: 'opus', lens: 'rewrite' }] };
+  const ctx = { workRoot: '/r', council, councilLenses: councilLenses(council), frontendHit: () => false, videoKey: 'v1' };
+  const history = [{ fix: { commit: 'abc' }, lensScores: { contract: 10, sol: 10, opus: 9 }, upheld: [{ lens: 'opus', id: 'OPUS-1-1', severity: 'minor' }], videoKey: 'v1' }];
+  // The fix touched nothing in a member's scope (round 4: the minor-only path asks it too).
+  const carried = carryOver(ctx, history, () => ({ stdout: '.factory/notes.md' }));
+  assert.deepEqual(carried, { sol: 10 }, 'the acceptance-lens member sits again; the clean security member is carried');
+});
+
+// A member named `acceptance` with another lens shadowed the stage's acceptance critic and was treated as one.
+test('carryOver: a member named acceptance is judged by its lens; the stage\'s acceptance critic still sits, and is never carried', async () => {
+  const { carryOver, councilLenses } = await import('../lib/loop.mjs');
+  const council = { passScore: 9, members: [{ name: 'acceptance', lens: 'correctness' }, { name: 'opus', lens: 'rewrite' }] };
+  const lenses = councilLenses(council);
+  assert.equal(lenses.acceptance.member.lens, 'correctness');
+  assert.equal(lenses['acceptance-critic'].agent, 'pr-check-acceptance', 'the real acceptance critic sits under its own key');
+  const ctx = { workRoot: '/r', council, councilLenses: lenses, frontendHit: () => false, videoKey: 'v1' };
+  const history = [{ fix: { commit: 'abc' }, lensScores: { acceptance: 10, 'acceptance-critic': 10, opus: 9 }, upheld: [{ lens: 'opus', id: 'OPUS-1-1', severity: 'minor' }], videoKey: 'v1' }];
+  assert.deepEqual(carryOver(ctx, history, () => ({ stdout: '.factory/notes.md' })), { acceptance: 10 });
+});
+
+// Sol 35: members named `design` and `video` went through the stage critics' built-in carry rules by their names.
+test('carryOver: members named design or video are judged by their lens; the stage\'s design and video critics keep their own keys', async () => {
+  const { activeLenses, carryOver, councilLenses } = await import('../lib/loop.mjs');
+  const council = { passScore: 9, members: [{ name: 'design', lens: 'acceptance' }, { name: 'video', lens: 'correctness' }, { name: 'opus', lens: 'rewrite' }] };
+  const lenses = councilLenses(council);
+  const ctx = { workRoot: '/r', council, councilLenses: lenses, frontendHit: () => false, videoKey: 'v1', isFrontend: true, video: { videos: ['a.webm'], unreadable: [] } };
+  assert.deepEqual(activeLenses(ctx), ['design', 'video', 'opus', 'design-critic', 'video-critic'], 'the stage critics sit under keys no member took');
+  // A major finding fixed in the backend: the acceptance-lens member named design sits again, whatever it scored.
+  const major = [{ fix: { commit: 'abc' }, lensScores: { design: 10, video: 10, opus: 6, 'design-critic': 10, 'video-critic': 10 }, upheld: [{ lens: 'opus', id: 'OPUS-1-1', severity: 'major' }], videoKey: 'v1' }];
+  const carried = carryOver(ctx, major, () => ({ stdout: 'src/Catalog.API/a.cs' }));
+  assert.equal(carried.design, undefined, 'the acceptance member is never carried');
+  assert.equal(carried.video, undefined, 'the correctness member: the fix touched production code it judges');
+  assert.deepEqual([carried['design-critic'], carried['video-critic']], [10, 10]);
+  // Minor findings only: the member named video is carried by its own lens, not held to the video critic's frames rule.
+  const minor = [{ ...major[0], upheld: [{ lens: 'opus', id: 'OPUS-1-1', severity: 'minor' }], videoKey: 'other' }];
+  const m = carryOver({ ...ctx, videoKey: 'v2' }, minor, () => ({ stdout: '.factory/notes.md' }));
+  assert.equal(m.design, undefined);
+  assert.equal(m.video, 10);
+  assert.equal(m['video-critic'], undefined, 'new frames: the video critic sits again');
+});
+
 // D-C8-1: a fix-mode check changed the fix on an open PR; its body and the ticket kept describing the old one.
 test('what the fixer changed goes into a section of the PR body; Follow-ups it resolved are removed', async () => {
   const { fixesOf, fixNote, withFixNote } = await import('../lib/pr-notes.mjs');
@@ -836,4 +880,20 @@ test('a PR check run turns slot leasing on for its agents and the stack guard, u
   const payload = { tool_name: 'Bash', tool_input: { command: 'factory teststack up' } };
   assert.match(String(stackGuard({}, payload, { PIPELINE_CHILD: '1', PIPELINE_AGENT_NAME: 'pr-check-fixer', FV_USE_SLOTS: '1' })), /Stack guard/);
   assert.equal(stackGuard({}, payload, { PIPELINE_CHILD: '1', PIPELINE_AGENT_NAME: 'pr-check-fixer', FV_USE_SLOTS: '0' }), null);
+});
+
+// other-35 (round 4): a member may also be named like the fallback key, and the minor-only path judged members by name.
+test('carryOver: built-in critics get keys no member takes; the minor-only path also asks a member\'s scope', async () => {
+  const { activeLenses, carryOver, councilLenses } = await import('../lib/loop.mjs');
+  const council = { passScore: 9, members: [{ name: 'acceptance', lens: 'correctness' }, { name: 'acceptance-critic', lens: 'rewrite' }, { name: 'video', lens: 'test-value' }] };
+  const lenses = councilLenses(council);
+  assert.equal(lenses['acceptance-critic'].member.name, 'acceptance-critic', 'the member keeps its key');
+  assert.equal(lenses['acceptance-critic-2'].agent, 'pr-check-acceptance', 'the stage acceptance critic sits under a free key');
+  const ctx = { workRoot: '/r', council, councilLenses: lenses, frontendHit: () => false, videoKey: 'v1', isFrontend: false, video: { videos: ['a.webm'], unreadable: [] } };
+  assert.ok(activeLenses(ctx).includes('video-critic'));
+  // Minor findings only; the fix changed a test file: the test-value member named video sits again.
+  const history = [{ fix: { commit: 'abc' }, lensScores: { acceptance: 10, 'acceptance-critic': 10, video: 10, 'acceptance-critic-2': 10 }, upheld: [{ lens: 'acceptance', id: 'A-1', severity: 'minor' }], videoKey: 'v1' }];
+  const carried = carryOver(ctx, history, () => ({ stdout: 'tests/basket.test.ts' }));
+  assert.equal(carried.video, undefined, 'a test file is in the test-value member\'s scope');
+  assert.equal(carried['acceptance-critic'], 10, 'a rewrite member: a test file is outside its scope');
 });

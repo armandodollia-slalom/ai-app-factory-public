@@ -110,7 +110,7 @@ function normalizeRuleset(r, want) {
 
 // What GitHub can do for the harness (providers/contracts.mjs CAPABILITIES.host). Rulesets need a public repository
 // or a paid plan (branchProtection says `unavailable: plan`); videos go to the storage branch (gh has no upload).
-export const CAPABILITIES = { requiredChecks: true, codeOwners: true, autoMerge: true, mergeHeadGuard: true, cancelAutoMerge: true, drafts: true, labels: true, checkAnnotations: true, commitStatus: true, attachments: false, botIdentity: true, diff: true, reviewCommentThreads: true };
+export const CAPABILITIES = { requiredChecks: true, codeOwners: true, autoMerge: true, mergeHeadGuard: true, cancelAutoMerge: true, drafts: true, labels: true, checkAnnotations: true, commitStatus: true, attachments: false, botIdentity: true, diff: true, reviewCommentThreads: true, stateEvents: true };
 
 export function createGithubHost(settings, deps = {}) {
   const repo = settings.repo ?? null;
@@ -153,11 +153,28 @@ export function createGithubHost(settings, deps = {}) {
   };
   // `gh api --paginate --jq '.[]'`: one JSON value per line.
   const lines = (args) => ok([...args, '--paginate', '--jq', '.[]']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+  // Every page, strictly (`gh api --paginate --slurp`: a list of pages): an answer that is not a list of lists, or a row
+  // without the fields `row` checks, throws (never a short or flattened list read as the whole history).
+  const pages = (args, row, what) => {
+    let all;
+    try {
+      all = JSON.parse(ok([...args, '--paginate', '--slurp']).trim() || 'null');
+    } catch (error) {
+      if (error instanceof HostError) throw error;
+      throw new HostError(`GitHub: the ${what} could not be read (not JSON)`, { code: 'incomplete' });
+    }
+    if (!Array.isArray(all) || !all.every(Array.isArray)) throw new HostError(`GitHub: the ${what} came back incomplete (not a list of pages)`, { code: 'incomplete' });
+    const flat = all.flat();
+    if (!flat.every((r) => r && typeof r === 'object' && !Array.isArray(r) && row(r))) throw new HostError(`GitHub: the ${what} came back incomplete (a row without its fields)`, { code: 'incomplete' });
+    return flat;
+  };
+  const isId = (v) => Number.isInteger(v) || (typeof v === 'string' && v.length > 0);
   const num = (pr) => prNumberOf(pr);
 
   let settingsMemo = null;
+  // Every page of the PR's comments (`gh pr view --json comments` stops at the first 100).
   const comments = (pr) =>
-    (json(['pr', 'view', String(pr), ...R, '--json', 'comments'])?.comments ?? []).map((c) => ({ id: c.id && /^\d+$/.test(String(c.id)) ? Number(c.id) : commentIdOf(c.url), author: c.author?.login ?? c.author ?? null, body: c.body ?? '', createdAt: c.createdAt ?? null, url: c.url ?? null }));
+    pages(['api', `repos/${need()}/issues/${num(pr)}/comments`], (c) => isId(c.id) && typeof (c.body ?? '') === 'string', 'comments of the PR').map((c) => ({ id: Number(c.id) || commentIdOf(c.html_url), author: c.user?.login ?? null, body: c.body ?? '', createdAt: c.created_at ?? null, url: c.html_url ?? null }));
 
   const sync = {
     type: 'github',
@@ -198,8 +215,10 @@ export function createGithubHost(settings, deps = {}) {
         return normalizePr(JSON.parse(String(r.stdout).trim() || 'null'));
       },
       // `withMergeState`: each PR's merge state too (clean, dirty, unknown, ...), in the same call.
-      list({ state = 'open', head, base, label, limit = 200, withMergeState = false } = {}) {
-        const args = ['pr', 'list', ...R, ...(head ? ['--head', head] : []), ...(base ? ['--base', base] : []), ...(label ? ['--label', label] : []), '--state', state, '--limit', String(limit), '--json', withMergeState ? `${LIST_FIELDS},mergeStateStatus` : LIST_FIELDS];
+      // `search`: PRs whose title holds the text as a phrase (`"<key>" in:title`, quoted as the tracker's search is, so a
+      // key is not split into words).
+      list({ state = 'open', head, base, label, search, limit = 200, withMergeState = false } = {}) {
+        const args = ['pr', 'list', ...R, ...(head ? ['--head', head] : []), ...(base ? ['--base', base] : []), ...(label ? ['--label', label] : []), ...(search ? ['--search', `"${String(search).replace(/"/g, '')}" in:title`] : []), '--state', state, '--limit', String(limit), '--json', withMergeState ? `${LIST_FIELDS},mergeStateStatus` : LIST_FIELDS];
         return (json(args) ?? []).map((p) => (withMergeState ? { ...normalizePr(p), mergeState: lower(p.mergeStateStatus) ?? 'unknown' } : normalizePr(p)));
       },
       update(pr, { title, body, labels, state, draft } = {}) {
@@ -230,7 +249,20 @@ export function createGithubHost(settings, deps = {}) {
         return { id: commentIdOf(out), url: out || null };
       },
       comments,
-      reviews: (pr) => lines(['api', `repos/${need()}/pulls/${num(pr)}/reviews`]).map(normalizeReview),
+      // `strict` (the review gate's rejection check): every page, each review with its id, state and login, and a dismissed
+      // review with the state it had (the timeline's dismissal event), or none when that cannot be told.
+      reviews: (pr, { strict = false } = {}) => {
+        if (!strict) return lines(['api', `repos/${need()}/pulls/${num(pr)}/reviews`]).map(normalizeReview);
+        const all = pages(['api', `repos/${need()}/pulls/${num(pr)}/reviews`], (r) => isId(r.id) && typeof r.state === 'string' && typeof r.user?.login === 'string', 'reviews of the PR').map(normalizeReview);
+        if (!all.some((r) => r.state === 'dismissed')) return all;
+        const was = new Map();
+        for (const e of pages(['api', `repos/${need()}/issues/${num(pr)}/timeline`], (e) => typeof e.event === 'string', 'timeline of the PR')) {
+          if (e.event === 'review_dismissed' && e.dismissed_review?.review_id != null) was.set(String(e.dismissed_review.review_id), REVIEW_STATE[String(e.dismissed_review.state ?? '').toUpperCase()] ?? lower(e.dismissed_review.state) ?? null);
+        }
+        return all.map((r) => (r.state === 'dismissed' ? { ...r, dismissedState: was.get(String(r.id)) ?? null } : r));
+      },
+      // Every page, strictly (the review gate's rejection check reads them).
+      stateEvents: (pr) => pages(['api', `repos/${need()}/issues/${num(pr)}/events`], (e) => isId(e.id) && typeof e.event === 'string', 'events of the PR').filter((e) => ['closed', 'reopened', 'merged'].includes(e.event)).map((e) => ({ id: e.id ?? null, type: e.event, at: e.created_at ?? null, actor: e.actor?.login ?? null, commit: e.commit_id ?? null })),
       reviewComments: (pr) => lines(['api', `repos/${need()}/pulls/${num(pr)}/comments`]).map((c) => ({ id: c.id ?? null, author: c.user?.login ?? null, body: c.body ?? '', path: c.path ?? null, line: c.line ?? c.original_line ?? null, reviewId: c.pull_request_review_id ?? null, createdAt: c.created_at ?? null })),
       commits: (pr) => lines(['api', `repos/${need()}/pulls/${num(pr)}/commits`]).map((c) => ({ sha: c.sha ?? null, author: c.author?.login ?? c.commit?.author?.name ?? null, committedAt: c.commit?.committer?.date ?? c.commit?.author?.date ?? c.committedDate ?? null, parents: c.parents?.length ?? null, message: c.commit?.message ?? null })),
       requestReviewers(pr, logins = []) {

@@ -11,6 +11,7 @@ import { nextLane } from '../../board/lib/flow.mjs';
 import { placeReopened, isReopened } from '../../implement/lib/reopen.mjs';
 import { batchesFor } from '../../implement/lib/requeue.mjs';
 import { encodeState, parseState } from '../lib/gate.mjs';
+import { diffKey } from '../lib/assessment.mjs';
 import { cardReopen, newChangesRequested, reopenDecisionNote, reviewTargets, withReopen } from '../lib/reopens.mjs';
 import { syncGate } from '../lib/sync.mjs';
 import { extractTriage, upsertTriage } from '../lib/triage-section.mjs';
@@ -59,7 +60,7 @@ function world() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-gate-sync-'));
   const gh = fakeGh();
   gh.addFields();
-  const triage = (key, pr, extra = {}) => ({ v: 1, key, pr, impact: 'Low', impactReason: 'r', complexity: 'Low', fixRisk: 'Low', fixRiskReason: 'r', floorReasons: [], severity: { level: 'Low', base: 'Low', bump: 0, explanation: 'Impact Low, Fix risk Low → Low' }, confidence: { score: 98, high: true, criteria: { fv: 'met', pairs: 'met', prCheck: 'met', owns: 'met', ci: 'met' }, reasons: [] }, systems: ['Basket.API'], paths: ['src/Basket.API/A.cs'], reopens: [], ...extra });
+  const triage = (key, pr, extra = {}) => ({ v: 1, key, pr, ratedHead: 'h1', ratedDiff: diffKey('diff --git a/src/a.ts b/src/a.ts\n'), impact: 'Low', impactReason: 'r', complexity: 'Low', fixRisk: 'Low', fixRiskReason: 'r', floorReasons: [], severity: { level: 'Low', base: 'Low', bump: 0, explanation: 'Impact Low, Fix risk Low → Low' }, confidence: { score: 98, high: true, criteria: { fv: 'met', pairs: 'met', prCheck: 'met', owns: 'met', ci: 'met' }, reasons: [] }, systems: ['Basket.API'], paths: ['src/Basket.API/A.cs'], reopens: [], ...extra });
   const pr = gh.addPr(5, { author: 'pipeline-bot', labels: ['approvals:0'], checks: [{ name: 'ci', bucket: 'pending' }], headRefOid: 'h1' });
   const state = { v: 1, action: 'wait', approvals: 0, required: false, triggers: [], headSha: 'h1', class: 'Low', severity: 'Low', systems: { names: ['Basket.API'], shared: false, contract: false }, tickets: [{ key: 'BUG-3', issue: 3, severity: 'Low', high: true, reopens: 0 }, { key: 'BUG-7', issue: 7, severity: 'Low', high: true, reopens: 0 }], countedReviews: [] };
   pr.comments.push({ id: 900, body: `## Review gate: waiting for the checks\n\n${encodeState(state)}` });

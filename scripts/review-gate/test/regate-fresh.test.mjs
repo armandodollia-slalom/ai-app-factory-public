@@ -54,7 +54,7 @@ test('a 10 that a later round undid counts nothing; the rounds count to the 10 t
 // Council C7 (Opus 1): the probe that auto-merged a Low, high-confidence PR whose tests passed only on a retry.
 test('a Low, high-confidence, green PR with a retry-only pass or an escalated fix round is never auto-merged', async () => {
   const { decideGate, gateState, renderNotice } = await import('../lib/gate.mjs');
-  const a = { tickets: [{ key: 'BUG-1', issue: { number: 7 }, severity: { level: 'Low' }, confidence: { score: 95, high: true, reasons: [], questions: [] } }], severity: { level: 'Low' }, ci: 'success', class: 'Low', systems: { names: [] }, headSha: 'h1', deliveryChecked: 'h1' };
+  const a = { tickets: [{ key: 'BUG-1', issue: { number: 7 }, severity: { level: 'Low' }, confidence: { score: 95, high: true, reasons: [], questions: [] }, rejectionChecked: true }], severity: { level: 'Low' }, ci: 'success', class: 'Low', systems: { names: [] }, headSha: 'h1', deliveryChecked: 'h1' };
   const settings = { approvals: { Low: 0, Medium: 1, High: 1, Severe: 2 } };
   assert.equal(decideGate(a, { settings, autoMerge: { enabled: true } }).action, 'auto-merge', 'the probe as it was');
   const delivery = { state: 'flaky', outcome: 'ci-flaky', reason: 'CI green only with retries (TC-06): not delivered; the fix round escalated (r)', flaky: ['TC-06'], fixerNotes: [{ id: 'CI-FLAKY-1', title: 't', reason: 'options a, b, c' }] };
@@ -129,7 +129,7 @@ test('a re-evaluation never carries a derived trigger (confidence, severity) fro
 test('a regate on a green head nobody checked runs the retry check before it can merge', async () => {
   const { applyDeliveryCheck } = await import('../lib/delivery-check.mjs');
   const { decideGate } = await import('../lib/gate.mjs');
-  const base = () => ({ tickets: [{ key: 'BUG-1', severity: { level: 'Low' }, confidence: { score: 95, high: true, reasons: [], questions: [] } }], severity: { level: 'Low' }, ci: 'success', class: 'Low', systems: { names: [] }, headSha: 'h2' });
+  const base = () => ({ tickets: [{ key: 'BUG-1', severity: { level: 'Low' }, confidence: { score: 95, high: true, reasons: [], questions: [] }, rejectionChecked: true }], severity: { level: 'Low' }, ci: 'success', class: 'Low', systems: { names: [] }, headSha: 'h2' });
   const opts = { settings: { approvals: { Low: 0 } }, autoMerge: { enabled: true } };
   const flaky = applyDeliveryCheck(base(), null, { retryCheck: () => ['[scenarios] › probe.spec.ts › TC-01'] });
   assert.equal(decideGate(flaky, opts).action, 'review');

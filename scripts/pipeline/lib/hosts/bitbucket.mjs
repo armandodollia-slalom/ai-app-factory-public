@@ -20,7 +20,7 @@ import { createHttp } from './http.mjs';
 import { expandEnv } from '../env.mjs';
 
 export const DEFAULT_URL = 'https://bitbucket.org';
-export const CAPABILITIES = { requiredChecks: 'partial', codeOwners: false, autoMerge: false, mergeHeadGuard: false, cancelAutoMerge: false, drafts: true, labels: false, checkAnnotations: false, commitStatus: true, attachments: false, botIdentity: true, diff: true, reviewCommentThreads: true };
+export const CAPABILITIES = { requiredChecks: 'partial', codeOwners: false, autoMerge: false, mergeHeadGuard: false, cancelAutoMerge: false, drafts: true, labels: false, checkAnnotations: false, commitStatus: true, attachments: false, botIdentity: true, diff: true, reviewCommentThreads: true, stateEvents: false };
 
 const STATE = { OPEN: 'open', MERGED: 'merged', DECLINED: 'closed', SUPERSEDED: 'closed' };
 const CHECK = { SUCCESSFUL: ['completed', 'success'], FAILED: ['completed', 'failure'], STOPPED: ['completed', 'cancelled'], INPROGRESS: ['pending', null] };
@@ -173,8 +173,10 @@ export function createBitbucketHost(settings, deps = {}) {
       async comments(pr) {
         return (await all(`${PR(pr)}/comments`)).filter((c) => !c.inline && !c.deleted).map((c) => ({ id: c.id, author: c.user?.nickname ?? c.user?.display_name ?? null, body: c.content?.raw ?? '', createdAt: c.created_on ?? null, url: c.links?.html?.href ?? null }));
       },
-      async reviews(pr) {
+      // `strict` (the review gate's rejection check): a pull request without its participants list throws (unknown: review).
+      async reviews(pr, { strict = false } = {}) {
         const p = await api('GET', PR(pr));
+        if (strict && !Array.isArray(p?.participants)) throw new HostError('Bitbucket: the participants of the pull request could not be read');
         const head = await fullSha(pr, p?.source?.commit?.hash);
         return (p?.participants ?? [])
           .filter((x) => x.approved || x.state)

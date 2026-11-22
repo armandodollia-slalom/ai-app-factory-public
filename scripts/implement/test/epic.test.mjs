@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { seedTicket } from '../../pipeline/test/fixtures/tickets.mjs';
 import { loadConfig } from '../../pipeline/lib/config.mjs';
 import { loadTicket, resetTicketMemo } from '../../pipeline/lib/tickets.mjs';
@@ -20,6 +20,19 @@ import { groupRow, labelDecisions } from '../lib/decisions.mjs';
 import { failedResults } from '../lib/board-events.mjs';
 import { planTask } from '../lib/tasks.mjs';
 import { prCheckHold } from '../lib/implement.mjs';
+
+// Hermetic: no test here reaches the code host. A `gh` first on PATH records any call and fails it; every host read the
+// epic route makes goes through its injected deliveryIo (the red-branch remedy's open-PR lookup made a real `gh pr list`).
+const ghCalls = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'epic-gh-')), 'calls.log');
+fs.mkdirSync(path.join(path.dirname(ghCalls), 'bin'));
+fs.writeFileSync(path.join(path.dirname(ghCalls), 'bin', 'gh'), `#!/bin/sh\necho "$*" >> '${ghCalls}'\nexit 1\n`, { mode: 0o755 });
+fs.writeFileSync(path.join(path.dirname(ghCalls), 'bin', 'gh.cmd'), `@echo %* >> "${ghCalls}"\r\n@exit /b 1\r\n`);
+process.env.PATH = `${path.join(path.dirname(ghCalls), 'bin')}${path.delimiter}${process.env.PATH}`;
+after(() => {
+  // `gh --version` is the local install probe of building a host object, not a call to the host.
+  const calls = (fs.existsSync(ghCalls) ? fs.readFileSync(ghCalls, 'utf8') : '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && l !== '--version').join('\n');
+  assert.equal(calls, '', `the epic tests called the code host:\n${calls}`);
+});
 
 const git = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -135,11 +148,16 @@ function fakeDeps(note, extra = {}) {
       updateBody: (pr) => order.push(['update-body', pr]),
       hold: (pr, o) => (order.push(['hold', pr]), { mode: 'draft', label: 'work-in-progress', from: new Date().toISOString(), why: o.why }),
       release: (pr) => order.push(['ready', pr]),
+      // The host shows a hold as applied (a test says otherwise through `confirm`).
+      confirmHold: (pr, o) => extra.confirm?.(pr, o) ?? true,
       ownsPr: () => true,
+      prOpen: (branch) => Boolean(extra.openOnHost?.(branch)),
       findOpenPr: (branch) => extra.openOnHost?.(branch) ?? null,
       stateDecision: async (pr, d) => order.push(['decision', pr, d.outcome]),
       usage: () => extra.usage ?? [],
       prBody: () => 'the earlier body',
+      // The PR's change as the host has it: this checkout's (the release compares it with the rated change).
+      prDiffKey: undefined,
     },
     openPr: (env, { title, body, existing, records, draft }) => {
       order.push(['open', existing ?? null, records ?? true]);
@@ -148,6 +166,8 @@ function fakeDeps(note, extra = {}) {
     },
     shipMetrics: async (wt) => ships.push(wt?.root ?? null),
     parityGate: (o) => (parities.push(o.targetArgs.join(' ')), { results: [{ check: 'gate.yml lint', ok: true, output: '' }], fixRun: null }),
+    // The remote's head of a unit branch with an open PR (no remote in these repositories): unchanged, unless a test says.
+    remoteHead: (wt, branch) => extra.remote?.(branch) ?? { head: null, moved: false },
     ...extra,
   };
   return { deps, board, prs, agentCalls, checks, gates, ships, parities, order };
@@ -637,10 +657,14 @@ const unitState = (env, id) => loadEpicRun(env.config, env.epic.key).units?.[id]
 
 test('epic delivery: each group PR opens once, after its push, its CI proven on the head and the gate rating; after the open only the CI wait', async () => {
   const env = makeRepo({ bugs: true });
-  const f = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
+  const cleaned = [];
+  const f = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, cleanup: (root, plan, o) => cleaned.push(o.label) });
   const r = await epicRun(env, f);
   assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
-  for (const b of ['bugfix/shop/cart', 'bugfix/shop/auth']) assert.deepEqual(steps(f, b), ['push', 'branch-ci', 'push', 'assess', 'open', 'gate', 'pr-ci', 'regate'], b);
+  // A bug group's PR opens held (a draft) until its rating is published, and is marked ready once its checks are green.
+  for (const b of ['bugfix/shop/cart', 'bugfix/shop/auth']) assert.deepEqual(steps(f, b), ['push', 'branch-ci', 'push', 'assess', 'open', 'gate', 'pr-ci', 'ready', 'regate'], b);
+  // Once the epic run ended, what each delivered group made on this machine goes (prune.mjs planDelivered).
+  assert.deepEqual(cleaned.sort(), ['epic-shop auth', 'epic-shop cart']);
   assert.ok(f.order.filter((o) => o[0] === 'open').every((o) => o[2] === false), 'nothing committed or merged at the open');
   assert.ok(f.order.filter((o) => o[0] === 'pr-ci').every((o) => o[2] === 0), 'no fixing round on a ready PR');
   assert.ok(f.order.filter((o) => o[0] === 'branch-ci').every((o) => o[2] >= 1), 'the CI fixing round is allowed only before the open');
@@ -648,7 +672,9 @@ test('epic delivery: each group PR opens once, after its push, its CI proven on 
   const cart = f.prs.find((p) => p.branch === 'bugfix/shop/cart');
   assert.match(cart.body, /^- CI before this PR: every pipeline a push of `bugfix\/shop\/cart` runs passed on [0-9a-f]{7} \(CI\)[\s\S]*- Review gate, assessed before this PR opened: severity Low/);
   assert.match(cart.body, /Closes #21\nCloses #22/, 'the full body');
-  assert.deepEqual(unitState(env, 'cart').delivery.readyAudit, { ok: true, after: [], readyAt: unitState(env, 'cart').delivery.readyAt, holds: [] });
+  const audit = unitState(env, 'cart').delivery.readyAudit;
+  assert.deepEqual([audit.ok, audit.after, audit.readyAt], [true, [], unitState(env, 'cart').delivery.readyAt]);
+  assert.ok(audit.holds.every((h) => h.to), 'the hold it opened with was released');
 });
 
 test('epic delivery: a red group branch is fixed on the branch before its PR exists (the fixing round runs only before the open)', async () => {
@@ -695,7 +721,8 @@ test('epic delivery: a check only the PR runs fails after the open: the PR goes 
   const f = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, ci });
   const r = await epicRun(env, f);
   assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
-  assert.deepEqual(steps(f, 'bugfix/shop/cart').slice(4), ['open', 'gate', 'pr-ci', 'hold', 'pr-ci', 'ready', 'regate']);
+  // Already held since it opened (a bug PR opens held until rated): the fixing round runs under that hold.
+  assert.deepEqual(steps(f, 'bugfix/shop/cart').slice(4), ['open', 'gate', 'pr-ci', 'pr-ci', 'ready', 'regate']);
   const holds = unitState(env, 'cart').delivery.holds;
   assert.equal(holds.length, 1);
   assert.ok(holds[0].to && holds[0].cycle === 1, JSON.stringify(holds));
@@ -728,7 +755,7 @@ test('epic delivery: dependent groups each open finished, the later one on its b
   const firstAuthPush = f.order.findIndex((o) => o[0] === 'push' && o[2] === 'bugfix/shop/auth');
   const cartOpen = f.order.findIndex((o) => o[0] === 'open');
   assert.ok(cartOpen >= 0 && cartOpen < firstAuthPush, 'the blocker\'s PR opened before the dependent group was pushed');
-  assert.deepEqual(steps(f, 'bugfix/shop/auth'), ['push', 'branch-ci', 'push', 'assess', 'open', 'gate', 'pr-ci', 'regate']);
+  assert.deepEqual(steps(f, 'bugfix/shop/auth'), ['push', 'branch-ci', 'push', 'assess', 'open', 'gate', 'pr-ci', 'ready', 'regate']);
   assert.equal(f.prs.find((p) => p.branch === 'bugfix/shop/auth').base, 'bugfix/shop/cart');
 });
 
@@ -750,13 +777,16 @@ test('epic resume after the open: a run that stopped while waiting on the PR con
   assert.ok(f2.order.some((o) => o[0] === 'pr-ci' && o[1].endsWith('/101')));
 });
 
-test('epic resume before the record: a PR opened right before the stop is found on the host and adopted, never opened twice', async () => {
+test('epic resume before the record: a PR opened right before the stop is found on the host, adopted with its rating published, never opened twice', async () => {
   const env = makeRepo({ bugs: true });
   const f1 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
-  f1.deps.deliveryIo.publishGate = ({ pr }) => {
-    throw new Error(`stopped right after opening ${pr}`);
+  const open = f1.deps.openPr;
+  // The host opened the PR; the run stopped before it could record it.
+  f1.deps.openPr = (uenv, o) => {
+    open(uenv, o);
+    throw new Error('stopped right after the host opened the PR');
   };
-  await assert.rejects(epicRun(env, f1), /stopped right after opening/);
+  await assert.rejects(epicRun(env, f1), /stopped right after the host opened/);
   assert.equal(unitState(env, 'cart').delivery.phase, 'pre-open');
   const opened = f1.prs[0];
   const worker = fakeWorker();
@@ -766,6 +796,40 @@ test('epic resume before the record: a PR opened right before the stop is found 
   assert.equal(f2.prs.filter((p) => p.branch === 'bugfix/shop/cart').length, 0);
   assert.ok(!worker.calls.some((c) => ['BUG-1', 'BUG-2'].includes(c.key)));
   assert.equal(unitState(env, 'cart').pr, 'https://github.com/example/repo/pull/101');
+  // The adopted bug PR gets its rating published before anything after the open (ADV2-15).
+  const at = (k) => f2.order.findIndex((o) => o[0] === k && o[1] === 'https://github.com/example/repo/pull/101');
+  assert.ok(at('gate') >= 0 && at('gate') < at('pr-ci'), JSON.stringify(f2.order));
+});
+
+test('a rating that cannot be published on the open PR holds it for a person; it is never released unrated', async () => {
+  const env = makeRepo({ bugs: true });
+  const f = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
+  f.deps.deliveryIo.publishGate = ({ pr }) => (f.order.push(['gate-failed', pr]), { status: 1, stderr: 'the gate could not reach the host' });
+  const r = await epicRun(env, f);
+  const cart = unitState(env, 'cart');
+  assert.equal(cart.outcome, 'gate-assessment-failed', JSON.stringify(r.epic));
+  assert.ok(cart.delivery.holds.some((h) => !h.to && h.ok !== false), 'held');
+  assert.ok(!f.order.some((o) => o[0] === 'ready'), 'never released');
+});
+
+test('a unit\'s saved PR check counts only for the very commit it reviewed: any commit since, a records-only one too, is checked again (Sol 25)', async () => {
+  for (const change of [false, true, 'metrics']) {
+    const env = makeRepo({ bugs: true });
+    const f1 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
+    f1.deps.deliveryIo.assess = () => null;
+    await epicRun(env, f1);
+    assert.equal(unitState(env, 'cart').outcome, 'gate-assessment-failed');
+    const wt = unitState(env, 'cart').worktree;
+    if (change) {
+      const file = change === 'metrics' ? '.factory/metrics/a-person.jsonl' : 'src/a-person.cs';
+      write(wt, file, '// a person\'s change after the check\n');
+      git(wt, 'add', '-f', file);
+      git(wt, 'commit', '-qm', 'a person');
+    }
+    const f2 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
+    await epicRun(env, f2);
+    assert.equal(f2.checks.some((k) => k.includes('BUG-1')), Boolean(change), change ? `checked again (${change})` : 'the saved verdict stands');
+  }
 });
 
 test('epic join: a reopened ticket of a group whose PR is open puts the PR on hold before any agent runs, then the PR is proven and ready again', async () => {
@@ -791,6 +855,7 @@ test('epic join: a reopened ticket of a group whose PR is open puts the PR on ho
   const j = await runEpic(env.config, { epic: env.epic, tickets: [bug1], inputs: [env.inputs[env.tickets.indexOf(bug1)]], base: 'main', only: ['BUG-1'], force: true, pr: true, deps: f2.deps, log: () => {} });
   assert.equal(j.epic.outcome, 'joined');
   assert.deepEqual(order.map((o) => o[0]), ['hold', 'agent'], 'the PR was on hold before the agent started');
+  assert.equal(f2.parities.length, 1, 'the joined re-run runs CI parity like every group delivery (Sol 34)');
   assert.equal(f2.prs.length, 0, 'the open PR is never opened again');
   assert.deepEqual(f2.order.map((o) => o[0]).filter((k) => k !== 'hold'), ['push', 'branch-ci', 'push', 'assess', 'update-body', 'gate', 'pr-ci', 'ready', 'regate']);
   assert.equal(git(env.repo, 'rev-parse', 'bugfix/shop/cart'), git(origin, 'rev-parse', 'bugfix/shop/cart'), 'the group branch was pushed');
@@ -920,6 +985,22 @@ test('feature epic delivery: the epic PR opens finished too (no gate rating for 
   const r = await epicRun(env, f, { parallel: 2 });
   assert.equal(r.epic.outcome, 'done', JSON.stringify(r));
   assert.deepEqual(f.order.map((o) => o[0]), ['push', 'branch-ci', 'push', 'open', 'pr-ci']);
+  // Every PR gets the CI parity run before delivery, the epic's one PR included, and its result is in the body.
+  assert.deepEqual(f.parities, ['--stories DEMO-1,DEMO-2,DEMO-3']);
+  assert.match(f.prs[0].body, /CI checks run before this PR: all 1 passed \(lint\)/);
+});
+
+test('epic delivery: implement.ciParity false turns a feature epic\'s parity run off, as for a single ticket; a bug group runs it always', async () => {
+  for (const bugs of [false, true]) {
+    const env = makeRepo({ bugs });
+    env.config.implement.ciParity = false;
+    const f = fakeDeps(bugs ? twoGroups() : featureNote, { startWorker: fakeWorker().startWorker });
+    const r = await epicRun(env, f);
+    assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
+    assert.ok(f.prs.length >= 1);
+    if (bugs) assert.deepEqual(f.parities.sort(), ['--stories BUG-1,BUG-2', '--stories BUG-3'], 'bug groups: the setting does not apply');
+    else assert.deepEqual(f.parities, [], 'feature epic');
+  }
 });
 
 test('openPr never opens or pushes to a PR that is already open', async () => {
@@ -964,6 +1045,7 @@ test('feature epic, prSplit story: the design note is planned once, then one PR 
   assert.ok(!f.order.some((o) => o[0] === 'assess' || o[0] === 'gate'), 'a feature PR gets no bug-fix rating');
   for (const b of ['feat/shop--demo-1', 'feat/shop--demo-2', 'feat/shop--demo-3']) assert.deepEqual(steps(f, b), ['push', 'branch-ci', 'push', 'open', 'pr-ci'], b);
   assert.equal(f.order.filter((o) => o[0] === 'open').length, 3, 'each PR opened once');
+  assert.deepEqual(f.parities.sort(), ['--stories DEMO-1', '--stories DEMO-2', '--stories DEMO-3'], 'each PR of a split epic gets the CI parity run');
   // DEMO-2 is blocked by DEMO-1: its PR is stacked on DEMO-1's branch and verifies the journey that crosses both.
   assert.equal(f.prs.find((p) => p.branch === 'feat/shop--demo-2').base, 'feat/shop--demo-1');
   assert.deepEqual(fvs, [{ unit: 'demo-2', key: 'EPIC-10', journeys: ['browse-to-basket'] }]);
@@ -1067,4 +1149,145 @@ test('epic delivery: a unit PR check that ends escalated in fix mode opens no PR
   assert.equal(prCheckHold(escalated, { mode: 'report' }), null);
   assert.equal(prCheckHold({ status: 'done', verdict: 'PASS', score: 9, openFindings: [{ id: 'X', severity: 'minor', title: 't' }] }, { mode: 'fix' }), null);
   assert.equal(prCheckHold({ status: 'done', verdict: 'FAIL', score: 7, openFindings: [{ id: 'X', severity: 'blocking', title: 't' }] }, { mode: 'fix' }).outcome, 'pr-check-escalated');
+});
+
+// ---- round 3 ---------------------------------------------------------------------------------------------------------
+
+test('epic unit: a kept hold the host no longer shows (a person released it) is held again before any agent (Sol 26)', async () => {
+  const env = makeRepo({ bugs: true });
+  await redCartThenClean(env);
+  assert.ok(unitState(env, 'cart').delivery.holds.some((h) => !h.to && h.ok !== false && h.releaseConfirmed !== false), 'a kept hold');
+  const order = [];
+  const f = tracked(order, { prState: () => 'OPEN' });
+  f.deps.deliveryIo.confirmHold = (pr) => (order.push(['confirm', pr]), false);
+  await epicRun(env, f, { force: true });
+  const confirm = order.findIndex((o) => o[0] === 'confirm' && o[1] === cartPr);
+  const hold = order.findIndex((o) => o[0] === 'hold' && o[1] === cartPr);
+  const agent = order.findIndex((o) => o[0] === 'agent' && ['BUG-1', 'BUG-2'].includes(o[1]));
+  assert.ok(confirm >= 0 && confirm < hold && hold < agent, `confirmed, held again, then the agents: ${JSON.stringify(order)}`);
+});
+
+test('epic resume after a recorded open: the rating is published first, then only the steps after the open; a person\'s push is taken or the group stops (Sol 23, Sol 24, Sol 37)', async () => {
+  const env = makeRepo({ bugs: true });
+  const f1 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
+  // The host returned the PR and the run recorded it; it stopped before the rating was published.
+  f1.deps.deliveryIo.confirmHold = () => {
+    throw new Error('the run was stopped after the open was recorded');
+  };
+  await assert.rejects(epicRun(env, f1), /stopped after the open was recorded/);
+  const d = unitState(env, 'cart').delivery;
+  assert.deepEqual([d.phase, d.pr, d.opened], ['pre-open', cartPr, true]);
+  const worker = fakeWorker();
+  const f2 = fakeDeps(twoGroups(), { startWorker: worker.startWorker });
+  const r = await epicRun(env, f2);
+  assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
+  assert.ok(!worker.calls.some((c) => ['BUG-1', 'BUG-2'].includes(c.key)), 'no agent ran on the open PR');
+  assert.equal(f2.prs.filter((p) => p.branch === 'bugfix/shop/cart').length, 0, 'not opened again');
+  const at = (k) => f2.order.findIndex((o) => o[0] === k && o[1] === cartPr);
+  assert.ok(at('gate') >= 0 && at('gate') < at('pr-ci'), JSON.stringify(f2.order));
+  // The remote cannot be read on a later resume of an open group: it stops, nothing runs.
+  const f3 = fakeDeps(twoGroups(), { startWorker: worker.startWorker, remote: () => ({ stop: 'origin/bugfix/shop/cart could not be read' }) });
+  saveEpicRun(env.config, env.epic.key, (cur) => ({ ...cur, status: 'running', units: { ...cur.units, cart: { ...cur.units.cart, status: 'running', delivery: { ...cur.units.cart.delivery, phase: 'ci-wait' } } } }));
+  await epicRun(env, f3);
+  assert.equal(unitState(env, 'cart').outcome, 'error');
+  assert.match(unitState(env, 'cart').reason, /could not be read; nothing ran/);
+  assert.ok(!f3.order.some((o) => o[0] === 'pr-ci' && o[1] === cartPr));
+});
+
+
+// ---- round 4 -----------------------------------------------------------------------------------------------------------
+
+test('epic unit: a known PR with a recorded close-reopen hold is held and confirmed before any agent, also when the host says CLOSED (resuming-26)', async () => {
+  const env = makeRepo({ bugs: true });
+  await redCartThenClean(env);
+  patchCartHolds(env, (h) => (h.to ? h : { ...h, mode: 'close-reopen' }));
+  const order = [];
+  const f = tracked(order, { prState: () => 'CLOSED' });
+  f.deps.deliveryIo.confirmHold = (pr) => (order.push(['confirm', pr]), true);
+  await epicRun(env, f, { force: true });
+  const confirm = order.findIndex((o) => o[0] === 'confirm' && o[1] === cartPr);
+  const agent = order.findIndex((o) => o[0] === 'agent' && ['BUG-1', 'BUG-2'].includes(o[1]));
+  assert.ok(confirm >= 0 && (agent < 0 || confirm < agent), `confirmed before any agent: ${JSON.stringify(order)}`);
+});
+
+test('epic unit: a delivery that pushed but has no PR reads the remote head first; unreadable stops the unit (resuming-23)', async () => {
+  const env = makeRepo({ bugs: true });
+  const f1 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
+  f1.deps.deliveryIo.assess = () => null;
+  await epicRun(env, f1);
+  assert.equal(unitState(env, 'cart').outcome, 'gate-assessment-failed');
+  assert.equal(unitState(env, 'cart').delivery.pr ?? null, null, 'no PR');
+  const asked = [];
+  const f2 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, remote: (branch) => (asked.push(branch), { stop: `origin/${branch} could not be read` }) });
+  await epicRun(env, f2);
+  assert.ok(asked.includes('bugfix/shop/cart'));
+  assert.equal(unitState(env, 'cart').outcome, 'error');
+  assert.ok(!f2.order.some((o) => o[0] === 'open' || (o[0] === 'gate' && o[1]?.endsWith?.('/101'))));
+});
+
+test('epic resume after the open whose branch a person moved: the unit\'s PR check and rating run again on it with the PR held, not only the CI wait (resuming-24)', async () => {
+  const env = makeRepo({ bugs: true });
+  const stop = ({ kind, pr }) => {
+    if (kind === 'pr' && pr.endsWith('/101')) throw new Error('the run was stopped');
+    return null;
+  };
+  const f1 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, ci: stop });
+  await assert.rejects(epicRun(env, f1), /the run was stopped/);
+  assert.equal(unitState(env, 'cart').delivery.phase, 'ci-wait');
+  // A person's commit on the PR's branch, taken into the unit's checkout by the resume.
+  const wt = unitState(env, 'cart').worktree;
+  write(wt, 'src/a-person.cs', '// a person\'s fix\n');
+  git(wt, 'add', 'src/a-person.cs');
+  git(wt, 'commit', '-qm', 'a person');
+  const f2 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, prState: () => 'OPEN', remote: (branch) => (branch === 'bugfix/shop/cart' ? { head: git(wt, 'rev-parse', 'HEAD'), moved: true } : { head: null, moved: false }) });
+  await epicRun(env, f2);
+  assert.ok(f2.checks.some((k) => k.includes('BUG-1')), 'the PR check ran again on the new head');
+  // Re-delivered on the same PR (its hold confirmed on the host, never released before): rated again, then released.
+  const cart = f2.order.slice(0, f2.order.findIndex((o) => o[0] === 'regate'));
+  const idx = (k) => cart.findIndex((o) => o[0] === k);
+  assert.ok(idx('assess') >= 0 && idx('update-body') > idx('assess') && idx('gate') > idx('update-body') && idx('ready') > idx('gate'), `rated again before the release: ${JSON.stringify(cart)}`);
+  assert.ok(!cart.some((o) => o[0] === 'open'), 'never opened again');
+});
+
+// ---- round 5 -----------------------------------------------------------------------------------------------------------
+
+test('epic resume: a checkout already brought to a person\'s commit is compared with what the run pushed, so the stages run again (resuming-24)', async () => {
+  const env = makeRepo({ bugs: true });
+  const stop = ({ kind, pr }) => {
+    if (kind === 'pr' && pr.endsWith('/101')) throw new Error('the run was stopped');
+    return null;
+  };
+  const f1 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, ci: stop });
+  await assert.rejects(epicRun(env, f1), /the run was stopped/);
+  const wt = unitState(env, 'cart').worktree;
+  assert.equal(unitState(env, 'cart').delivery.deliveredHead, git(wt, 'rev-parse', 'HEAD'));
+  write(wt, 'src/a-person.cs', '// a person\'s fix\n');
+  git(wt, 'add', 'src/a-person.cs');
+  git(wt, 'commit', '-qm', 'a person');
+  // The remote is at the person's commit, and so is this checkout already: `moved` alone says nothing changed.
+  const f2 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, prState: () => 'OPEN', remote: (branch) => (branch === 'bugfix/shop/cart' ? { head: git(wt, 'rev-parse', 'HEAD'), moved: false } : { head: null, moved: false }) });
+  await epicRun(env, f2);
+  assert.ok(f2.checks.some((k) => k.includes('BUG-1')), 'the PR check ran again on the person\'s commit');
+  const cart = f2.order.slice(0, f2.order.findIndex((o) => o[0] === 'regate'));
+  assert.ok(cart.some((o) => o[0] === 'assess') && !cart.some((o) => o[0] === 'open'), `rated again on the same PR, never opened again: ${JSON.stringify(cart)}`);
+});
+
+test('epic resume: a PR the earlier run opened but did not record is not adopted past a person\'s push; it is held and the stages run again (Gemini resume follow-up)', async () => {
+  const env = makeRepo({ bugs: true });
+  const f1 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker });
+  f1.deps.deliveryIo.assess = () => null;
+  await epicRun(env, f1);
+  assert.equal(unitState(env, 'cart').delivery.phase, 'pre-open');
+  assert.equal(unitState(env, 'cart').delivery.pr ?? null, null);
+  const wt = unitState(env, 'cart').worktree;
+  write(wt, 'src/a-person.cs', '// a person\'s fix\n');
+  git(wt, 'add', 'src/a-person.cs');
+  git(wt, 'commit', '-qm', 'a person');
+  const found = { url: 'https://github.com/example/repo/pull/150', createdAt: '2026-11-20T01:00:00.000Z', draft: true };
+  const f2 = fakeDeps(twoGroups(), { startWorker: fakeWorker().startWorker, prState: () => 'OPEN', openOnHost: (branch) => (branch === 'bugfix/shop/cart' ? found : null), remote: (branch) => (branch === 'bugfix/shop/cart' ? { head: git(wt, 'rev-parse', 'HEAD'), moved: true } : { head: null, moved: false }) });
+  await epicRun(env, f2);
+  assert.ok(f2.checks.some((k) => k.includes('BUG-1')), `the stages ran again: ${JSON.stringify(f2.order)}`);
+  const cart = f2.order.slice(0, f2.order.findIndex((o) => o[0] === 'regate'));
+  assert.ok(cart.some((o) => o[0] === 'assess') && !cart.some((o) => o[0] === 'open'), `rated again on the found PR, never a second one: ${JSON.stringify(cart)}`);
+  assert.equal(unitState(env, 'cart').delivery.pr ?? unitState(env, 'cart').pr, found.url);
 });

@@ -93,7 +93,7 @@ test("Sol's reproducer: a fast passing check before the application workflow reg
   const fresh = solRepo();
   assert.equal(checksState(fresh.gh.gh, 'acme/shop', 7, { head: 'head123' }), 'pending');
   assert.equal(ciFlaky(fresh.gh.gh, 'acme/shop', 7), null, 'an empty run list is "not checked", never "no retried test"');
-  const a = { headSha: 'head123', ci: checksState(fresh.gh.gh, 'acme/shop', 7, { head: 'head123' }), severity: { level: 'Low' }, tickets: [{ key: 'BUG', severity: { level: 'Low' }, confidence: { score: 99, high: true, reasons: [] }, reopens: [] }] };
+  const a = { headSha: 'head123', ci: checksState(fresh.gh.gh, 'acme/shop', 7, { head: 'head123' }), severity: { level: 'Low' }, tickets: [{ key: 'BUG', severity: { level: 'Low' }, confidence: { score: 99, high: true, reasons: [] }, reopens: [], rejectionChecked: true }] };
   applyDeliveryCheck(a, null, { gh: fresh.gh.gh, repo: 'acme/shop', pr: 7 });
   assert.equal(a.deliveryChecked, undefined);
   assert.equal(decideGate(a, { settings: { approvals: {} }, autoMerge: { enabled: true } }).action, 'wait');

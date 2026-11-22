@@ -73,7 +73,8 @@ test('a PR is marked ready only by afterOpen, once its checks are green', () => 
   const src = fs.readFileSync(path.join(root, 'scripts/implement/lib/implement.mjs'), 'utf8');
   const fn = src.slice(src.indexOf('export async function afterOpen('));
   // ADV-31: on green every hold not yet released is released (a failed or unconfirmed one included).
-  assert.match(fn, /if \(ci\.state === 'success' && holds\.some\(\(h\) => !h\.to\)\) \{\n\s*releaseAll\(\);/, 'released only on green');
+  // A bug PR is released only when the PR's change on the host is the one rated (rated again first when it changed).
+  assert.match(fn, /if \(ci\.state === 'success' && holds\.some\(\(h\) => !h\.to\)\) \{[\s\S]*?if \(isBug && \(!current \|\| current !== ratedDiff\)\) \{[\s\S]*?if \(failed\) return failed;\s*\}\s*releaseAll\(\);/, 'released only on green, on a rated change');
   assert.equal((fn.match(/\brelease\(h\)/g) ?? []).length, 1, 'release() is called only from releaseAll');
 });
 
@@ -123,6 +124,8 @@ test('an open PR on hold is delivered without a second open: proven, body refres
     ownsPr: () => true,
     stateDecision: async () => {},
     usage: () => [],
+    // The PR's change as the host has it: this checkout's (the release compares it with the rated change).
+    prDiffKey: undefined,
   };
   const held = [{ mode: 'draft', from: new Date(Date.now() - 1000).toISOString(), why: 'reopened' }];
   const out = await deliverFinished(config, config, { id: 'BUG-9', keys: ['BUG-9'], label: 'BUG-9', branch: 'feat/bug-9', worktree: dir, base: 'main', title: 't', body: 'Implements BUG-9.\n\n- Test plan and automated tests: verified\n', isBug: true, existingPr: pr, holds: held, readyAt: '2026-11-01T00:00:00.000Z', io, open: () => assert.fail('an open PR is never opened again') });

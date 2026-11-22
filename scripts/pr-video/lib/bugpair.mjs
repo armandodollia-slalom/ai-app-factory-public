@@ -8,6 +8,7 @@ import path from 'node:path';
 import { git } from '../../pipeline/lib/git.mjs';
 import { writeText } from '../../pipeline/lib/redact.mjs';
 import { caseIdOf } from './script.mjs';
+import { baseCheckoutDir, fileHash } from '../../factory/lib/prune.mjs';
 
 export const BUG_PAIR_DEFAULTS = {
   // Record a "before the fix" video for UI bugs.
@@ -85,26 +86,111 @@ export function verifyBefore({ test, steps, after, healthy }) {
 // re-run does not check out or rebuild again; its stack images are tagged with the commit (`stack.imageTag` in its own
 // .factory/config.json, where the stack's settings live), so they never replace the fixed branch's images. The branch's
 // scenarios are copied in: the reproduction loads the bug's scenario, which the base does not have yet (test data, not
-// code). Returns { dir, sha }.
+// code). The folder is checked from the ticket's checkout down before anything is changed (no link on the way, nothing
+// outside the ticket), and a folder already there is used only when it is a checkout Git registered for this repository
+// (an empty one included: it is never removed or replaced). The scenarios are read without following links (a link
+// anywhere in them refuses the before run) and copied file by file into destinations checked first: no link, no path
+// leaving the checkout, no file with another name (a hard link) that a write would change too.
+// Returns { dir, real, sha, created, generated: [{ path, sha256 }] (the exact files it wrote, for removeBaseCheckout) }.
 export function baseCheckout(root, base, stateDir = '.factory/state') {
   const sha = git(root, ['merge-base', base, 'HEAD'], { allowFail: false }).stdout.trim();
+  // Checked from the resolved ticket checkout down; named as given (the resolved path is `real`).
+  baseCheckoutDir(root, stateDir, sha);
   const dir = path.join(root, stateDir, 'demo-base', sha.slice(0, 12));
-  if (!fs.existsSync(path.join(dir, '.git'))) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    git(root, ['worktree', 'add', '--detach', '--force', dir, sha], { allowFail: false });
-  }
+  // `created`: this call added the checkout (the before run may remove it); one already there is not its to remove.
+  const registered = () => git(root, ['worktree', 'list', '--porcelain'], { allowFail: false }).stdout.split('\n').some((l) => l.startsWith('worktree ') && realOrNull(l.slice(9)) === realOrNull(dir));
+  const created = !fs.existsSync(dir);
+  if (created) git(root, ['worktree', 'add', '--detach', '--force', dir, sha], { allowFail: false });
+  else if (!registered()) throw new Error(`${dir} exists and is not a checkout Git registered for this repository: it is left as it is (remove it by hand to run the before run)`);
+  const generated = [];
   const file = path.join(dir, '.factory/config.json');
   const json = readJson(file) ?? {};
   const name = json.project?.name ?? readJson(path.join(dir, '.factory/app.json'))?.name ?? 'app';
   const tag = `${String(json.stack?.imageTag ?? `${name}-teststack`).replace(/-base-[0-9a-f]{12}$/, '')}-base-${sha.slice(0, 12)}`;
+  const rel = json.stack?.scenariosDir ?? readJson(path.join(root, '.factory/config.json'))?.stack?.scenariosDir ?? '.factory/stack/scenarios';
+  // Every source and destination is checked before anything is written (a refusal means no before run for this bug,
+  // with why).
+  const { dirs, files: scenarios } = scenarioTree(root, rel);
+  for (const out of ['.factory/config.json', ...dirs, ...scenarios]) writableIn(dir, out);
   if (json.stack?.imageTag !== tag) {
     json.stack = { ...(json.stack ?? {}), imageTag: tag };
     writeText(file, `${JSON.stringify(json, null, 2)}\n`);
   }
-  const rel = json.stack?.scenariosDir ?? readJson(path.join(root, '.factory/config.json'))?.stack?.scenariosDir ?? '.factory/stack/scenarios';
-  if (fs.existsSync(path.join(root, rel))) fs.cpSync(path.join(root, rel), path.join(dir, rel), { recursive: true, force: true });
-  return { dir, sha };
+  generated.push('.factory/config.json');
+  for (const d of dirs) {
+    const to = path.join(dir, d);
+    if (!fs.existsSync(to)) fs.mkdirSync(to);
+    if (!fs.lstatSync(to).isDirectory()) throw new Error(`${d} in the before checkout is not a folder: no before run`);
+  }
+  for (const f of scenarios) {
+    writableIn(dir, f);
+    fs.copyFileSync(path.join(root, f), path.join(dir, f));
+  }
+  generated.push(...scenarios);
+  return { dir, real: fs.realpathSync(dir), sha, created, generated: generated.map((p) => ({ path: p.split(path.sep).join('/'), sha256: fileHash(path.join(dir, p)) })) };
 }
+// The scenarios folder of the ticket's checkout, read without following any link: { dirs, files } (relative to the
+// checkout, the folders on the way to it first, parents before children). A link (on the way to it or in it), or anything but a
+// plain folder or file, refuses the before run.
+function scenarioTree(root, rel) {
+  const dirs = [];
+  const files = [];
+  const parts = String(rel).split(/[\\/]+/).filter((p) => p && p !== '.');
+  if (path.isAbsolute(String(rel)) || /^[A-Za-z]:/.test(String(rel)) || parts.includes('..') || !parts.length) throw new Error(`the scenarios folder ${rel} is not a plain path inside it (the ticket's checkout): no before run`);
+  let cur = root;
+  for (const part of parts) {
+    cur = path.join(cur, part);
+    let st;
+    try {
+      st = fs.lstatSync(cur);
+    } catch {
+      return { dirs, files };
+    }
+    if (st.isSymbolicLink()) throw new Error(`the scenarios folder ${rel} goes through a link (${path.relative(root, cur)}): no before run`);
+    if (!st.isDirectory()) throw new Error(`the scenarios folder ${rel} is not a folder: no before run`);
+  }
+  const walk = (relDir) => {
+    dirs.push(relDir);
+    for (const e of fs.readdirSync(path.join(root, relDir), { withFileTypes: true })) {
+      const child = path.join(relDir, e.name);
+      if (e.isSymbolicLink()) throw new Error(`${child.split(path.sep).join('/')} in the scenarios is a link: nothing is copied through it, no before run`);
+      if (e.isDirectory()) walk(child);
+      else if (e.isFile()) files.push(child);
+      else throw new Error(`${child.split(path.sep).join('/')} in the scenarios is not a plain file or folder: no before run`);
+    }
+  };
+  // The folders on the way to it are made in the checkout too (each checked like the rest).
+  for (let i = 1; i < parts.length; i++) dirs.push(path.join(...parts.slice(0, i)));
+  walk(path.join(...parts));
+  return { dirs, files };
+}
+// A path the before run writes inside the checkout `dir`: relative, with no `..` or absolute part, and every part of it
+// that exists (the folders on the way and the file itself) a plain folder or file, not a link, so the write stays in the
+// checkout; an existing file with more than one name (a hard link) is refused too, since a write would change the others.
+// Throws otherwise.
+function writableIn(dir, rel) {
+  const parts = String(rel).split(/[\\/]+/).filter((p) => p && p !== '.');
+  if (path.isAbsolute(String(rel)) || /^[A-Za-z]:/.test(String(rel)) || parts.includes('..') || !parts.length) throw new Error(`the before checkout would write to ${rel}, which is not a plain path inside it: no before run`);
+  let cur = fs.realpathSync(dir);
+  for (const part of parts) {
+    cur = path.join(cur, part);
+    let st;
+    try {
+      st = fs.lstatSync(cur);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) throw new Error(`${parts.join('/')} in the before checkout goes through a link (${path.relative(dir, cur)}): nothing is written through it, no before run`);
+    if (st.isFile() && st.nlink > 1) throw new Error(`${parts.join('/')} in the before checkout has other names (a hard link): nothing is written to it, no before run`);
+  }
+}
+const realOrNull = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+};
 
 // The recorded test of a case in a manifest (its last attempt).
 export function testOfCase(manifest, caseId) {

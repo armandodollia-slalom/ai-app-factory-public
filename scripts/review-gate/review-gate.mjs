@@ -89,8 +89,17 @@ async function main() {
         }
       }
       const r = publishGate(config, { pr: flags.pr, keys, base: flags.base, assessment, noAgent, missingReason }, deps);
+      if (!r.decision) {
+        console.error(`${flags.pr}: ${r.problems[0]}`);
+        return 3;
+      }
       if (flags.json) console.log(JSON.stringify({ pr: flags.pr, severity: r.assessment.severity.level, class: r.assessment.class, action: r.decision.action, approvals: r.decision.approvals, problems: r.problems }));
       else console.log(`${flags.pr}: severity ${r.assessment.severity.level ?? 'unknown'}, ${r.decision.action}${r.decision.action === 'review' ? ` (${r.decision.approvals} approval(s))` : ''}.`);
+      // A rating the host does not show on the PR is not published: a failure (delivery keeps the PR on hold).
+      if (!r.published) {
+        console.error(`${flags.pr}: the gate's rating is not shown on the PR (${r.problems[0] ?? 'its state could not be read back'}); not published`);
+        return 3;
+      }
       return 0;
     }
 

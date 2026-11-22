@@ -21,8 +21,9 @@ import { changedSpecs, keyFolder, makePreview, publishFolder, recordedTests, ren
 import { renderVideo } from './render.mjs';
 import { appendJsonl } from '../../pipeline/lib/util.mjs';
 import { trackerFor } from '../../board/lib/trackers/index.mjs';
+import { pruneRunLocal, removeBaseCheckout } from '../../factory/lib/prune.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
-import { apiEvidenceSettings, apiTestOfCase, backendBugs, cleanExchange, commentNote, evidenceSection, issueNumberOf, reproductionComment, REPRO_MARKER, scanHits, verifyApiBefore, writeProse } from './api-evidence.mjs';
+import { apiEvidenceSettings, apiTestOfCase, backendBugs, cardValuesIn, cleanExchange, commentNote, evidenceSection, issueNumberOf, reproductionComment, REPRO_MARKER, scanHits, verifyApiBefore, writeProse } from './api-evidence.mjs';
 import { baseCheckout, bugPairSettings, testOfCase, uiBugs, verifyBefore } from './bugpair.mjs';
 import { automaticScript, caseIdOf, headlineCases, planCases, recordedEvents, scriptSettings, scriptVideos, ticketFor } from './script.mjs';
 import { resolveTools } from './tools.mjs';
@@ -200,7 +201,12 @@ function backendEvidence({ root, config, key, backend, before, afterManifest, se
       continue;
     }
     const c = b.cases.find((x) => x.id === chosen.id);
-    const pairs = chosen.v.pairs.map((p) => ({ before: cleanExchange(p.before, settings, { env }), after: cleanExchange(p.after, settings, { env }) }));
+    // A card value masked in one exchange is masked where another quotes it (an error message, a later response).
+    const echo = cardValuesIn(chosen.v.pairs.flatMap((p) => [p.before, p.after]), { env });
+    const pairs = chosen.v.pairs.map((p) => ({ before: cleanExchange(p.before, settings, { env, echo }), after: cleanExchange(p.after, settings, { env, echo }) }));
+    // A part the cleaner could not make safe is withheld (fail closed); the delivery says so.
+    const withheld = pairs.flatMap((p) => [...(p.before.withheld ?? []), ...(p.after.withheld ?? [])]);
+    if (withheld.length) findings.push({ id: `API-EVIDENCE-WITHHELD-${b.key}`, severity: 'minor', title: `Part of the request evidence for ${b.key} was withheld: it could not be cleaned safely of payment card data`, detail: withheld.map((w) => `${w.part}: ${w.reason}`).join('; ') });
     items.push({ key: b.key, title: ticket.title, ticket, case: { title: c.title }, caseId: chosen.id, preconditions: redactText(preconditionsOf(c.file), { env }).text, ev: { ok: true, pairs, base: before.base?.sha ?? null } });
   }
   const ok = items.filter((i) => i.ev.ok);
@@ -305,6 +311,10 @@ export async function produceLocal({ root, config, base, key, headSha, host, dep
         log(`${key}: the before-the-fix run failed: ${before.error}`);
       } finally {
         deps.stackDown?.(before.base?.dir);
+        // The before run is over (its recordings are in this checkout): the base checkout it added goes, also after a
+        // failure, only with prune.afterDelivery (alpha, off by default; prune.mjs removeBaseCheckout: only that checkout,
+        // never forced; `--keep` or prune.keepLocal keeps it).
+        if (before.base?.created) await (deps.removeBase ?? ((r, b) => pruneRunLocal(r, (g) => removeBaseCheckout(g, r, b, { stateDir }), { label: key, log })))(root, before.base);
       }
       if (fs.existsSync(videosDir)) fs.renameSync(videosDir, beforeDir);
       before.manifest = readJsonFile(path.join(beforeDir, 'manifest.json'));

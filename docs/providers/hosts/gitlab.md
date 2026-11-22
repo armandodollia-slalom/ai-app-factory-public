@@ -32,6 +32,7 @@
 | `botIdentity` | yes | nothing to change |
 | `diff` | yes | nothing to change |
 | `reviewCommentThreads` | yes | nothing to change |
+| `stateEvents` | yes | nothing to change |
 <!-- /generated:capabilities-gitlab -->
 
 **Verified:** against fakes only (`scripts/pipeline/test/hosts-fakes.mjs`, `fakes/providers-fake-server.mjs`). API docs: <https://docs.gitlab.com/api/merge_requests/>, <https://docs.gitlab.com/api/merge_request_approvals/>, <https://docs.gitlab.com/api/commits/#set-the-pipeline-status-of-a-commit>, <https://docs.gitlab.com/api/protected_branches/>.

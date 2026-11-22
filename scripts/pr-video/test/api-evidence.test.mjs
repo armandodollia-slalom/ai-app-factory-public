@@ -21,6 +21,8 @@ const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 // A token of the shape a code host issues, made at run time (never a literal in the repository).
 const canary = () => ['gh', 'p_', ...[...crypto.randomBytes(36)].map((b) => abc[b % abc.length])].join('');
 const TOKEN = canary();
+// Above 2^53: JSON.parse reads it as 90071992547409940.
+const BIG_INT = '90071992547409931';
 let mode = 'fixed';
 
 function app() {
@@ -34,7 +36,9 @@ function app() {
         res.setHeader('x-internal-trace', 'node-7.internal');
         if (mode === 'buggy') {
           res.statusCode = 500;
-          return res.end(JSON.stringify({ title: 'An unhandled error occurred', detail: `NullReferenceException in CardTypeLookup (caller ${TOKEN})`, token: TOKEN, trace: 'x'.repeat(4000) }));
+          // An integer above 2^53 (JSON.parse rounds it) and a duplicate key: the evidence shows them as sent.
+          // Over the evidence's size limit, under the recorder's (a payment body the recorder cuts is withheld).
+          return res.end(JSON.stringify({ title: 'An unhandled error occurred', detail: `NullReferenceException in CardTypeLookup (caller ${TOKEN})`, token: TOKEN, trace: 'x'.repeat(2000) }).replace('{"title"', `{"orderRef":${BIG_INT},"status":500,"status":"failed","title"`));
         }
         res.statusCode = 400;
         return res.end(JSON.stringify({ title: 'One or more validation errors occurred.', errors: { CardTypeId: ['The card type is not one the shop accepts.'] } }));
@@ -93,16 +97,18 @@ async function deliver(root, server, { baseMode, scope = { video: false, api: tr
   const published = [];
   const comments = [];
   const tasks = [];
+  const events = [];
   const env = { ...process.env, BASE_URL: `http://127.0.0.1:${server.address().port}`, E2E_CANARY: TOKEN };
   const deps = {
     tools: resolveTools({ video: { narration: { enabled: false } } }),
     scope,
     specs: ['e2e/bug-8.spec.ts'],
     publish: (o) => published.push(fs.readFileSync(path.join(o.stageDir, 'section.md'), 'utf8')),
-    baseCheckout: () => ({ dir: 'BASE', sha: 'b45e0000aaaa1111' }),
+    baseCheckout: () => ({ dir: 'BASE', sha: 'b45e0000aaaa1111', created: true }),
     stackUp: async (dir) => ((mode = dir === 'BASE' ? baseMode : 'fixed'), 0),
     stackHealthy: () => true,
-    stackDown: () => {},
+    stackDown: () => events.push('down'),
+    removeBase: (r) => events.push(['remove-base', r]),
     sh: (cmd, e) => new Promise((resolve) => spawn('sh', ['-c', cmd], { cwd: root, env: e, stdio: 'ignore' }).on('close', resolve)),
     runAgent: (cfg, opts) => {
       tasks.push(opts.task);
@@ -112,8 +118,9 @@ async function deliver(root, server, { baseMode, scope = { video: false, api: tr
     postComment: (issue, body, opts) => (comments.push({ issue, body, opts }), { id: 1, url: 'https://example.invalid/c/1', created: comments.length === 1 }),
   };
   const recordCmd = `node ${JSON.stringify(path.join(INSTALL, 'node_modules/@playwright/test/cli.js'))} test -c playwright.config.ts {specs}`;
-  const r = await produceLocal({ root, config: { ...config, prVideo: { specPatterns: ['e2e/*.spec.ts'], recordCmd, testTimeoutSec: 45 } }, base: 'main', key: 'fix/bug-8', headSha: 'cafe1234', host: { repo: 'acme/shop', fileUrl: (f, b) => `https://host/${b}/${f}` }, deps, log: () => {}, env: { ...env, E2E_DEMO_PACING: JSON.stringify({ stepDelayMs: 50, holdMs: 150, typeDelayMs: 5, cursorMs: 50 }) } });
-  return { r, published, comments, tasks };
+  // The exchanges' bodies are checked here: the masking mode (the default withholds a payment exchange's bodies).
+  const r = await produceLocal({ root, config: { video: { apiEvidence: { paymentBodies: 'mask' } }, ...config, prVideo: { specPatterns: ['e2e/*.spec.ts'], recordCmd, testTimeoutSec: 45 } }, base: 'main', key: 'fix/bug-8', headSha: 'cafe1234', host: { repo: 'acme/shop', fileUrl: (f, b) => `https://host/${b}/${f}` }, deps, log: () => {}, env: { ...env, E2E_DEMO_PACING: JSON.stringify({ stepDelayMs: 50, holdMs: 150, typeDelayMs: 5, cursorMs: 50 }) } });
+  return { r, published, comments, tasks, events };
 }
 
 const everything = (root, x) => [JSON.stringify(x.r), ...x.published, ...x.comments.map((c) => c.body), ...x.tasks, ...fs.readdirSync(path.join(root, '.factory/state/demo-videos/branch-fix-bug-8')).map((f) => fs.readFileSync(path.join(root, '.factory/state/demo-videos/branch-fix-bug-8', f), 'utf8'))].join('\n');
@@ -126,6 +133,8 @@ test('a backend bug that reproduces: the ticket\'s Reproduction comment and the 
     const x = await deliver(root, server, { baseMode: 'buggy' });
     assert.deepEqual(x.r.findings, []);
     assert.deepEqual(x.r.apiEvidence.map((e) => [e.key, e.ok, e.case, e.prose, e.comment.posted]), [['BUG-8', true, 'TC-BUG-8-01', 'agent', true]]);
+    // The before run's base checkout and its images go as soon as its stack is down (prune.mjs planBaseCheckouts).
+    assert.deepEqual(x.events.slice(0, 2), ['down', ['remove-base', root]]);
     // One comment, on the ticket's issue, found by its hidden marker (edited in place on the next delivery).
     assert.equal(x.comments.length, 1);
     const c = x.comments[0];
@@ -143,7 +152,9 @@ test('a backend bug that reproduces: the ticket\'s Reproduction comment and the 
     assert.ok(!/GET \/\n/.test(c.body) && !/127\.0\.0\.1|host\.invalid|x-internal-trace|node-7/.test(c.body));
     // Credentials masked by name, the canary nowhere: comment, section, records, the narrator's task, state files.
     assert.match(c.body, /Authorization: \(masked\)/);
-    assert.match(c.body, /"token": "\(masked\)"/);
+    assert.match(c.body, /"token": ?"\(masked\)"/);
+    // The response as it was received: the large integer to its last digit, both duplicate keys, no reformatting.
+    assert.ok(c.body.includes(`{"orderRef":${BIG_INT},"status":500,"status":"failed","title":"An unhandled error occurred"`), c.body);
     assert.ok(!everything(root, x).includes(TOKEN), 'the canary is in nothing stored, posted or sent to the agent');
     const runConditions = fs.readdirSync(path.join(root, '.factory'), { recursive: true }).filter((f) => /run-conditions/.test(String(f)));
     for (const f of runConditions) assert.ok(!fs.statSync(path.join(root, '.factory', String(f))).isFile() || !fs.readFileSync(path.join(root, '.factory', String(f)), 'utf8').includes(TOKEN));

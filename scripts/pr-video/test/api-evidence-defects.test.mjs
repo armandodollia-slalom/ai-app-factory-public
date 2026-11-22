@@ -10,7 +10,11 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { API_EVIDENCE_DEFAULTS, cleanEvidenceText, cleanExchange, evidenceSection, requestBlock, scanHits, verifyApiBefore } from '../lib/api-evidence.mjs';
+import { API_EVIDENCE_DEFAULTS, cleanEvidenceText, cleanExchange as cleanExchangeWith, evidenceSection, requestBlock, scanHits, verifyApiBefore } from '../lib/api-evidence.mjs';
+
+// These tests check the masking: they run under `video.apiEvidence.paymentBodies: "mask"` (the default withholds a
+// payment exchange's headers and bodies, tested in evidence-masking.test.mjs).
+const cleanExchange = (x, s = API_EVIDENCE_DEFAULTS, o) => cleanExchangeWith(x, { ...s, paymentBodies: 'mask' }, o);
 import { redactText } from '../../pipeline/lib/redact.mjs';
 import { produceLocal } from '../lib/local.mjs';
 import { resolveTools } from '../lib/tools.mjs';
@@ -170,7 +174,7 @@ test('ADV-2/16/21/22 (D4): evidence cleaner masks card data via JSON, form, and 
   // ADV-16: general redactText does NOT mask payment cards (that belongs only in api-evidence.mjs).
   assert.equal(redactText(`test card ${pan}`, { env: {} }).text, `test card ${pan}`);
 
-  // 1. JSON walk: nested card object, nested JSON string, non-card fields, and ADV-22 validation error shapes.
+  // 1. JSON walk: nested card object, nested JSON string, non-card fields.
   const jsonEx = cleanExchange({
     method: 'POST',
     url: 'http://127.0.0.1:5000/api/orders',
@@ -182,6 +186,14 @@ test('ADV-2/16/21/22 (D4): evidence cleaner masks card data via JSON, form, and 
       card: { number: nonLuhn, cvc: cvv, exp_month: 12, holder, name: holder, brand: 'visa', last4: '4242' },
       embedded: JSON.stringify({ cardNumber: nonLuhn, cvv }),
     }),
+  });
+  // Validation errors and short invalid test inputs under card keys are masked like any card field value (a): the
+  // messages under `cardNumber` go, the rest of the response is shown.
+  const validation = cleanExchange({
+    method: 'POST',
+    url: 'http://127.0.0.1:5000/api/orders',
+    status: 400,
+    requestBody: '{}',
     responseBody: JSON.stringify({
       title: 'One or more validation errors occurred.',
       status: 400,
@@ -207,21 +219,22 @@ test('ADV-2/16/21/22 (D4): evidence cleaner masks card data via JSON, form, and 
   assert.equal(reqJson.card.name, '[redacted:payment-card-field]');
   assert.equal(reqJson.card.brand, 'visa');
   assert.equal(reqJson.card.last4, '4242');
-  assert.equal(JSON.parse(reqJson.embedded).cardNumber, '[redacted:payment-card-field]');
-  assert.equal(JSON.parse(reqJson.embedded).cvv, '[redacted:payment-card-field]');
+  // Beside the card object, not in it: the embedded document's own card fields are masked, nothing else.
+  assert.equal(reqJson.embedded, JSON.stringify({ cardNumber: '[redacted:payment-card-field]', cvv: '[redacted:payment-card-field]' }));
 
-  // ADV-22: validation errors and short invalid test inputs are preserved, as are non-card objects.
-  const resJson = JSON.parse(jsonEx.responseBody);
-  assert.deepEqual(resJson.errors.cardNumber, ['The CardNumber field is required.']);
-  assert.deepEqual(resJson.errors.cardSecurityNumber, ['Must be 3 or 4 digits.']);
-  assert.equal(resJson.rejectedInput.cardNumber, '12', 'short invalid input is not masked');
-  assert.equal(resJson.rejectedInput.cvv, 'x', 'non-digit cvv is not masked');
-  assert.equal(resJson.token, '(masked)');
-  assert.equal(resJson.expiry, '2026-12-01', 'token expiry is not a card field');
-  assert.equal(resJson.product.expDate, '2026-12-01', 'product expDate is not a card field');
-  assert.equal(resJson.product.pan, 'frying', 'non-numeric pan is not masked');
-  assert.equal(resJson.account.holderName, 'Alice', 'account holderName without card prefix is not masked');
-  assert.equal(resJson.cc.number, '1234567890123456', 'bare cc object is not treated as a card object');
+  assert.deepEqual([validation.method, validation.path, validation.status], ['POST', '/api/orders', 400]);
+  // The response holds a value under a card number key and an `expiry` elsewhere in it: withheld (MP-1's final check).
+  assert.match(validation.responseBody, /^\(withheld/);
+  assert.match(validation.withheld.map((w) => w.reason).join('; '), /security code or expiry field beside a card number whose value was left \(expiry\)/);
+  // Without that expiry, the messages under card keys are masked and the rest is shown.
+  const masked = cleanExchange({ method: 'POST', url: 'http://127.0.0.1:5000/api/orders', status: 400, requestBody: '{}', responseBody: JSON.stringify({ title: 'One or more validation errors occurred.', errors: { cardNumber: ['The CardNumber field is required.'] }, rejectedInput: { cardNumber: '12' }, account: { holderName: 'Alice' } }) });
+  const shownErrors = JSON.parse(masked.responseBody);
+  assert.deepEqual(shownErrors.errors, { cardNumber: ['[redacted:payment-card-field]'] });
+  assert.deepEqual(shownErrors.rejectedInput, { cardNumber: '[redacted:payment-card-field]' });
+  assert.deepEqual(shownErrors.account, { holderName: 'Alice' });
+  // Outside a payment exchange the same non-card shapes are shown as they are.
+  const plain = cleanExchange({ method: 'GET', url: '/api/account', status: 200, responseBody: JSON.stringify({ token: 'tok-secret', expiry: '2026-12-01', account: { holderName: 'Alice' } }) });
+  assert.deepEqual(JSON.parse(plain.responseBody), { token: '(masked)', expiry: '2026-12-01', account: { holderName: 'Alice' } });
 
   // 2. Form-encoded card fields (raw and percent-encoded brackets) + plain/space/dash Luhn PANs.
   const formEx = cleanExchange({
@@ -252,7 +265,7 @@ test('ADV-2/16/21/22 (D4): evidence cleaner masks card data via JSON, form, and 
   const sec = evidenceSection([{
     key: 'BUG-30',
     title: 'Reject 2-digit cardNumber',
-    ev: { ok: true, pairs: [{ before: jsonEx, after: formEx }] },
+    ev: { ok: true, pairs: [{ before: jsonEx, after: formEx }, { before: validation, after: validation }] },
     prose: { steps: ['Send request.'], difference: ['Status changes.'] },
   }]);
   assert.deepEqual(scanHits(sec, { env: {} }), []);

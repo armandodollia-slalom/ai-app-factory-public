@@ -1,7 +1,7 @@
 {
   "$comment": "Single source of truth for docs/pipeline-explorer.html and the Mermaid spine (scripts/docs/build-explorer.mjs). It models what the runner's rules say will happen for a configuration; it does not run anything. Settings name their real config path or CLI flag and say where the code keeps their default and allowed values (`checks`, verified by scripts/docs/test/pipeline-flow.test.mjs). Conditions are data: {\"eq\":[ref,value]}, {\"in\":[ref,[values]]}, {\"is\":ref}, {\"not\":c}, {\"all\":[c]}, {\"any\":[c]}, {\"gt\":[ref,n]}; a ref is a setting id or a fact id. A fact with \"walk\": true starts false and is set by the edges the walk takes ({\"set\":{fact:true}}); an outcome with cyclesLeft or cyclesUsed (a setting id) is offered only before, or once, that many visits of its step. Doc links are relative to docs/.",
   "version": 1,
-  "factoryVersion": "0.2.96",
+  "factoryVersion": "0.2.98",
   "kinds": {
     "agent": {
       "label": "Agent",
@@ -903,7 +903,7 @@
         "close-reopen"
       ],
       "default": "draft",
-      "help": "How an open PR is held while agents work on it again. close-reopen becomes draft on a host that cannot reopen (Bitbucket); factory doctor reports it.",
+      "help": "How an open PR is held while agents work on it again. close-reopen becomes draft on a host that cannot reopen (Bitbucket), with a warning when implement, the review gate or factory doctor load the config. Another value stops the config from loading.",
       "doc": "configuration.md#stage-sections",
       "checks": [
         {
@@ -912,8 +912,8 @@
           "path": "afterOpen"
         },
         {
-          "code": "scripts/implement/lib/pre-open.mjs",
-          "includes": "const AFTER_OPEN = ['draft', 'label', 'close-reopen']"
+          "code": "scripts/pipeline/lib/config.mjs",
+          "includes": "export const AFTER_OPEN = ['draft', 'label', 'close-reopen']"
         }
       ]
     },
@@ -1895,7 +1895,7 @@
         "col": 0
       },
       "decision": "resume",
-      "desc": "Continues a run that stopped, from its saved phase, or (requeue) runs again a ticket a person resolved or reopened. A PR that did not open (pr-refused, gate-assessment-failed) replays the delivery from the analysis gate and push, even under needs-human. A stopped CI wait resumes there; when a hold is still recorded (hold-failed, release-unconfirmed, a held or draft PR) it is released once green, with the CI wait off too.",
+      "desc": "Continues a run that stopped, from its saved phase, or (requeue) runs again a ticket a person resolved or reopened. A PR that did not open (pr-refused, gate-assessment-failed), or a held PR whose rating failed, replays the delivery from the analysis gate and push, even under needs-human, while the branch is at the head CI proved; a rating or demo media saved for that head is reused. A stopped CI wait resumes there; when a hold is still recorded (hold-failed, release-unconfirmed, a held or draft PR) it is released once green, with the CI wait off too.",
       "settings": [
         "entry"
       ],
@@ -2409,18 +2409,9 @@
       },
       "decision": "parity",
       "when": {
-        "all": [
-          {
-            "is": "pr"
-          },
-          {
-            "not": {
-              "is": "shapeEpic"
-            }
-          }
-        ]
+        "is": "pr"
       },
-      "desc": "The ticket is published and fetched back as CI reads it, what CI runs on the PR runs here first (failures go through a fixing round), and another ticket's verified plan or tests this change edited is verified again. For a single ticket, implement.ciParity false skips the parity run; a bug group's parity run still runs. The setting also skips the pre-push analysis gate, for every delivery.",
+      "desc": "A single ticket's or a bug group's tickets are published and fetched back as CI reads them (a feature epic's PRs read their own ticket copies), what CI runs on the PR runs here first (failures go through a fixing round), and another ticket's verified plan or tests this change edited is verified again. Every PR gets it: a single ticket, a bug group (also when a reopened ticket joins its open PR), a feature epic as one PR and each PR of a split epic. A check that still fails after one fixing run is reported in the PR body; it does not stop the delivery. implement.ciParity false skips the parity run of a single ticket and of a feature epic's PRs (a bug group's still runs) and, for every delivery, the pre-push analysis gate.",
       "settings": [],
       "doc": "ai-pipeline/ci-parity.md"
     },
@@ -2981,7 +2972,7 @@
       "when": {
         "is": "pr"
       },
-      "desc": "At the open and at every board sync. A bug PR auto-merges only when: every ticket assessed and Low, high confidence, no owner question, no human reopen, no delivery waiting for a person, the PR itself Low (no floor or bump), checks green, not already sent to people, unchanged since assessed, the delivery check ran on this head, and autoMerge.enabled. Otherwise approvals:N and needs-human. A feature PR waits under the host's own rules. With the review gate off, nothing is rated or auto-merged and the PR waits under the host's rules.",
+      "desc": "At the open and at every board sync. A bug PR auto-merges only when: every ticket assessed and Low, high confidence, no owner question, no human reopen (each ticket's history and every PR it was delivered in read at that moment; unreadable history needs a person), no delivery waiting for a person, the PR itself Low (no floor or bump), checks green, not already sent to people, unchanged since assessed, the delivery check ran on this head, and autoMerge.enabled. Otherwise approvals:N and needs-human. A feature PR waits under the host's own rules. With the review gate off, nothing is rated or auto-merged and the PR waits under the host's rules.",
       "settings": [
         "autoMerge",
         "severity",
@@ -3065,7 +3056,7 @@
       "when": {
         "is": "pr"
       },
-      "desc": "board sync records a human reopen (changes requested, card moved back, issue reopened): severity rises, the gate stays with people, and requeue or a run starts the ticket again.",
+      "desc": "board sync records a human reopen (changes requested, the PR closed without merge, card moved back, issue reopened; implement requeue after a person's decision on a delivered PR): severity rises, every later delivery of the ticket needs a person, and requeue or a run starts the ticket again.",
       "settings": [],
       "doc": "ai-pipeline/review-gate.md#human-reopens"
     },
@@ -3412,7 +3403,7 @@
         "ticket": "the finding GATE-ASSESS-FAILED; card in Failed",
         "pr": "no new PR; a re-delivered PR stays open on hold"
       },
-      "continue": "Fix the gate CLI or the triage agent (or turn the gate off). A PR that never opened: the next run or implement resume replays the delivery from the analysis gate and push, even under needs-human, and rates again before the open. A held re-delivery runs again on hold and updates the same PR.",
+      "continue": "Fix the gate CLI or the triage agent (or turn the gate off). A PR that never opened: the next run or implement resume replays the delivery from the analysis gate and push, even under needs-human, and rates again before the open. A held re-delivery resumes at the rating too, on hold, and then updates the same PR; no agent stage runs again unless the branch moved since CI proved it.",
       "desc": "The review gate is on and could not produce the bug-triage assessment before the open: no new PR opens. A re-delivered PR stays open on hold.",
       "settings": [],
       "doc": "ai-pipeline/escalations.md#outcomes"
@@ -3840,12 +3831,12 @@
       "outcomes": [
         {
           "id": "ok",
-          "label": "green",
+          "label": "parity green, or still failing after its fixing run (reported in the PR body)",
           "default": true
         },
         {
           "id": "failed",
-          "label": "another ticket's tests fail"
+          "label": "another ticket's re-verified tests fail"
         }
       ]
     },

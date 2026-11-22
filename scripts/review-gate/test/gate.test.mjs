@@ -10,7 +10,7 @@ import { fakeGh } from './fake-gh.mjs';
 import { SETTINGS, cacheTicket, cleanMetrics, fakeTriage, fixRepo, gateConfigFor, low, write, git } from './helpers.mjs';
 
 const high = { score: 98, high: true, criteria: {}, reasons: [] };
-const ticket = (key, level, extra = {}) => ({ key, issue: { number: Number(key.split('-')[1]) }, impact: level, complexity: 'Low', fixRisk: 'Low', severity: { level, explanation: `Impact ${level}, Fix risk Low → ${level}` }, confidence: high, reopens: [], systems: ['Basket.API'], paths: ['src/Basket.API/A.cs'], ...extra });
+const ticket = (key, level, extra = {}) => ({ key, issue: { number: Number(key.split('-')[1]) }, impact: level, complexity: 'Low', fixRisk: 'Low', severity: { level, explanation: `Impact ${level}, Fix risk Low → ${level}` }, confidence: high, reopens: [], rejectionChecked: true, systems: ['Basket.API'], paths: ['src/Basket.API/A.cs'], ...extra });
 const assessment = (tickets, extra = {}) => ({ pr: 'https://github.com/acme/shop/pull/5', tickets, severity: { level: tickets.map((t) => t.severity.level).includes('Medium') ? 'Medium' : 'Low', explanation: 'max ticket severity' }, class: 'Low', systems: { names: ['Basket.API'] }, ci: 'success', headSha: 'h1', ...extra });
 const on = { enabled: true, identity: 'gh-user' };
 
@@ -108,7 +108,7 @@ test('publish: a PR that needs people gets approvals:N, needs-human, reviewers a
   const gh = fakeGh();
   gh.addIssue(3, { assignees: ['dana'] });
   gh.addIssue(7);
-  const pr = gh.addPr(5, { author: 'armando', labels: ['approvals:3'], checks: [{ name: 'ci', bucket: 'pass' }] });
+  const pr = gh.addPr(5, { author: 'armando', labels: ['approvals:3'], checks: [{ name: 'ci', bucket: 'pass' }], headRefOid: git(root, 'rev-parse', 'HEAD') });
   const config = gateConfigFor(root, { autoMerge: { enabled: true } });
   const agent = fakeTriage({ 'BUG-3': low, 'BUG-7': low });
   const r = publishGate(config, { pr: pr.url, keys: ['BUG-3', 'BUG-7'], base: 'main' }, { gh: gh.gh, runAgent: agent.runAgent });
@@ -131,7 +131,7 @@ test('publish: a qualifying PR whose checks are still running waits, with no lab
   cleanMetrics(root, ['BUG-3']);
   const gh = fakeGh();
   gh.addIssue(3);
-  const pr = gh.addPr(6, { checks: [{ name: 'ci', bucket: 'pending' }] });
+  const pr = gh.addPr(6, { checks: [{ name: 'ci', bucket: 'pending' }], headRefOid: git(root, 'rev-parse', 'HEAD') });
   const r = publishGate(gateConfigFor(root, { autoMerge: { enabled: true } }), { pr: pr.url, keys: ['BUG-3'], base: 'main' }, { gh: gh.gh, runAgent: fakeTriage({ 'BUG-3': low }).runAgent });
   assert.equal(r.decision.action, 'wait');
   assert.deepEqual(pr.labels, ['approvals:0'], 'found again by board sync; nothing for review-quorum to enforce');
@@ -219,16 +219,20 @@ test('ADV-11 (D2): review-gate CLI parses --no-agent and publishes needs-human w
 const fs = require('fs');
 const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(ghLog)}, a.join(' ') + '\\n');
+// The comments posted are kept, so the publication is shown on the PR as on a real host.
+const posted = ${JSON.stringify(ghLog)} + '.comments.json';
+const comments = () => (fs.existsSync(posted) ? JSON.parse(fs.readFileSync(posted, 'utf8')) : []);
 if (a[0] === 'pr' && a[1] === 'view') {
-  if (a.includes('comments')) { process.stdout.write(JSON.stringify({ comments: [] })); process.exit(0); }
+  if (a.includes('comments')) { process.stdout.write(JSON.stringify({ comments: comments().map((body, i) => ({ body, url: 'https://github.com/acme/shop/pull/9#issuecomment-' + (i + 1) })) })); process.exit(0); }
   if (a.includes('files')) { process.stdout.write(JSON.stringify({ files: [{ path: 'src/Basket.API/A.cs', additions: 1, deletions: 0, changeType: 'MODIFIED' }] })); process.exit(0); }
   process.stdout.write(JSON.stringify({ number: 9, url: 'https://github.com/acme/shop/pull/9', title: 'BUG-3', body: '', state: 'OPEN', isDraft: false, headRefName: 'feat/bug-3', baseRefName: 'main', headRefOid: ${JSON.stringify(head)}, author: { login: 'dev' }, labels: [], mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', autoMergeRequest: null, createdAt: '2026-11-20T00:00:00Z', updatedAt: '2026-11-20T00:00:00Z', mergedAt: null, closedAt: null }));
   process.exit(0);
 }
 if (a[0] === 'pr' && a[1] === 'checks') { process.stdout.write(JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass', link: '' }])); process.exit(0); }
+if (a[0] === 'api' && /\\/issues\\/9\\/comments$/.test(a[1] || '')) { process.stdout.write(JSON.stringify([comments().map((body, i) => ({ id: i + 1, body, user: { login: 'dev' }, html_url: 'https://github.com/acme/shop/pull/9#issuecomment-' + (i + 1) }))])); process.exit(0); }
 if (a[0] === 'api' && /\\/reviews$/.test(a[1] || '')) { process.stdout.write(''); process.exit(0); }
 if (a[0] === 'api' && /\\/commits$/.test(a[1] || '')) { process.stdout.write(''); process.exit(0); }
-if (a[0] === 'pr' && a[1] === 'comment') { process.stdout.write('https://github.com/acme/shop/pull/9#issuecomment-1\\n'); process.exit(0); }
+if (a[0] === 'pr' && a[1] === 'comment') { fs.writeFileSync(posted, JSON.stringify([...comments(), fs.readFileSync(0, 'utf8')])); process.stdout.write('https://github.com/acme/shop/pull/9#issuecomment-' + comments().length + '\\n'); process.exit(0); }
 process.stdout.write('');
 `);
   fs.chmodSync(fakeGhBin, 0o755);

@@ -103,7 +103,7 @@ flowchart TD
   prCheck -->|"no upheld finding / minor findings: pr-check-fixer"| parity
   prCheck -.->|"production finding: to implementation"| pairs
   prCheck -.->|"test gap: to test planning"| testPlan
-  parity -->|"green"| analysisGate
+  parity -->|"parity green, or still failing after…"| analysisGate
   analysisGate -->|"pass"| push
   analysisGate -->|"analysis finding"| analysisGate
   push -->|"pushed"| ownerQ
@@ -266,17 +266,17 @@ Behaviour that falls short of the design, stated once; each is described where i
 
 - **An agent after the open.** A failure after the open starts the `escalation-questions` agent, which writes
   questions on the ticket and changes no code ([implement.md](implement.md#after-the-open)).
-- **Resume is not agent-free.** Resuming a delivery whose PR did not open re-runs the delivery steps, so the
-  narrator can run again, triage runs (before the open) when no rating was saved, and a fixing round runs if the
-  scans or CI fail again. A `gate-assessment-failed` on a PR that was already open re-runs every agent stage, on
-  hold. A resume keeps its finished stages even when a person pushed in between; only CI proves the new head
+- **Resume is not agent-free.** Resuming a delivery re-runs the delivery steps, so the narrator can run again when
+  no media of that commit is stored, triage runs (before the open) when no rating was saved for that head, and a
+  fixing round runs if the scans or CI fail again. A resume of a delivery that already pushed reads the remote's head
+  first: a person's push since the run's own last commit runs the stages again on it, with the PR held first
   ([implement.md](implement.md#resume-and-interrupted-runs)).
 - **Backend reproduction evidence.** A class merely named `ExpectError` is trusted as a failed assertion;
   `expect.poll` and `toPass` failures do not count. With an `e2e/fixtures.ts` from 0.2.92, a soft assertion gets
   the general refusal, not the `factory render` advice
   ([pr-demo-video.md](pr-demo-video.md#what-the-reproduction-check-proves)).
-- **Card data** is masked only in backend request evidence, and not in every body shape there; tickets, plans and
-  PR text keep it ([pr-demo-video.md](pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
+- **Card data** is masked only in backend request evidence; tickets, plans and PR text keep it
+  ([pr-demo-video.md](pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
 - **Video secret checks** sample the page's text and input values at each step; the finished frames are not
   scanned ([pr-demo-video.md](pr-demo-video.md#secrets-never-show)).
 - **Council discussion** ([council-intercom.md](council-intercom.md)). An interrupted discussion is never resumed: it
@@ -284,8 +284,7 @@ Behaviour that falls short of the design, stated once; each is described where i
   server, each runs its own. Copilot members are covered by tests only: no real Copilot session has joined a room.
   A small model is a poor judge of a split, so a split is ruled by the stage's own orchestrating or judging model,
   never by a member, and goes to the owner where the stage has none.
-- **Bitbucket Cloud** cannot bind a merge to a commit; the harness re-reads the head just before merging. Its
-  `close-reopen` hold setting is reported only by `factory doctor`, as a failed row, although `draft` is used
+- **Bitbucket Cloud** cannot bind a merge to a commit; the harness re-reads the head just before merging
   ([providers](../providers/README.md#capabilities-not-assumptions)).
 
 ## Pages

@@ -48,7 +48,7 @@ const isDeliveryTrigger = (t) => /^the delivery needs a person's decision\b/.tes
 // Triggers every evaluation derives again from the tickets (severity, confidence, owner decisions, reopens, PR
 // severity) are never carried from an earlier one (council C11: #154's notice kept "confidence 73" next to the
 // current 81). Only what a later evaluation cannot see again (the PR changed after it was assessed) sticks.
-const isDerivedTrigger = (t) => /^\S+ (has confidence \d+|is (Low|Medium|High|Severe)\b|needs an owner decision|was not assessed|has \d+ human reopen)|^the PR is (Low|Medium|High|Severe)|^PR severity /.test(String(t));
+const isDerivedTrigger = (t) => /^\S+ (has confidence \d+|is (Low|Medium|High|Severe)\b|needs an owner decision|was not assessed|has \d+ human reopen|could not be checked for a rejection|was not checked for a rejection)|^the PR is (Low|Medium|High|Severe)|^PR severity /.test(String(t));
 const reviewTriggers = (prior) => (prior?.triggers ?? []).filter((t) => !isMergeTrigger(t) && !isCiTrigger(t) && !isDeliveryTrigger(t) && !isDerivedTrigger(t));
 // What the CI gate left for a person (council C7): a test that passed only on a retry, red or unverified CI, or a fix
 // round that escalated. `a.delivery` is set when a CI gate just ran (null clears it); otherwise the stored one holds.
@@ -56,6 +56,10 @@ export const deliveryOf = (a, prior) => (a.delivery !== undefined ? a.delivery :
 export const deliveryTrigger = (d) => `the delivery needs a person's decision: ${d.reason}`;
 
 const confidenceProblems = (t) => (t.confidence?.reasons ?? []).filter((r) => !/^CI /.test(r));
+
+// What settles a review a person's rejection (known or unknown) requires: the same sentence in the notice and the PR
+// description, naming the number of approvals of this PR's head when more than one is required.
+export const settles = (n) => (Number(n) > 1 ? `${n} approvals of this PR's head by people settle it` : 'a person\'s approval of this PR settles it');
 
 // { action: 'auto-merge' | 'wait' | 'review', approvals, triggers: [text], wouldAutoMerge: [keys], reasons }
 export function decideGate(a, { settings, autoMerge, prior = null }) {
@@ -69,7 +73,13 @@ export function decideGate(a, { settings, autoMerge, prior = null }) {
     if (t.severity?.level && conf.length) own.push(`${t.key} has confidence ${t.confidence.score} (${conf.join('; ')})`);
     // A ticket the check left with a question for its owner is never auto-merged, at any severity (council C6).
     if (t.confidence?.questions?.length) own.unshift(`${t.key} needs an owner decision: ${t.confidence.questions.join('; ')}`);
-    if (t.reopens?.length) own.push(`${t.key} has ${t.reopens.length} human reopen(s)`);
+    // A ticket a person rejected earlier always needs a person again, whatever its new rating (owner rule); so does one
+    // whose earlier rejections could not be read.
+    // Merging needs positive proof that no person rejected the ticket: its history read now (withCurrentRejections).
+    const settled = settles(approvalsFor(settings.approvals, { cls: a.class, severity: a.severity?.level ?? 'Severe' }));
+    if (t.reopens?.length) own.push(`${t.key} has ${t.reopens.length} human reopen(s): rejected by a person earlier, so a person reviews it again (${settled})`);
+    else if (t.reopensUnknown) own.push(`${t.key} could not be checked for a rejection by a person earlier: ${t.reopensUnknown} (${settled})`);
+    else if (t.rejectionChecked !== true) own.push(`${t.key} was not checked for a rejection by a person earlier (${settled})`);
     if (own.length) triggers.push(...own);
     else okTickets.push(t.key);
   }
@@ -114,6 +124,8 @@ export function gateState(a, d, prior = null, extra = {}) {
     required: (Boolean(prior?.required) && reviewTriggers(prior).length > 0) || d.action === 'review',
     triggers: d.triggers,
     headSha: a.headSha,
+    // The publication that wrote this state (publishGate reads it back to confirm it is shown).
+    ...(a.publication ? { publication: a.publication } : {}),
     class: a.class,
     severity: a.severity?.level ?? null,
     systems: { names: a.systems?.names ?? [], shared: Boolean(a.systems?.shared), contract: Boolean(a.systems?.contract) },
@@ -171,7 +183,7 @@ export function renderNotice(a, d, state) {
     lines.push(`- **Severity:** ${t.severity?.explanation ?? 'not assessed'}`);
     for (const [f, label] of [['impact', 'Impact'], ['complexity', 'Complexity'], ['fixRisk', 'Fix risk']]) if (t[`${f}Reason`]) lines.push(`- **${label} ${t[f]}:** ${t[`${f}Reason`].replace(/\s+/g, ' ')}`);
     lines.push(`- **Confidence ${t.confidence?.score ?? '-'}:** ${describeSignals(t.signals ?? {}, t.confidence?.criteria ?? {}).join('; ')}; the agent's own estimate ${t.agentConfidence ?? 'none'}`);
-    if (t.reopens?.length) lines.push(`- **Human reopens:** ${t.reopens.length}`);
+    if (t.reopens?.length) lines.push(`- **Human reopens:** ${t.reopens.length} (rejected by a person earlier: never merges itself)`);
     lines.push('', '</details>', '');
   }
   lines.push(`**PR severity:** ${a.severity?.level ?? 'unknown'} (${a.severity?.explanation ?? '-'}) · class \`${a.class}\` · systems: ${a.systems?.names?.join(', ') || 'none'} · checks: ${a.ci ?? 'none yet'}${a.headSha ? ` on head ${String(a.headSha).slice(0, 7)}` : ''}${a.ciReadAt ? ` (read ${String(a.ciReadAt).replace('T', ' ').slice(0, 16)} UTC)` : ''}`, '');
@@ -234,4 +246,21 @@ export function applyReview(config, gh, a, d, state, { assignees, codeowners, au
 export function labelReopened(config, gh, tickets) {
   const label = config.implement.reviewGate.labels?.reopened ?? 'reopened';
   for (const t of tickets) if (t.issue?.number ?? t.issue) addTicketLabel(config, gh, t.issue?.number ?? t.issue, label);
+}
+
+// The part of the PR description that says why a person must review it because of a person's earlier rejection, or a
+// history that could not be read, rebuilt from the live read the gate just decided on (null: none applies).
+export const WHY_MARKER = '<!-- review-gate:why -->';
+const WHY_END = '<!-- /review-gate:why -->';
+export function rejectionSection(a, approvals = 1) {
+  const lines = a.tickets.flatMap((t) => {
+    if (t.reopens?.length) return [`- ${t.key}: rejected by a person earlier (${[...new Set(t.reopens.map((r) => r.detail ?? r.source))].slice(0, 3).join('; ')})`];
+    if (t.reopensUnknown) return [`- ${t.key}: whether a person rejected it earlier could not be checked (${t.reopensUnknown})`];
+    return t.rejectionChecked === true ? [] : [`- ${t.key}: not checked for a rejection by a person earlier`];
+  });
+  return lines.length ? `${WHY_MARKER}\n**A person reviews this PR**, whatever its rating:\n${lines.join('\n')}\n\n${settles(approvals).replace(/^a/, 'A')}.\n${WHY_END}` : null;
+}
+export function withRejectionSection(body, section) {
+  const text = String(body ?? '').replace(/\n*<!-- review-gate:why -->[\s\S]*?<!-- \/review-gate:why -->\n?/, '');
+  return section ? `${text.replace(/\s+$/, '')}\n\n${section}\n` : text;
 }

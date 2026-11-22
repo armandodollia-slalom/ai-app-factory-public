@@ -17,11 +17,17 @@
 //              request is merged or closed (or, with no PR, its issue is closed and its head is on the base), with no
 //              uncommitted tracked change and a head the remote has; its branch is kept
 //
+// And, only with `prune.afterDelivery: true` (alpha, off by default), once a run has delivered (removeDelivered /
+// removeBaseCheckout): only what its manifest recorded it created (the ticket's or unit's worktree and local branch, a
+// bug before run's base checkout), only once the delivery remote itself confirms it holds the commits, never forced;
+// anything in doubt is kept and reported. `--keep` (FACTORY_KEEP_LOCAL=1) or `prune.keepLocal` keeps it all.
+//
 // Nothing is removed that a running run, a live lease or a worktree touched in the last `idleMinutes` needs. Settings
 // (`prune` in .factory/config.json): see PRUNE_DEFAULTS and docs/ai-pipeline/disk.md (the defaults and what each removal checks).
 import { hostFor, hostOf } from '../../pipeline/lib/hosts/index.mjs';
 import { trackerFor } from '../../board/lib/trackers/index.mjs';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,7 +50,13 @@ export const PRUNE_DEFAULTS = {
   analysisCacheDays: 30,
   analysisReports: 200,
   analysisBaseDays: 14,
+  // Alpha, off by default: remove what a delivered run made on this machine (its worktrees, local branches and a bug
+  // before run's base checkout) once the delivery remote confirms it. Off: nothing of a delivered run is removed.
+  afterDelivery: false,
+  // Keep what a delivered run made on this machine, for debugging (with afterDelivery on).
+  keepLocal: false,
 };
+
 
 const GB = 1024 ** 3;
 const SLOT_BUILD = ['artifacts', 'build', 'build-partial'];
@@ -92,8 +104,9 @@ export function listWorktrees(root, { exec = defaultExec } = {}) {
   const out = [];
   let cur = null;
   for (const line of r.stdout.split('\n')) {
-    if (line.startsWith('worktree ')) out.push((cur = { path: line.slice(9), branch: null, head: null }));
+    if (line.startsWith('worktree ')) out.push((cur = { path: line.slice(9), branch: null, head: null, locked: false }));
     else if (cur && line.startsWith('HEAD ')) cur.head = line.slice(5);
+    else if (cur && line.startsWith('locked')) cur.locked = true;
     else if (cur && line.startsWith('branch refs/heads/')) cur.branch = line.slice(18);
   }
   return out;
@@ -585,6 +598,218 @@ export function diskRoom(g) {
   const free = [g.main, g.wtDir].map((d) => freeGb(d, g)).filter((x) => x != null);
   const gb = free.length ? Math.min(...free) : null;
   return { freeGb: gb, minFreeGb: g.settings.minFreeGb, ok: gb == null || g.settings.minFreeGb == null || gb >= g.settings.minFreeGb };
+}
+
+// ---- what a run made, removed once it is on the remote (alpha: prune.afterDelivery, off by default) -----------------
+// Only what the run recorded when it created it (its manifest: a worktree's registered path and the local branch it
+// created, a base checkout it added) is ever a candidate; nothing is found by name. A worktree or branch goes only once
+// the delivery remote itself (`git ls-remote origin`, origin being the repository the delivery pushed to) has a branch
+// head that contains its commit, never on a remote-tracking ref. Git is never forced: a refusal (Git's or any check
+// below) keeps the item, and a kept worktree keeps its branch. Container images are not removed here.
+
+const realPath = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+};
+// A folder broad enough that a wrong path in it could be anyone's: the file system root, the home folder, one level down.
+const broad = (dir) => !dir || dir === path.parse(dir).root || dir === realPath(os.homedir()) || path.relative(path.parse(dir).root, dir).split(path.sep).length < 2;
+// `p` is a resolved path (no link anywhere on it) strictly inside the resolved `dir`.
+function ownedPath(p, dir) {
+  const rd = realPath(dir);
+  return Boolean(p && rd && realPath(p) === p && p !== rd && inside(p, rd) && !broad(rd));
+}
+
+// The base checkout of a bug's before run: `<ticket>/<stateDir>/demo-base/<sha12>`, checked from the ticket's resolved
+// checkout down before anything is changed: every folder on the way that exists is a plain folder (no link), and the
+// state folder does not lead out of the ticket (no `..`, not absolute). Throws otherwise.
+export function baseCheckoutDir(root, stateDir, sha) {
+  const home = realPath(root);
+  const rel = path.normalize(path.join(String(stateDir), 'demo-base', String(sha).slice(0, 12)));
+  if (!home || path.isAbsolute(String(stateDir)) || rel.split(path.sep).includes('..')) throw new Error(`the state folder ${stateDir} is not inside the ticket's checkout`);
+  let cur = home;
+  for (const part of rel.split(path.sep)) {
+    cur = path.join(cur, part);
+    let st;
+    try {
+      st = fs.lstatSync(cur);
+    } catch {
+      break;
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`${cur} is a link or not a folder: no base checkout is set up through it`);
+  }
+  return path.join(home, rel);
+}
+
+const IN_PROGRESS = ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'];
+// Why a checkout may not be removed, or null: a Git operation in progress, an initialised submodule, a stash of its
+// branch, uncommitted, untracked or ignored files.
+function workInProgress(g, dir, branch) {
+  for (const name of IN_PROGRESS) {
+    const p = g.exec('git', ['rev-parse', '--git-path', name], { cwd: dir });
+    if (p.status !== 0) return 'its Git state could not be read';
+    if (fs.existsSync(path.resolve(dir, p.stdout.trim()))) return `a Git operation is in progress (${name})`;
+  }
+  const sub = g.exec('git', ['submodule', 'status'], { cwd: dir });
+  if (sub.status !== 0) return 'its submodules could not be read';
+  if (sub.stdout.split('\n').some((l) => l && !l.startsWith('-'))) return 'it has an initialised submodule';
+  if (branch) {
+    const stash = g.exec('git', ['stash', 'list', '--format=%gs'], { cwd: dir });
+    if (stash.status !== 0) return 'the stashes could not be read';
+    if (stash.stdout.split('\n').some((l) => l.includes(`on ${branch}:`) || l.includes(`On ${branch}:`))) return `a stash of ${branch} exists`;
+  }
+  const st = g.exec('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: dir });
+  if (st.status !== 0) return 'its status could not be read';
+  if (st.stdout.trim()) return `uncommitted or untracked work (${st.stdout.trim().split('\n')[0].trim()})`;
+  return null;
+}
+
+// A remote URL as host/path (scheme, user and `.git` dropped), to compare where origin fetches, pushes and delivers.
+const urlId = (u) => String(u ?? '').trim().replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]*@/, '').replace(/^([^/:]+):(?!\/)/, '$1/').replace(/\.git$/, '').replace(/\/+$/, '').toLowerCase();
+// Why origin cannot answer for the delivery, or null: it must fetch from where it pushes, and be the repository the run
+// delivered to when the run recorded one (`repo`: owner/name or a URL; the PR bot pushes to it directly).
+function deliveryOrigin(g, repo) {
+  const fetch = g.exec('git', ['remote', 'get-url', 'origin'], { cwd: g.main });
+  const push = g.exec('git', ['remote', 'get-url', '--push', 'origin'], { cwd: g.main });
+  if (fetch.status !== 0 || push.status !== 0) return 'origin could not be read';
+  const [f, p] = [urlId(fetch.stdout), urlId(push.stdout)];
+  if (f !== p) return `origin fetches from ${f} but pushes to ${p}`;
+  if (repo && f !== urlId(repo) && !f.endsWith(`/${urlId(repo)}`)) return `origin (${f}) is not the repository the run delivered to (${repo})`;
+  return null;
+}
+// Whether the delivery remote's own head of `branch` contains every sha of `shas` (asked once, now; never from a
+// remote-tracking ref): null, or why not.
+export function remoteHas(g, branch, shas, { remote = 'origin', repo = null } = {}) {
+  const off = deliveryOrigin(g, repo);
+  if (off) return off;
+  const r = g.exec('git', ['ls-remote', remote, `refs/heads/${branch}`], { cwd: g.main, timeoutSec: 60 });
+  if (r.status !== 0) return `the remote ${remote} could not be read`;
+  const [head, ref] = r.stdout.trim().split(/\s+/);
+  if (!/^[0-9a-f]{40}$/.test(head ?? '') || ref !== `refs/heads/${branch}`) return `${remote} has no branch ${branch}`;
+  for (const sha of [].concat(shas).filter(Boolean)) {
+    if (head === sha) continue;
+    if (g.exec('git', ['cat-file', '-e', `${head}^{commit}`], { cwd: g.main }).status !== 0) return `${remote}'s head of ${branch} (${head.slice(0, 7)}) is not known here`;
+    if (g.exec('git', ['merge-base', '--is-ancestor', sha, head], { cwd: g.main }).status !== 0) return `${remote}'s ${branch} does not contain ${sha.slice(0, 7)}`;
+  }
+  return null;
+}
+const registeredAt = (g, p) => listWorktrees(g.main, g).find((w) => realPath(w.path) === p && w.path !== g.main) ?? null;
+const leased = (g, p) => g.leases.some((l) => l.live && l.cwd && inside(realPath(l.cwd) ?? l.cwd, p));
+
+// Removes a delivered run's recorded worktree and local branch ({ worktree, branch } of its manifest; `deliveredOn`: the
+// remote branch its commits were delivered on when it is not its own, an epic ticket merged into its group; `repo`: the
+// repository the delivery pushed to): { removed, kept }. Every check, the remote's answer for both heads included, is made
+// before anything is removed.
+export function removeDelivered(g, item) {
+  const removed = [];
+  const kept = [];
+  const keep = (what, reason) => (kept.push({ what, reason }), { removed, kept });
+  const { worktree, branch } = item;
+  const w = worktree && fs.existsSync(worktree) ? registeredAt(g, worktree) : null;
+  if (worktree && fs.existsSync(worktree)) {
+    if (!w || !ownedPath(worktree, g.wtDir)) return keep(worktree, `not a worktree this repository's runs keep in ${g.wtDir} (as recorded, links resolved)`);
+    if (w.locked) return keep(worktree, 'it is locked');
+    if (leased(g, worktree)) return keep(worktree, 'a live stack-slot lease uses it');
+    const busy = workInProgress(g, worktree, w.branch ?? branch);
+    if (busy) return keep(worktree, busy);
+    if (branch && w.branch !== branch) return keep(worktree, `it has ${w.branch ?? 'a detached head'} checked out, not ${branch} as recorded`);
+  }
+  const ref = branch ? g.exec('git', ['rev-parse', '--verify', '-q', `refs/heads/${branch}`], { cwd: g.main }) : null;
+  const sha = ref?.status === 0 ? ref.stdout.trim() : null;
+  if (sha && listWorktrees(g.main, g).some((x) => x.branch === branch && realPath(x.path) !== worktree)) return keep(branch, 'it is checked out in another worktree');
+  if (!w && !sha) return { removed, kept };
+  const missing = remoteHas(g, item.deliveredOn ?? w?.branch ?? branch, [w?.head, sha], { repo: item.repo ?? null });
+  if (missing) return keep(w ? worktree : branch, missing);
+  if (w) {
+    const r = g.exec('git', ['worktree', 'remove', worktree], { cwd: g.main, timeoutSec: 600 });
+    if (r.status !== 0 || fs.existsSync(worktree)) return keep(worktree, `git refused to remove it (${r.stderr.trim().split('\n').pop()})`);
+    removed.push(worktree);
+  }
+  if (sha) {
+    // Deleted only if it still points where the remote was checked against.
+    const d = g.exec('git', ['update-ref', '-d', `refs/heads/${branch}`, sha], { cwd: g.main });
+    if (d.status !== 0) return keep(branch, `git refused to delete it (${d.stderr.trim().split('\n').pop()})`);
+    removed.push(`branch ${branch}`);
+  }
+  return { removed, kept };
+}
+
+// Removes a base checkout a bug's before run added ({ dir, sha, generated } as baseCheckout returned it): only at
+// `<ticket>/<stateDir>/demo-base/<sha12>` with no link on the way, detached at its base commit, and holding nothing but
+// the exact files the before run wrote, with the contents it wrote (`generated`: [{ path, sha256 }]; they are put back
+// first). Anything else, ignored files included, is a person's: the checkout is kept. { removed, kept }.
+export function removeBaseCheckout(g, root, item, { stateDir = '.factory/state' } = {}) {
+  const removed = [];
+  const kept = [];
+  const { sha } = item;
+  const generated = new Map((item.generated ?? []).filter((x) => x && typeof x === 'object').map((x) => [x.path, x.sha256]));
+  const dir = item.real ?? item.dir;
+  const keep = (reason) => (kept.push({ what: dir, reason }), { removed, kept });
+  if (!dir || !fs.existsSync(dir)) return { removed, kept };
+  let expected;
+  try {
+    expected = baseCheckoutDir(root, stateDir, String(sha));
+  } catch (error) {
+    return keep(`not a base checkout the before run added (${error.message})`);
+  }
+  const w = registeredAt(g, dir);
+  if (!w || dir !== expected || realPath(dir) !== dir) return keep('not a base checkout the before run added (as recorded, under the ticket\'s own checkout, with no link on the way)');
+  if (w.branch || w.head !== sha) return keep(`it is not detached at ${String(sha).slice(0, 7)} (a commit was made in it, or another head checked out)`);
+  if (w.locked) return keep('it is locked');
+  if (leased(g, dir)) return keep('a live stack-slot lease uses it');
+  const st = g.exec('git', ['status', '--porcelain', '--untracked-files=all', '--ignored'], { cwd: dir });
+  if (st.status !== 0) return keep('its status could not be read');
+  const lines = st.stdout.split('\n').filter(Boolean);
+  // Every changed, untracked or ignored path is one the before run wrote, still as it wrote it; otherwise nothing changes.
+  for (const line of lines) {
+    const file = line.slice(3).replace(/^"|"$/g, '');
+    const abs = path.join(dir, file);
+    if (!generated.has(file) || realPath(abs) !== abs || fileHash(abs) !== generated.get(file)) return keep(`uncommitted, untracked or ignored work (${line.trim()})`);
+  }
+  for (const line of lines) {
+    const file = line.slice(3).replace(/^"|"$/g, '');
+    if (line.startsWith('??') || line.startsWith('!!')) fs.rmSync(path.join(dir, file));
+    else if (g.exec('git', ['checkout', '--', file], { cwd: dir }).status !== 0) return keep(`${file} could not be restored`);
+  }
+  const busy = workInProgress(g, dir, null);
+  if (busy) return keep(busy);
+  const r = g.exec('git', ['worktree', 'remove', dir], { cwd: g.main, timeoutSec: 300 });
+  if (r.status !== 0 || fs.existsSync(dir)) return keep(`git refused to remove it (${r.stderr.trim().split('\n').pop()})`);
+  removed.push(dir);
+  return { removed, kept };
+}
+// The SHA-256 of a file's contents (null when it is not a readable file).
+export function fileHash(file) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+export const keepLocal = (g, env = process.env) => g.settings.keepLocal === true || env.FACTORY_KEEP_LOCAL === '1';
+
+// Runs `remove(g)` (removeDelivered / removeBaseCheckout over a run's manifest) on `root`'s prune context, only with
+// `prune.afterDelivery: true`, and not when the run keeps its local state (`--keep`, prune.keepLocal) or the automatic
+// prune is off (prune.enabled false, FACTORY_PRUNE=0). What is kept is logged with why. Returns { removed, kept, skipped }.
+export async function pruneRunLocal(root, remove, { label, log = console.log, context = pruneContext, env = process.env } = {}) {
+  if (env.FACTORY_PRUNE === '0' && context === pruneContext) return { skipped: 'FACTORY_PRUNE=0', removed: [], kept: [] };
+  let g;
+  try {
+    g = await context(root);
+  } catch (error) {
+    log(`${label}: local files kept (${error.message})`);
+    return { skipped: error.message, removed: [], kept: [] };
+  }
+  if (g.settings.afterDelivery !== true) return { skipped: 'prune.afterDelivery is off', removed: [], kept: [] };
+  if (keepLocal(g, env)) return { skipped: 'keep', removed: [], kept: [] };
+  if (g.settings.enabled === false) return { skipped: 'prune.enabled is false', removed: [], kept: [] };
+  const r = remove(g);
+  for (const k of r.kept) log(`${label}: kept ${k.what}: ${k.reason}`);
+  if (r.removed.length) log(`${label}: removed ${r.removed.join(', ')}`);
+  return { ...r, skipped: null };
 }
 
 // The automatic prune of `implement run` (at its start and its end): what may go goes, then the free space is read.

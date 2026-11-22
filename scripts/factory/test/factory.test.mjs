@@ -24,7 +24,14 @@ function repo(files) {
   }
   return root;
 }
-const factory = (root, args) => spawnSync(process.execPath, [FACTORY, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, PIPELINE_ROOT: '' } });
+// No test reaches a code host: the factory runs with a `gh` first on PATH that records its arguments and fails, whatever
+// the machine has signed in.
+const NO_HOST = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-no-host-')));
+const GH_CALLS = path.join(NO_HOST, 'calls.log');
+fs.writeFileSync(path.join(NO_HOST, 'gh'), `#!/bin/sh\necho "$*" >> "${GH_CALLS}"\nexit 1\n`, { mode: 0o755 });
+fs.writeFileSync(path.join(NO_HOST, 'gh.cmd'), `@echo %* >> "${GH_CALLS}"\r\n@exit /b 1\r\n`);
+process.on('exit', () => fs.rmSync(NO_HOST, { recursive: true, force: true }));
+const factory = (root, args) => spawnSync(process.execPath, [FACTORY, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, PIPELINE_ROOT: '', PATH: `${NO_HOST}${path.delimiter}${process.env.PATH ?? ''}` } });
 const read = (root, rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const RUST = {
@@ -368,6 +375,9 @@ test('init drafts a review gate that never lets a sensitive or shared change thr
 
 test('a repository with a test stack gets implement.ui.teststackCmd; doctor flags a stack without it', () => {
   const root = repo({ ...RUST, '.factory/stack/docker-compose.yaml': 'services: {}\n' });
+  // A GitHub origin: doctor asks the code host, and only the failing stub answers (Sol 38).
+  spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/acme/shop.git'], { cwd: root });
+  fs.rmSync(GH_CALLS, { force: true });
   assert.equal(factory(root, ['init', '--tools', 'claude']).status, 0);
   const config = JSON.parse(read(root, '.factory/config.json'));
   assert.deepEqual(config.implement.ui.teststackCmd, ['node', '.factory/bin/factory.mjs', 'teststack']);
@@ -377,6 +387,7 @@ test('a repository with a test stack gets implement.ui.teststackCmd; doctor flag
   const r = factory(root, ['doctor']);
   assert.match(r.stdout, /MISSING +UI verifiers build the subtask's stack .*would test whatever already runs/);
   assert.equal(r.status, 1);
+  assert.ok(fs.existsSync(GH_CALLS) && fs.readFileSync(GH_CALLS, 'utf8').trim(), 'doctor\'s code host calls went to the stub');
 });
 
 test('with demoVideo on, the agent instructions carry the feature-video definition of done; off, they do not', () => {

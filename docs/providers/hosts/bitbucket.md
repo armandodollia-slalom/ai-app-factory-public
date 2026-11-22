@@ -22,7 +22,7 @@
 - No merge bound to a head SHA. The gate re-reads the head right before merging and refuses if it moved. Host auto-merge is never used: `board sync` merges a cleared pull request itself when its head is green.
 - Required checks are partial: "Require passing builds" counts builds, and merge checks block only on the Premium plan (`enforce_merge_checks`). The gate refuses to merge until every expected pipeline of the head is green, whatever the branch settings say.
 - No uploads to a pull request. Demo videos stay on the storage branch and are linked.
-- No reopening a declined pull request. A PR is held as a draft, never closed: `implement.preOpen.afterOpen: "close-reopen"` uses `draft` here, and `factory doctor` flags the setting. A PR declined by a hold from 0.2.92 cannot be released; its run ends `release-unconfirmed`.
+- No reopening a declined pull request. A PR is held as a draft, never closed: `implement.preOpen.afterOpen: "close-reopen"` uses `draft` here, with a warning when `implement`, the review gate or `factory doctor` load the config, and a WARN row in `factory doctor`. A PR declined by a hold from 0.2.92 cannot be released; its run ends `release-unconfirmed`.
 
 **By hand:** the branch restrictions on the default branch (`factory review-gate enforce --dry-run` lists them), the merge check that resets approvals when the source branch changes (so that an approval of an earlier head does not count: Bitbucket records no commit per approval), and the repository variables for the pipelines.
 
@@ -46,6 +46,7 @@
 | `botIdentity` | yes | nothing to change |
 | `diff` | yes | nothing to change |
 | `reviewCommentThreads` | yes | nothing to change |
+| `stateEvents` | no | a person's close or reopen of a PR cannot be told from the pipeline's holds, so a bug fix on this host never merges itself (the review gate asks a person) |
 <!-- /generated:capabilities-bitbucket -->
 
 **Verified:** against fakes only. API docs, read 2026-11-17: <https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/>, <https://developer.atlassian.com/cloud/bitbucket/rest/api-group-commit-statuses/>, <https://developer.atlassian.com/cloud/bitbucket/rest/api-group-branch-restrictions/>, <https://developer.atlassian.com/cloud/bitbucket/rest/api-group-source/>.

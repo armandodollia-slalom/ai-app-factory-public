@@ -178,18 +178,15 @@ Each run saves its batch to `.factory/state/implement/batch.json` and each ticke
 session say so; `factory resume` restarts the batch in the background and `implement resume` (or the same
 `implement run`) continues it in the foreground.
 
-- **Tickets that finished** `done` keep their branch, and dependents still stack on them (`--force` redoes them).
+- **Tickets that finished** `done` stay done (their branch on the remote counts once the local one is removed after
+  delivery, see [disk.md](disk.md#after-a-delivery)), and dependents still stack on them (`--force` redoes them).
 - **Tickets in progress**, or that ended `error`, `fv-crashed`, `fv-not-started` or `fv-timed-out`, resume in their
   worktree. If the review had already approved the code, the run goes straight to the tests. An orchestrated
   ticket does not plan again: the orchestrator continues from what is on the branch.
 - **Tickets with a standing escalation** (`fv-escalated`, `fv-blocked-on-plan`, `review-escalated`) keep that
   outcome until the escalation note is gone, a person resolves it ([escalations](escalations.md#questions-and-the-resolve-checkbox)),
   or `--force` runs them.
-- **Delivery boundaries.** After the push and before the open (`branch-ci`): the delivery steps run again. A
-  delivery whose PR did not open (`pr-refused`, `gate-assessment-failed`, a failed open) resumes there, even while
-  the ticket waits for a person (`needs-human`). Right after the open, before it was recorded: the PR is found on
-  the host and adopted, never opened twice. After the open (`ci-wait`, `draft-back`): only the steps after the
-  open run.
+- **Delivery boundaries:** see the table below.
 - **An unconfirmed hold or release** (`hold-failed` after the open, `release-unconfirmed`) waits while the ticket
   is labelled `needs-human` and resumes at the CI wait once Resolved is ticked. Green: every hold not yet released
   is released, and the run ends `done` only when each release is confirmed (else `release-unconfirmed` again).
@@ -200,14 +197,42 @@ session say so; `factory resume` restarts the batch in the background and `imple
   makes no read and prints `PR state not checked`. A reopened ticket keeps its `reopened` label until that hold is
   confirmed; a run without `--pr` holds nothing and clears the label when it starts.
 
-**What a resume re-runs.** It reuses every finished agent stage (plan, pairs, review, tests, PR check), even when
-a person pushed to the branch in between: only CI proves the new head. A resumed delivery (`branch-ci`, or a PR
-that did not open) runs the delivery steps again: the analysis jobs and CI proof (proven again only when the head
-or base moved), the bug rating when none was saved (before the open), the demo video step (so the `demo-narrator`
-agent can run again), and a fixing round if the scans or CI fail again. Adopting a PR that already opened is a
-separate route: it goes straight to the CI wait, where a failing check can start a fixing round under a
-confirmed hold. A `gate-assessment-failed` on a PR that was already open (a re-delivery) runs every agent stage
-again, on hold, and updates that PR.
+**What a resume re-runs.** An interrupted ticket that stopped before its delivery reuses every finished agent stage
+(plan, pairs, review, tests, PR check); an epic group's saved PR check counts only for the very commit it reviewed (any
+commit since, a person's included, is checked again). Where the delivery stopped decides the rest, for a single ticket
+and an epic group alike:
+
+Every resume of a delivery that already pushed (`branch-ci`, before the open, an opened PR recorded or not, `ci-wait`,
+`draft-back`) first asks the remote (`git ls-remote`) for the branch head, before it adopts a PR or continues, a single
+ticket and an epic group alike. **Unreadable**: the resume stops where it is, nothing runs, and the next resume tries
+again. **Moved**: the head differs from this checkout's, or from the commit the run itself last pushed or proved (the
+record's `pushedHead` at the branch CI, `provenHead` before the open, `deliveredHead` after it; so a checkout an earlier
+resume already brought forward still counts as moved). A person's commits are fast-forwarded into the checkout, or the
+resume stops (diverged, or local changes in the way); then the stages run again on them, with the known PR held first
+(one the earlier run opened but did not record is found on the host first, never adopted past the push). A record from
+before these heads were kept is compared with the local head. Otherwise:
+
+| Where it stopped | What the resume does |
+| --- | --- |
+| After the push, before the open (`branch-ci`) | the delivery steps run again |
+| The PR did not open, or its rating failed on a PR already open and on hold (`pr-refused`, `gate-assessment-failed`, a failed open) | a held PR's hold is confirmed on the host first, then the delivery steps run again on the head CI proved (below) |
+| The PR opened but the run did not record it | the PR is found on the host and adopted, never opened twice; its rating is published (or the PR held for a person) before anything else |
+| The PR opened and was recorded, the rating not yet published | the rating is published first (or the PR held for a person), then the steps after the open, never the stages again |
+| After the open (`ci-wait`, `draft-back`) | only the steps after the open run; a recorded hold is confirmed on the host again before any fixing round (one a person released is held again first) |
+| An epic group whose PR is open, or whose PR a recorded close-reopen hold left closed, a ticket joining it | a recorded hold counts only once the host confirms it again, otherwise the PR is held before any agent |
+
+Whatever the route, a bug PR is marked ready only on a head whose rating the host shows: after a fixing commit (or a
+person's push) the new head is rated, or published as "needs a person", while the PR is still held; a publication that
+fails keeps it held and the run stops (`gate-assessment-failed`).
+
+A delivery resumed before the open (the routes above that run the delivery steps again) calls them again: the analysis jobs and the branch CI proof (whatever those reuse for
+an unchanged head is theirs), the bug rating unless one was saved for this very head (a rating repeated can come out
+different and change whether the PR merges itself), the demo video step unless this very commit's step finished without
+a block and its media is stored (otherwise the `demo-narrator` agent can run again), and a fixing round if the scans or
+CI fail again. A bug PR opens held (a draft, else labelled) and is recorded as soon as the host returns it, before any
+other call, with that draft hold recorded as not yet confirmed (a resume from there releases it too); its rating is published before it can be marked ready, and only once the host shows the gate's state for
+the PR's head is it published (a saved rating for another head is published as "needs a person"). A publication that
+fails is a failure: the PR stays on hold for a person (`gate-assessment-failed`) and a resume publishes it again.
 
 **Agent provider outages.** When an agent CLI says its provider will serve no more requests for a while (a quota or
 usage limit), the run treats it as an interruption: the ticket ends `agent-unavailable` or `error`, no new ticket

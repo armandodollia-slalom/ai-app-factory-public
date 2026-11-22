@@ -21,7 +21,7 @@ import { board, boardEvent, claimStories, failedResults, skipRefused, syncBoard 
 import { autoPrune } from '../factory/lib/prune.mjs';
 import { epicBranchFor, epicToJoin, formatEpicStatus, listEpicRuns, loadEpicRun, runEpic, saveEpicRun } from './lib/epic.mjs';
 import { GROUPINGS, PR_SPLITS, deliveryShape } from './lib/epic-plan.mjs';
-import { applyEnv, batchFile, describePlan, recoverDeadRun, formatSummary, implementStory, loadRun, plan, recordUnrun, runBatch, runsDir, saveRun, startResolvedReruns } from './lib/implement.mjs';
+import { applyEnv, backgroundResumeArgs, batchFile, cleanDeliveredBatch, markHistoryUnknown, describePlan, recoverDeadRun, formatSummary, implementStory, loadRun, plan, recordUnrun, runBatch, runsDir, saveRun, startResolvedReruns } from './lib/implement.mjs';
 import { parallelFor } from './lib/resources.mjs';
 import { requeue } from './lib/requeue.mjs';
 import { stopRun } from './lib/stop.mjs';
@@ -34,13 +34,17 @@ const SCRIPT = fileURLToPath(import.meta.url);
 const USAGE = `Usage: node scripts/implement/implement.mjs <command> [options]
 
   run <KEY...> | --epic <EPIC> [--delivery epic|story] [--grouping auto|epic|ticket] [--pr-split epic|story|groups] [--standalone]
-        [--parallel N|auto] [--base <ref>] [--pr] [--force] [--takeover] [--dry-run]
+        [--parallel N|auto] [--base <ref>] [--pr] [--keep] [--force] [--takeover] [--dry-run]
         implement the given board tickets (fetched into .factory/state/board/; a cached story.md or a
         <KEY>-<title>.md file works too), or every story of an epic in Blocked-by order: each gets a
         worktree and branch, the implementer agent, the review loop and verified tests. Stories "Blocked
         by" another story in the batch run after it, stacked on its branch. The run syncs the board and
         claims each story's card first; a card another machine holds is skipped unless --takeover.
-        --force runs stories again that are already implemented (or whose card is in Pending Review or Done).
+        --force runs stories again that are already implemented (or whose card is in Pending Review or Done);
+        their delivery then needs a person's review (a rejection may be missing from the ticket's record).
+        With prune.afterDelivery (alpha, off by default), once a ticket or unit is delivered and the remote
+        confirms it, the worktree and local branch its run created are removed (docs/ai-pipeline/disk.md);
+        --keep (or prune.keepLocal) keeps them for debugging.
         Delivery (implement.delivery, default epic): with --epic, the epic is planned once (design note),
         its stories run from one epic branch and merge into it, and the epic gets ONE PR (a bug epic: one
         PR per group of bugs the orchestrator chose; --grouping). A feature epic: --pr-split (implement.epic.prSplit)
@@ -48,7 +52,7 @@ const USAGE = `Usage: node scripts/implement/implement.mjs <command> [options]
         implement.epic.maxStoriesPerGroup each). --delivery story keeps a branch and PR
         per story. A single ticket of an epic with an epic run in progress joins that epic's branch
         unless --standalone.
-  resume [KEY] [--parallel N] [--pr] [--background] [--stopped]
+  resume [KEY] [--parallel N] [--pr] [--keep] [--background] [--stopped]
                                  continue the last run that did not finish: stories it finished are
                                  kept, interrupted ones resume in their worktree, the rest run.
                                  --stopped also continues a story \`implement stop\` ended while it
@@ -95,7 +99,9 @@ const interruptedBatch = (config) => {
   return batch && !batch.finishedAt && !isProcessAlive(batch.pid, batch.boot) ? batch : null;
 };
 
-async function runStories(config, inputs, { base, force = false, takeover = false, parallel, pr = false, dryRun = false, extraSources = [], epicRun = null, delivery = 'story', resumeStopped = false }) {
+async function runStories(config, inputs, { base, force = false, takeover = false, parallel, pr = false, keep = false, dryRun = false, extraSources = [], epicRun = null, delivery = 'story', resumeStopped = false }) {
+  // --keep: what a delivered run made on this machine stays (for debugging); every process of the run reads it.
+  if (keep) process.env.FACTORY_KEEP_LOCAL = '1';
   // Every record this run writes (usage, decisions, outcomes) says how it was delivered.
   process.env.PIPELINE_DELIVERY = delivery;
   // feature verification leases its own stack slot per story when several run at once (scripts/feature-verification/lib/slots.mjs).
@@ -103,7 +109,10 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
   const stories = plan(config, inputs, { base, force, resumeStopped, checkPrState: !dryRun });
   if (!dryRun) {
     // The board: closed stories to Done and epics in step, then this machine claims the cards it runs.
-    syncBoard(config.root);
+    const synced = syncBoard(config.root);
+    // A forced run, or one that claims cards the board could not sync first, may miss a person's rejection recorded only
+    // on the board or on a PR the ticket's record does not name: its delivery needs a person's review (review gate).
+    if (force || !synced) markHistoryUnknown(config, stories.filter((s) => !s.skip), force ? 'a forced re-run (implement run --force): a rejection recorded only on the board or on a PR its record does not name may be missing' : 'the board could not be synced before the run claimed it: a rejection a person made since the last sync may be missing');
     // A run resuming at its CI wait does no new work on the ticket: its card is already in review, where the
     // interrupted run moved it, so it is not claimed again (council C8: resume skipped it as 'in review').
     const claims = claimStories(config.root, stories.filter((s) => !s.skip && !s.ciResume).map((s) => s.key), { force, takeover });
@@ -150,7 +159,7 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
       process.env.FACTORY_DISK_WORKTREES = path.resolve(config.root, config.implement.worktreeDir.replace('{repo}', path.basename(config.root)));
     }
   }
-  const batch = { inputs: inputs.map((p) => path.resolve(p)), extraSources, base, parallel, pr, delivery, epic: epicRun ? { key: epicRun.epic.key, only: epicRun.only ?? null, grouping: epicRun.grouping ?? null, prSplit: epicRun.prSplit ?? null } : null, ...selfProcess(), startedAt: nowIso(), finishedAt: null };
+  const batch = { inputs: inputs.map((p) => path.resolve(p)), extraSources, base, parallel, pr, keep: Boolean(keep), delivery, epic: epicRun ? { key: epicRun.epic.key, only: epicRun.only ?? null, grouping: epicRun.grouping ?? null, prSplit: epicRun.prSplit ?? null } : null, ...selfProcess(), startedAt: nowIso(), finishedAt: null };
   writeJson(batchFile(config), batch);
   let results;
   let epicSummary = null;
@@ -181,6 +190,8 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
   // their feature video was pending hours after it was published): the sync links the published videos to the
   // tickets and evaluates the gate of every open PR again with the CI that has finished since.
   if (results.some((r) => r.pr)) syncBoard(config.root);
+  // What each delivered ticket made here (its manifest) goes once nothing in the batch or a saved resume builds on it.
+  if (!dryRun && !epicRun) await cleanDeliveredBatch(config, stories);
   // The run's own build output and superseded images go once it no longer needs them.
   if (!dryRun) await autoPrune(config.root, { when: 'end', log });
   console.log(`\n${formatSummary(results)}`);
@@ -190,7 +201,7 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
 }
 
 // `pipeline resume` fans out to every stage and waits for each, so the batch restarts detached.
-function resumeInBackground(config, key) {
+function resumeInBackground(config, key, { keep = false } = {}) {
   const batch = interruptedBatch(config);
   if (!batch) {
     console.log('No interrupted implement run.');
@@ -201,9 +212,9 @@ function resumeInBackground(config, key) {
     console.log(`The interrupted implement run does not include ${key}.`);
     return 0;
   }
-  const bg = spawnBackground(config, { script: SCRIPT, key: 'batch', stage: 'implement', args: ['resume'] });
-  // Claimed right away so a second `resume` does not start the batch twice.
-  writeJson(batchFile(config), { ...batch, pid: bg.pid, boot: bootId() });
+  const bg = spawnBackground(config, { script: SCRIPT, key: 'batch', stage: 'implement', args: backgroundResumeArgs({ keep }) });
+  // Claimed right away so a second `resume` does not start the batch twice; an explicit --keep stays with the batch.
+  writeJson(batchFile(config), { ...batch, ...(keep ? { keep: true } : {}), pid: bg.pid, boot: bootId() });
   console.log(`Resumed the interrupted implement run in the background (pid ${bg.pid}, log: ${bg.log}).`);
   return 0;
 }
@@ -301,11 +312,11 @@ async function main() {
       }
       if (!flags['dry-run'] && config.baseRef.startsWith('origin/') && git(config.root, ['fetch', '-q', 'origin']).status !== 0) log('git fetch origin failed; using the local refs.');
       const parallel = parallelFor(config, flags.parallel, { dryRun: Boolean(flags['dry-run']) });
-      return runStories(config, positional, { base: flags.base ?? config.baseRef, force: Boolean(flags.force), takeover: Boolean(flags.takeover), parallel, pr: Boolean(flags.pr), dryRun: Boolean(flags['dry-run']), extraSources: epicDir ? [epicDir] : [], epicRun, delivery: epicRun ? 'epic' : delivery });
+      return runStories(config, positional, { base: flags.base ?? config.baseRef, force: Boolean(flags.force), takeover: Boolean(flags.takeover), parallel, pr: Boolean(flags.pr), keep: Boolean(flags.keep), dryRun: Boolean(flags['dry-run']), extraSources: epicDir ? [epicDir] : [], epicRun, delivery: epicRun ? 'epic' : delivery });
     }
 
     case 'resume': {
-      if (flags.background) return resumeInBackground(config, positional[0]);
+      if (flags.background) return resumeInBackground(config, positional[0], { keep: Boolean(flags.keep) });
       // A crashed run's language-server daemons outlive it and hold their slots: stop them first.
       const reaped = run(process.execPath, [path.join(INSTALL_ROOT, 'scripts/lsp/lspd.mjs'), 'orphans'], { cwd: config.root, timeoutSec: 60 });
       try {
@@ -340,7 +351,7 @@ async function main() {
         const tickets = collectStories(inputs).map((s) => loadTicket(config, s.key, { fetch: false })).filter(Boolean);
         epicRun = { epic: epicInfo(epic, batch.epic.key), tickets, only: batch.epic.only ?? null, grouping: batch.epic.grouping ?? null, prSplit: batch.epic.prSplit ?? null, groups: deliveryShape(tickets, batch.epic.grouping ?? config.implement.epic?.grouping ?? 'auto', batch.epic.prSplit ?? config.implement.epic?.prSplit ?? 'epic').kind === 'groups' };
       }
-      return runStories(config, inputs, { base: batch.base, parallel, pr: Boolean(flags.pr ?? batch.pr), extraSources: batch.extraSources ?? [], epicRun, delivery: batch.delivery ?? 'story', resumeStopped: Boolean(flags.stopped) });
+      return runStories(config, inputs, { base: batch.base, parallel, pr: Boolean(flags.pr ?? batch.pr), keep: Boolean(flags.keep ?? batch.keep), extraSources: batch.extraSources ?? [], epicRun, delivery: batch.delivery ?? 'story', resumeStopped: Boolean(flags.stopped) });
     }
 
     case 'requeue': {

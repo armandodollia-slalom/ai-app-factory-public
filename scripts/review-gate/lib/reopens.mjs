@@ -1,9 +1,15 @@
-// Human reopens of a triaged bug ticket, counted apart from feature verification's bug-fix cycles. `board sync` finds them:
-//   card              the card moved back to In Progress from Pending Review or Done with no pipeline
-//                     event behind it (the last pipeline event on the card left it in review or done)
-//   issue             the issue was reopened (it sits open in Done, closed earlier)
+// Human reopens of a bug ticket (a person rejected a delivery), counted apart from feature verification's bug-fix
+// cycles. `board sync` finds them:
+//   card              the card moved back to In Progress, Ready or Backlog from Pending Review or Done with no
+//                     pipeline event behind it (the last pipeline event on the card left it in review or done)
+//   issue             the issue was reopened (open again after it was closed)
 //   changes-requested a "changes requested" review on the PR, against the tickets it names (or all the
 //                     PR's tickets when it names none); each review counts once
+//   pr-closed         a gated PR closed without merge (the pipeline never closes one, except a close-reopen hold)
+//   requeue           `implement requeue` running a ticket again after a person resolved an escalation of a delivery
+//                     that had a PR
+// A reopen is kept in the ticket's `## Triage` section and in the metrics (`decision-outcomes.jsonl`); every assessment
+// reads both, so a re-run, a follow-up PR or a group PR still sees it.
 // The board is a user project, so projects_v2_item webhooks don't fire and Actions can't watch lane
 // moves: the sync compares the card with the last pipeline event instead.
 //
@@ -16,12 +22,28 @@ const KEY = /\b([A-Z][A-Z0-9]*-\d+)\b/g;
 
 // The reopen a card shows, or null. `item`: { column, state, stateReason }; `marker`: the last
 // pipeline event marker on the issue ({ event, column }).
+const BACK = { inProgress: 'In Progress', ready: 'Ready', backlog: 'Backlog' };
 export function cardReopen(item, marker) {
   const left = marker?.column ?? null;
   if (!['review', 'done'].includes(left)) return null;
-  if (item.column === 'inProgress') return { source: 'card', detail: `card moved from ${left === 'review' ? 'Pending Review' : 'Done'} back to In Progress` };
-  if (item.state === 'OPEN' && item.column === 'done' && item.stateReason === 'REOPENED') return { source: 'issue', detail: 'issue reopened' };
+  if (BACK[item.column]) return { source: 'card', detail: `card moved from ${left === 'review' ? 'Pending Review' : 'Done'} back to ${BACK[item.column]}` };
+  if (item.state === 'OPEN' && item.stateReason === 'REOPENED') return { source: 'issue', detail: 'issue reopened' };
   return null;
+}
+
+// One reopen, however many places record it: the same source, PR and time (to the second).
+const reopenId = (r) => `${r?.source ?? ''}|${r?.pr ?? ''}|${String(r?.at ?? '').slice(0, 19)}`;
+export function mergeReopens(...lists) {
+  const out = new Map();
+  for (const r of lists.flat()) if (r && typeof r === 'object' && !out.has(reopenId(r))) out.set(reopenId(r), r);
+  return [...out.values()];
+}
+
+// Every recorded reopen of a ticket: its `## Triage` section's and the metrics' `reopen` rows (either may be missing: a
+// triage written again from a stale assessment, a checkout without the metrics).
+export function ticketReopens({ key, triage = null, outcomes = [] }) {
+  const rows = (outcomes ?? []).filter((r) => r?.type === 'reopen' && r.story === key).map((r) => ({ at: r.ts ?? null, source: r.source ?? 'reopen', detail: r.detail ?? null, by: r.by ?? null, pr: r.pr ?? null, afterMerge: Boolean(r.afterMerge) }));
+  return mergeReopens(triage?.reopens ?? [], rows);
 }
 
 // The tickets a "changes requested" review names (in its body or its inline comments), else all of them.
@@ -57,6 +79,14 @@ export function withReopen(triage, reopen, settings) {
 export function reopenDecisionNote(reopen) {
   const who = reopen.by ? ` by @${reopen.by}` : '';
   const where = reopen.pr ? ` on ${reopen.pr}` : '';
-  const head = reopen.source === 'changes-requested' ? `Changes requested${who}${where}` : reopen.source === 'issue' ? `Issue reopened${who}` : `Card moved back to In Progress${who}`;
+  const head = reopen.source === 'changes-requested'
+    ? `Changes requested${who}${where}`
+    : reopen.source === 'issue'
+      ? `Issue reopened${who}`
+      : reopen.source === 'pr-closed'
+        ? `PR closed without merge${where}`
+        : reopen.source === 'requeue'
+          ? `Re-queued after a person's decision${where}`
+          : `Card moved back to ${/back to (.+)$/.exec(reopen.detail ?? '')?.[1] ?? 'In Progress'}${who}`;
   return `Human reopen (${head}${reopen.afterMerge ? ', after the PR merged' : ''}): ${reopen.feedback ? reopen.feedback.replace(/\s+/g, ' ').trim() : 'no reason given; see the latest comments on this issue and its PR.'}`;
 }

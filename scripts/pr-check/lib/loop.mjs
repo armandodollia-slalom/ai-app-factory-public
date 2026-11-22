@@ -47,14 +47,29 @@ export function councilLenses(council) {
     const critic = LENSES[COUNCIL_CRITIC[m.lens]];
     out[m.name] = { agent: critic.agent, code: m.name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'MEMBER', title: `${critic.title}, through the ${m.lens} lens (council member ${m.name})`, member: m };
   }
-  if (!council.members.some((m) => m.lens === 'acceptance') && !out.acceptance) out.acceptance = LENSES.acceptance;
+  // The stage's acceptance critic, under a key no member's name takes (a member named `acceptance` with another lens).
+  if (!council.members.some((m) => m.lens === 'acceptance')) out[freeKey('acceptance', Object.keys(out))] = LENSES.acceptance;
   return out;
 }
-export const lensInfo = (ctx, lens) => ctx.councilLenses?.[lens] ?? LENSES[lens];
+// A stage critic's key that no member's name takes: its own name, else `<name>-critic`, `<name>-critic-2`, ...
+const freeKey = (name, taken) => {
+  if (!taken.includes(name)) return name;
+  for (let i = 1; ; i++) if (!taken.includes(i === 1 ? `${name}-critic` : `${name}-critic-${i}`)) return i === 1 ? `${name}-critic` : `${name}-critic-${i}`;
+};
+// A stage critic whose name a member took sits under `<name>-critic` (activeLenses).
+export const lensInfo = (ctx, lens) => ctx.councilLenses?.[lens] ?? LENSES[lens] ?? LENSES[String(lens).replace(/-critic(?:-\d+)?$/, '')];
+// Whether `key` is the stage's own critic for `lens` (design, video), never a council member however it is named.
+const stageCritic = (ctx, key, lens) => lensInfo(ctx, key) === LENSES[lens];
 // A lens's title, a council member's included (the report names every lens it scored).
 export const lensTitle = (ctx, lens) => lensInfo(ctx, lens)?.title ?? lens;
+// Whether a critic rates the ticket's acceptance lines: a council member by its lens alone (never its name), otherwise the
+// stage's acceptance critic, whatever key it sits under.
+const isAcceptanceLens = (ctx, name) => {
+  const info = lensInfo(ctx, name);
+  return info?.member ? info.member.lens === 'acceptance' : info === LENSES.acceptance;
+};
 // The lenses that rate the ticket's acceptance lines.
-const acceptanceLensesOf = (ctx) => (ctx.councilLenses ? Object.entries(ctx.councilLenses).filter(([name, l]) => name === 'acceptance' || l.member?.lens === 'acceptance').map(([name]) => name) : ['acceptance']);
+const acceptanceLensesOf = (ctx) => (ctx.councilLenses ? Object.keys(ctx.councilLenses).filter((name) => isAcceptanceLens(ctx, name)) : ['acceptance']);
 
 // The lenses of a round; `ctx.only` (--lenses) narrows them, for example to the design lens of an epic.
 export function activeLenses(ctx) {
@@ -66,7 +81,7 @@ export function activeLenses(ctx) {
     const own = Object.keys(ctx.councilLenses);
     const covered = new Set(Object.values(ctx.councilLenses).map((l) => (l.member ? COUNCIL_CRITIC[l.member.lens] : null)).filter(Boolean));
     const extra = [...(covered.has('flow') ? [] : ['flow']), ...(ctx.isFrontend && !covered.has('design') ? ['design'] : []), ...(hasVideo ? ['video'] : [])];
-    const lenses = [...own, ...extra.filter((l) => !own.includes(l))];
+    const lenses = [...own, ...extra.map((l) => freeKey(l, own))];
     return ctx.only?.length ? lenses.filter((l) => ctx.only.includes(l) || own.includes(l)) : lenses;
   }
   const lenses = ['acceptance', 'flow', ...(ctx.isFrontend ? ['design'] : []), 'style', ...(hasVideo ? ['video'] : [])];
@@ -514,12 +529,23 @@ export function carryOver(ctx, history, gitImpl) {
   // A fix that addressed only minor findings re-runs only the lenses those findings were on (cost, dogfood C4): a lens
   // that scored 10 with nothing upheld is carried, except acceptance (council C7): every round that can end PASS or
   // ACCEPTED rates every ticket line against the code it ends on.
+  // A council member's scope: test files for test-value, frontend files for ui, the production code for the others; it is
+  // carried only when the fix touched nothing in it, on both paths.
+  const outOfScope = (m) => !changed.some((f) => (m.lens === 'test-value' ? /(^|\/)(e2e|tests?)\/|\.(spec|test)\./.test(f) : m.lens === 'ui' ? Boolean(ctx.frontendHit?.(f)) : !/(^|\/)(e2e|tests?)\/|\.(spec|test)\.|^\.factory\//.test(f)));
+  const memberOf = (lens) => lensInfo(ctx, lens)?.member ?? null;
   if (last.upheld.length && last.upheld.every((f) => f.severity === 'minor')) {
-    for (const lens of Object.keys(last.lensScores)) if (lens !== 'acceptance' && clean(lens) && (lens !== 'video' || (!ui && !specs && framesSame))) carry[lens] = 10;
+    for (const lens of Object.keys(last.lensScores)) {
+      if (isAcceptanceLens(ctx, lens) || !clean(lens)) continue;
+      const m = memberOf(lens);
+      if (m ? outOfScope(m) : !stageCritic(ctx, lens, 'video') || (!ui && !specs && framesSame)) carry[lens] = 10;
+    }
     return carry;
   }
-  if (clean('design') && !ui) carry.design = 10;
-  if (clean('video') && !ui && !specs && framesSame) carry.video = 10;
+  // The stage's own design and video critics, found by what they are, not by name (a member may be named `design`).
+  for (const lens of Object.keys(last.lensScores)) {
+    if (stageCritic(ctx, lens, 'design') && clean(lens) && !ui) carry[lens] = 10;
+    if (stageCritic(ctx, lens, 'video') && clean(lens) && !ui && !specs && framesSame) carry[lens] = 10;
+  }
   // A council member need not sit again when its last score passed, nothing it raised was upheld, and the fix touched
   // nothing it judges (dogfood C14: every member re-sat every round). Its scope: test files for test-value, frontend
   // files for ui, the production code for the others. Never the acceptance lens: every ticket line is rated again.
@@ -527,8 +553,7 @@ export function carryOver(ctx, history, gitImpl) {
     const lens = m.name;
     if (!(lens in last.lensScores) || m.lens === 'acceptance') continue;
     const passed = last.lensScores[lens] >= (ctx.council.passScore ?? 9) && !last.upheld.some((f) => f.lens === lens);
-    const inScope = (f) => (m.lens === 'test-value' ? /(^|\/)(e2e|tests?)\/|\.(spec|test)\./.test(f) : m.lens === 'ui' ? Boolean(ctx.frontendHit?.(f)) : !/(^|\/)(e2e|tests?)\/|\.(spec|test)\.|^\.factory\//.test(f));
-    if (passed && !changed.some(inScope)) carry[lens] = last.lensScores[lens];
+    if (passed && outOfScope(m)) carry[lens] = last.lensScores[lens];
   }
   return carry;
 }
@@ -868,9 +893,10 @@ export async function runPrCheck(config, ctx, { fix, resume = null, onProgress =
     // With a council, the stage's own design and video critics carry over as they do without one (a fix that cannot have
     // changed what they judge), and so does a member whose last score passed and whose scope the fix did not touch
     // (carryOver); other members sit again.
-    const own = { ...carryOver(ctx, history, git), ...(ctx.ciFixIds?.length && activeLenses(ctx).includes('video') ? { video: 10 } : {}) };
+    const videoCritic = activeLenses(ctx).find((k) => stageCritic(ctx, k, 'video'));
+    const own = { ...carryOver(ctx, history, git), ...(ctx.ciFixIds?.length && videoCritic ? { [videoCritic]: 10 } : {}) };
     const memberNames = new Set((ctx.council?.members ?? []).map((m) => m.name));
-    const carry = ctx.council ? Object.fromEntries(Object.entries(own).filter(([lens]) => memberNames.has(lens) || (['design', 'video'].includes(lens) && !ctx.councilLenses[lens]))) : own;
+    const carry = ctx.council ? Object.fromEntries(Object.entries(own).filter(([lens]) => memberNames.has(lens) || stageCritic(ctx, lens, 'design') || stageCritic(ctx, lens, 'video'))) : own;
     const result = await runRound(config, ctx, round, previousUpheld, { carry });
     const entry = { round, score: result.score, lensScores: result.lensScores, raised: result.findings.length, upheld: result.upheld, followUps: result.followUps ?? [], questions: result.questions ?? [], failedLenses: result.failedLenses, summary: result.summary, videoKey: ctx.videoKey ?? null, sideEffects: result.sideEffects ?? [] };
     history.push(entry);

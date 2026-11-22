@@ -384,7 +384,8 @@ export function prOpenRecords(cwd, branch, stateDir = '.factory/state') {
 // with the body reduced step by step in a fixed order (never an agent); the accepted body says what it left out and the
 // left-out sections follow as comments. The full body and every attempt are kept in the run records first. Refused even
 // with the shortest body: { url: null, refused: true } (the caller keeps the CI-proven head for `implement resume`).
-export async function openPullRequest(publisher, { cwd, branch, base, title, body, draft = false, minimalTitle = null }, { run: r, mergeBase = mergeLatestBase } = {}) {
+// `onOpened(url)`: called the moment the host returns the PR, before any follow-up call (the caller records the open).
+export async function openPullRequest(publisher, { cwd, branch, base, title, body, draft = false, minimalTitle = null }, { run: r, mergeBase = mergeLatestBase, onOpened = null } = {}) {
   const pushed = pushBranch(publisher, { cwd, branch, base }, { mergeBase });
   if (!pushed.pushed) return { url: null, pushed: false, env: publisher.env, reason: pushed.reason };
   const host = publisherHost(publisher, { cwd, ...(r ? { run: r } : {}) });
@@ -413,6 +414,13 @@ export async function openPullRequest(publisher, { cwd, branch, base, title, bod
       onAttempt: (a) => a.outcome === 'refused' && defaultLog(`${branch}: the code host refused the PR's text (step ${a.step}${a.dropped.length ? `, without ${a.dropped.join(', ')}` : ''}); trying a shorter body`),
     });
     const pr = sent.result;
+    if (pr?.url && onOpened) {
+      try {
+        await onOpened(pr.url);
+      } catch {
+        // the caller records it again from the result
+      }
+    }
     const reduced = sent.step.step > 0 ? { dropped: sent.step.dropped, attempts: sent.attempts } : null;
     let comments = [];
     if (reduced) comments = await postOmitted(sent.step.omitted, (text) => host.pr.comment(pr.number ?? pr.url, text));

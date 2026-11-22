@@ -185,7 +185,7 @@ export function githubTracker(config, { gh = defaultGh } = {}) {
     return rows.map(fromIssue).filter((t) => (!type || t.type === type) && (!updatedSince || String(t.updatedAt) >= updatedSince));
   }
 
-  function view(number, fields = 'number,title,body,labels,state,updatedAt,url') {
+  function view(number, fields = 'number,title,body,labels,state,stateReason,updatedAt,url') {
     const i = okJson(['issue', 'view', String(number), '-R', ticketsRepo(), '--json', fields]);
     return i ? fromIssue({ number: Number(number), ...i }) : null;
   }

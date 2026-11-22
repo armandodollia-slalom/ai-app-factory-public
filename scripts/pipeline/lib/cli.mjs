@@ -86,7 +86,8 @@ export function runMain(main, tag) {
         else console.error(`[${tag}] hook error: ${error.message}`);
         process.exit(0);
       }
-      console.error(error.stack ?? error.message);
+      // A configuration that does not load is the user's to fix: its message says what, a stack trace adds nothing.
+      console.error(error?.code === 'config' ? `${tag}: ${error.message}` : (error.stack ?? error.message));
       process.exit(1);
     },
   );

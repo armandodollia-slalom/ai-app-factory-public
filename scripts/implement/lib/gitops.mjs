@@ -116,6 +116,10 @@ export function createSubtaskWorktree(storyWorktree, { prefix, key, id }) {
 }
 
 // Subtask worktrees of a story (or of every story) that are still registered with git.
+// A stacked input (a blocker's branch to start from or merge) as this checkout can use it: the local branch, or, once a
+// delivered blocker's local branch was removed (prune.mjs removeDelivered), the remote one it was delivered to.
+export const stackedRef = (root, ref) => (!ref || revExists(root, ref) || !revExists(root, `refs/remotes/origin/${ref}`) ? ref : `refs/remotes/origin/${ref}`);
+
 export function listSubtaskWorktrees(root, prefix, key = null) {
   const out = [];
   let current = null;

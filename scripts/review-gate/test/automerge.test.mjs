@@ -1,6 +1,9 @@
 // Review gate, step 4: auto-merge for Low PRs, behind implement.autoMerge.enabled, through one merge
 // function with a configurable identity.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { test } from 'node:test';
 import { parseState } from '../lib/gate.mjs';
 import { mergeIdentity, mergePr } from '../lib/github.mjs';
@@ -114,20 +117,63 @@ test('a PR an earlier gate sent to review only because a merge failed is merged 
   assert.deepEqual(w.pr.labels.sort(), ['approvals:0', 'auto-merged']);
 });
 
-test('the pipeline\'s own base merges into a waiting PR are not a change to review', async () => {
+test('the pipeline\'s own base merges into a waiting PR are told apart from a real push', async () => {
   const { onlyBaseMergesSince } = await import('../lib/sync.mjs');
   const merge = (sha, message) => ({ sha, parents: [{}, {}], commit: { message } });
   const commits = [{ sha: 'a', parents: [{}], commit: { message: 'fix' } }, merge('b', 'Merge main into this branch (keep the PR mergeable)'), merge('c', "Merge branch 'main' into bugfix/x")];
   assert.equal(onlyBaseMergesSince(commits, 'a'), true);
   assert.equal(onlyBaseMergesSince([...commits, { sha: 'd', parents: [{}], commit: { message: 'more' } }], 'a'), false, 'a real push');
   assert.equal(onlyBaseMergesSince(commits, 'zzz'), false, 'unknown history is a change');
-  const w = lowPr({ checks: 'pending' });
-  w.publish();
-  w.pr.commits = [{ sha: w.pr.headRefOid, parents: [{}], commit: { message: 'fix' } }, merge('m1', 'Merge main into this branch (keep the PR mergeable)')];
-  w.pr.headRefOid = 'm1';
-  w.pr.checks = [{ name: 'ci', bucket: 'pass' }];
-  syncGate(w.config, { gh: w.gh.gh, items: [], metricsConfig: w.config, markerOf: () => null });
-  assert.equal(w.pr.state, 'MERGED');
+});
+
+// ADV2-R4-01: a rating is bound to the PR's own change (its diff from the merge base), not to the head commit.
+test('a rating survives the pipeline\'s base merge; a person\'s commit or a conflict resolved differently voids it', () => {
+  const g = (root, ...args) => git(root, '-c', 'user.email=p@example.com', '-c', 'user.name=P', ...args);
+  const sync = (w) => syncGate(w.config, { gh: w.gh.gh, items: [], metricsConfig: w.config, markerOf: () => null });
+  // The base moves on another file; the pipeline merges it into the waiting PR: the PR's own change is the same.
+  const baseMerged = (w, file = 'src/Other.cs', text = 'other') => {
+    const branch = git(w.root, 'rev-parse', '--abbrev-ref', 'HEAD');
+    const before = git(w.root, 'rev-parse', 'HEAD');
+    g(w.root, 'checkout', '-q', 'main');
+    fs.mkdirSync(path.dirname(path.join(w.root, file)), { recursive: true });
+    fs.writeFileSync(path.join(w.root, file), text);
+    g(w.root, 'add', '-A');
+    g(w.root, 'commit', '-qm', 'base moves');
+    g(w.root, 'checkout', '-q', branch);
+    const m = spawnSync('git', ['-c', 'user.email=p@example.com', '-c', 'user.name=P', 'merge', '--no-edit', '-q', '-m', 'Merge main into this branch (keep the PR mergeable)', 'main'], { cwd: w.root, encoding: 'utf8' });
+    return { before, conflicted: m.status !== 0 };
+  };
+  const head = (w, extra = []) => {
+    w.pr.headRefOid = git(w.root, 'rev-parse', 'HEAD');
+    w.pr.commits = [{ sha: extra.before, parents: [{}], commit: { message: 'fix' } }, ...extra.commits];
+    w.pr.checks = [{ name: 'ci', bucket: 'pass' }];
+  };
+  const keep = lowPr({ checks: 'pending' });
+  keep.publish();
+  const k = baseMerged(keep);
+  head(keep, { before: k.before, commits: [{ sha: git(keep.root, 'rev-parse', 'HEAD'), parents: [{}, {}], commit: { message: 'Merge main into this branch (keep the PR mergeable)' } }] });
+  sync(keep);
+  assert.equal(keep.pr.state, 'MERGED', 'the pipeline\'s base merge keeps the rating');
+  // A person's commit changes the PR's own change: not assessed, review.
+  const person = lowPr({ checks: 'pending' });
+  person.publish();
+  const before = git(person.root, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(person.root, 'src/Basket.API/A.cs'), 'a person\'s change');
+  g(person.root, 'commit', '-qam', 'a person');
+  head(person, { before, commits: [{ sha: git(person.root, 'rev-parse', 'HEAD'), parents: [{}], commit: { message: 'a person' } }] });
+  sync(person);
+  assert.equal(person.pr.state, 'OPEN');
+  // The base changed the PR's own file; the conflict resolved another way changes the PR's own change: review.
+  const conflict = lowPr({ checks: 'pending' });
+  conflict.publish();
+  const c = baseMerged(conflict, 'src/Basket.API/A.cs', 'the base\'s version');
+  assert.ok(c.conflicted);
+  fs.writeFileSync(path.join(conflict.root, 'src/Basket.API/A.cs'), 'resolved another way');
+  g(conflict.root, 'commit', '-qam', 'Merge main into this branch (keep the PR mergeable)');
+  head(conflict, { before: c.before, commits: [{ sha: git(conflict.root, 'rev-parse', 'HEAD'), parents: [{}, {}], commit: { message: 'Merge main into this branch (keep the PR mergeable)' } }] });
+  sync(conflict);
+  assert.equal(conflict.pr.state, 'OPEN');
+  assert.match(parseState(conflict.pr.comments.find((x) => x.body.includes('review-gate:')).body).triggers.join('; '), /rating is for another change/);
 });
 
 test('board sync merges a waiting PR once its checks pass; failing checks send it to review', () => {

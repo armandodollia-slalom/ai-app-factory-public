@@ -320,7 +320,8 @@ test('a run that stops right after its PR opened is resumed after the open (the 
   const attempts = fs.readdirSync(logs).filter((f) => f.startsWith('implement-DEMO-1')).sort();
   assert.equal(attempts.length, 2);
   const retry = fs.readFileSync(path.join(logs, attempts[1]), 'utf8');
-  assert.match(retry, /was opened by the earlier run before it stopped; continuing after the open/);
+  // The open is recorded as soon as the host answers, so the retry continues after it (no adoption needed).
+  assert.match(retry, /was opened and recorded by the earlier run before it stopped; continuing after the open/);
   assert.doesNotMatch(retry, /agent \S+ \(/, 'no agent started on the retry');
   assert.equal(r.record.phase, null);
   assert.deepEqual([r.record.readyAudit.ok, r.record.readyAudit.after], [true, 0]);

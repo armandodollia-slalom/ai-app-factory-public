@@ -124,7 +124,8 @@ const defaultOwners = (root) => {
 async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) } = {}) {
   const pin = readPin(root);
   // config.json with app.json (the application's topology) on top, as the engine reads them.
-  const config = fs.existsSync(path.join(root, '.factory/config.json')) ? repoOverlay(root) : null;
+  // Read without refusing a settings problem: each is a row below (doctor never aborts on one).
+  const config = fs.existsSync(path.join(root, '.factory/config.json')) ? repoOverlay(root, { check: false }) : null;
   const used = products(root, { config: config ?? {} });
   // Products that authenticate through a signed-in CLI (GitHub's gh) say so; the REST ones are checked by productRows.
   const cliAuth = (() => {
@@ -167,12 +168,14 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
   // Video script scope (single validator in pipeline/lib/config.mjs; reported here rather than aborting doctor).
   const videoScriptIssues = videoScriptProblems(config ?? {});
   if (videoScriptIssues.length) rows.push(['demo video script settings (video.script.scope)', false, videoScriptIssues.join('; ')]);
+  const preOpenWarns = [];
   // The PR opens finished (implement.preOpen): CI can prove a story branch's head before its PR exists, and every
   // delivered PR's run record shows no pipeline agent starting after the PR was ready (outside a hold).
   try {
-    const { preOpenProblems, storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
-    const preOpenIssues = preOpenProblems(config ?? {}, { host: checkoutHost(root, config ?? {}) });
+    const { preOpenProblems, preOpenWarnings, storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
+    const preOpenIssues = preOpenProblems(config ?? {});
     if (preOpenIssues.length) rows.push(['PR delivery settings (implement.preOpen)', false, preOpenIssues.join('; ')]);
+    for (const w of preOpenWarnings(config ?? {}, { host: checkoutHost(root, config ?? {}) })) preOpenWarns.push(['PR delivery settings (implement.preOpen)', w]);
     const full = loadConfig('implement', root);
     {
       // The CI adapter's capability; that the rendered definitions carry the branch triggers is `factory check`'s row
@@ -230,9 +233,9 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
     const file = path.join(INSTALL_ROOT, 'packs', id, 'doctor.mjs');
     if (fs.existsSync(file)) rows.push(...(await import(pathToFileURL(file).href)).checks(root));
   }
-  // Warnings: a gate that exists but that the code host does not enforce. Reported loudly, not a failure, because
-  // only the repository's owner can change it.
-  const warnings = [...intercom.warnings, ...analysisWarnings];
+  // Warnings: a gate that exists but that the code host does not enforce, reported loudly, not a failure, because only
+  // the repository's owner can change it; and a setting the host cannot honour that runs with a fallback.
+  const warnings = [...intercom.warnings, ...preOpenWarns, ...analysisWarnings];
   // The application's own test jobs that the host does not require (council C10, Opus 5): a person merging by hand is not
   // stopped by them. Named, with why: a job that runs for every PR under a name of its own is required by `review-gate enforce`.
   try {

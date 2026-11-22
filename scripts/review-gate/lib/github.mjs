@@ -55,7 +55,7 @@ export const toView = (p) =>
     mergeCommit: p.mergeCommit ? { oid: p.mergeCommit } : null,
   };
 // Normalised review / review comment / commit -> GitHub's REST shapes.
-export const toReview = (r) => ({ id: r.id, user: { login: r.author, type: r.bot ? 'Bot' : 'User' }, state: String(r.state ?? '').toUpperCase(), submitted_at: r.submittedAt ?? null, commit_id: r.commit ?? null, body: r.body ?? '' });
+export const toReview = (r) => ({ id: r.id, user: { login: r.author, type: r.bot ? 'Bot' : 'User' }, state: String(r.state ?? '').toUpperCase(), submitted_at: r.submittedAt ?? null, commit_id: r.commit ?? null, body: r.body ?? '', ...(r.state === 'dismissed' ? { dismissed_state: r.dismissedState ? String(r.dismissedState).toUpperCase() : null } : {}) });
 export const toReviewComment = (c) => ({ id: c.id, user: { login: c.author }, body: c.body ?? '', path: c.path ?? null, line: c.line ?? null, pull_request_review_id: c.reviewId ?? null, created_at: c.createdAt ?? null });
 // `parents` is a count (null when the host does not say: such a commit never counts as a base merge).
 export const toCommit = (c) => ({ sha: c.sha, author: c.author ? { login: c.author } : null, parents: Array.from({ length: c.parents ?? 0 }, () => ({})), commit: { message: c.message ?? '', committer: { date: c.committedAt ?? null } } });
@@ -158,8 +158,10 @@ export function mergeIdentity(settings, env = process.env, { bot } = {}) {
 // the gate's CI evidence for that head (council C9). By default a PR the host has not cleared yet waits, and
 // `board sync` merges it once the host does, after the gate has checked that head again.
 // `target`: a gh runner (with `repo`), or `config` to merge through its code host.
+// `boundary`: called immediately before the host's merge call (after the merge state was read and waited for); a value
+// it returns stops the merge and comes back as `decidedAgain` (the review gate's merge boundary).
 const READY = ['clean', 'has_hooks', 'unstable'];
-export function mergePr(target, repo, pr, settings, { bot, allowAuto = null, waitMs, headSha = null, gh = realGh } = {}) {
+export function mergePr(target, repo, pr, settings, { bot, allowAuto = null, waitMs, headSha = null, gh = realGh, boundary = null } = {}) {
   const { identity, env, token } = mergeIdentity(settings, process.env, { bot });
   const host = typeof target === 'function' ? hostOf((args, o = {}) => target(args, { ...o, env: o.env ?? env }), { repo }) : token ? prHost(target, gh, { token }) : prHost(target, gh);
   const caps = host.capabilities ?? {};
@@ -174,11 +176,20 @@ export function mergePr(target, repo, pr, settings, { bot, allowAuto = null, wai
     if (now !== headSha) throw new Error(`the PR's head moved from ${String(headSha).slice(0, 7)} to ${String(now ?? '?').slice(0, 7)} since the gate assessed it; not merged (the gate assesses the new head first)`);
   }
   let how;
-  if (READY.includes(before.mergeState)) how = host.pr.merge(pr, { method, headSha });
-  else {
+  const stopped = () => {
+    const again = boundary?.() ?? null;
+    return again ? { identity, method, merged: false, mergedAt: null, autoMerge: false, pending: false, status, decidedAgain: again } : null;
+  };
+  if (READY.includes(before.mergeState)) {
+    const stop = stopped();
+    if (stop) return stop;
+    how = host.pr.merge(pr, { method, headSha });
+  } else {
     const hostAuto = caps.autoMerge !== false && caps.mergeHeadGuard !== false && caps.cancelAutoMerge !== false;
     const auto = hostAuto && (allowAuto ?? (settings?.native === true && host.repo.settings?.()?.autoMergeAllowed === true));
     if (!auto) return { identity, method, merged: false, mergedAt: null, autoMerge: false, pending: true, status };
+    const stop = stopped();
+    if (stop) return stop;
     how = host.pr.merge(pr, { method, headSha, auto: true });
   }
   return { identity, method, merged: Boolean(how?.merged), mergedAt: how?.mergedAt ?? null, autoMerge: !how?.merged && !READY.includes(before.mergeState), pending: false, status };

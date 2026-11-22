@@ -21,7 +21,7 @@ flowchart LR
 
 ## Assessment
 
-Before the PR exists, once CI is green on the branch head, the delivery runs `factory review-gate assess --tickets K1,K2 --base <ref> --out <file>`: the triage agent rates the change on the branch against the base, and the harness computes the rest. That is the gate's only model call. When the PR opens, `factory review-gate publish --assessment <file>` binds the saved assessment to the PR and its head and applies the decision with no model call. A delivery with no saved assessment (a resume included) assesses before the open; if the gate cannot, no PR opens (outcome `gate-assessment-failed`, [escalations](escalations.md#outcomes)). The pipeline publishes with `--no-agent`: without a readable assessment it publishes "not assessed" (review, `needs-human`, the approvals a Severe PR needs: 1 by default) and never starts an agent on the open PR. Publishing is a separate process: a failure is logged and never changes a ticket's outcome.
+Before the PR exists, once CI is green on the branch head, the delivery runs `factory review-gate assess --tickets K1,K2 --base <ref> --out <file>`: the triage agent rates the change on the branch against the base, and the harness computes the rest. That is the gate's only model call. When the PR opens, `factory review-gate publish --assessment <file>` binds the saved assessment to the PR and its head and applies the decision with no model call. A delivery with no saved assessment (a resume included) assesses before the open; if the gate cannot, no PR opens (outcome `gate-assessment-failed`, [escalations](escalations.md#outcomes)). The pipeline publishes with `--no-agent`: without a readable assessment it publishes "not assessed" (review, `needs-human`, the approvals a Severe PR needs: 1 by default) and never starts an agent on the open PR. Publishing is a separate process. For a bug PR the delivery stops on a failed publication, and on a rating the host does not show for the PR's head (`review-gate publish` exits 3): the PR stays on hold and the ticket ends `gate-assessment-failed`, which a resume publishes again ([implement.md](implement.md#resume-and-interrupted-runs)).
 
 1. **Triage agent.** `bug-triage` (`agents/bug-triage.agent.md`) is a fresh, read-only run, not the implementer. It gets every ticket's text, the systems the PR touches and the PR's actual diff, and rates each ticket on three separate fields, each **Low / Medium / High / Severe**, with a reason: **Impact** (what the bug does to users or data), **Complexity** (the size and entanglement of the fix) and **Fix risk** (the chance the fix breaks something else). It also names floor categories the fix touches (`auth`, `payments`, `migration`, `security`), its own confidence (0-100) and a one-line summary. An invalid result goes back once with the errors; a ticket that is still not rated counts as not assessed (and its PR can never auto-merge). Model: `agent.models.bugTriage` (`opus`: the ratings decide whether a PR merges without a person, and it runs once per PR).
 2. **Systems touched.** Every changed file maps to its system: `reviewGate.systems` when it is set, otherwise one system per `project.services` entry. A `library` that exactly one service uses (through `dependsOn`, also via other libraries, or `partOf`) is part of that service's system: a service's own domain and infrastructure projects are not shared. A library several services use (or whose users are unknown) and a `host` (an orchestrator such as an Aspire AppHost) are **shared**. `reviewGate.sharedPaths` adds shared systems by name (the root build files; `factory init` drafts them from the language pack) and `reviewGate.contractPaths` contract systems (integration-event folders, which `init` finds in the code). The project's test roots and `reviewGate.ignore` (docs, metrics) touch no system; anything else is **Other**. In a group PR each ticket's files are the diff of its own `<KEY>: Merge into <group branch>` commit. `factory review-gate explain <file>...` shows the systems, floors and severity for a change, without an agent.
@@ -86,7 +86,7 @@ A PR the gate clears is merged through the code host's adapter, bound to the ass
 How the merge happens on GitHub (`mergePr`, `scripts/review-gate/lib/github.mjs`; other hosts report the same states through their adapter):
 
 - GitHub reports nothing pending (`CLEAN`, `HAS_HOOKS`, `UNSTABLE`): the gate merges at once (`gh pr merge --squash`).
-- Something is pending (checks restarted after the base moved, `BLOCKED`, `BEHIND`, a mergeability GitHub is still computing): the PR **waits** (`approvals:0`, notice "waiting for GitHub to clear the merge"), and the next `board sync` checks the head again and merges it. GitHub's own auto-merge (`gh pr merge --auto`) is **not** used by default: once armed, GitHub merges whatever head the branch has when the ruleset's required checks pass, including a head pushed after the gate's decision whose CI has not run. `implement.autoMerge.native: true` turns it back on; the gate then disarms it (`--disable-auto`) every time it evaluates a head it does not clear to merge.
+- Something is pending (checks restarted after the base moved, `BLOCKED`, `BEHIND`, a mergeability GitHub is still computing): the PR **waits** (`approvals:0`, notice "waiting for GitHub to clear the merge"), and the next `board sync` checks the head again and merges it. GitHub's own auto-merge (`gh pr merge --auto`) is **not** used by default: once armed, GitHub merges whatever head the branch has when the ruleset's required checks pass, including a head pushed after the gate's decision whose CI has not run. `implement.autoMerge.native: true` turns it back on; the gate then disarms it (`--disable-auto`) every time it evaluates a head it does not clear to merge (see [human reopens](#human-reopens) for what that leaves open).
 
 ### What "the checks pass" means
 
@@ -107,7 +107,7 @@ Green is never "nothing is red" (a fast check that passes while the application 
 
 `board sync` evaluates every open gated PR again (it finds them by their `approvals:N` label, `approvals:0` included), from what GitHub holds (the PR's gate state, each ticket's `## Triage`, the PR's checks), so any machine can do it:
 
-- a PR **waiting** for its checks (or for GitHub to clear its merge), or whose **merge failed**, is merged once it can be; it goes to review when its checks fail, and when someone **pushed** to it after it was assessed (the assessment no longer matches the diff). The pipeline's own base merges (`board sync` keeping the PR mergeable) are not such a push;
+- a PR **waiting** for its checks (or for GitHub to clear its merge), or whose **merge failed**, is merged once it can be; it goes to review when its checks fail, and when someone **pushed** to it after it was assessed (the assessment no longer matches the diff). The pipeline's own base merges (`board sync` keeping the PR mergeable) are not such a push. A bug PR's rating is bound to the PR's own change: a digest of the diff between its merge base with the target branch and its head (the content the triage read; the pipeline's records excluded), saved with the rating as `ratedDiff`. The digest holds each file's path, the header lines of a new or deleted file, a mode change, a rename or copy, every added and removed line and the line of context on each side of a change (line numbers and blob ids left out, so the host's diff and a local one agree): a moved line, a `chmod`, a rename or an added empty file changes it. The merge base is the newest of the target fetched from the remote now (with no remote, the local branch) and the base side of the PR's own base merges, never a stale remote-tracking ref alone; when it cannot be told (the remote cannot be fetched and the PR has no base merge) the key is unknown and the PR is rated again, never taken as the same change. A base merge by the pipeline leaves that diff, so the rating holds; any commit that changes it (a person's, or a base merge whose conflict was resolved differently) voids it, and the PR is "not assessed" (review) until the change is rated. The same key decides whether a held bug PR may be released after a fixing round (read from the host's head, not this checkout's);
 - a PR an earlier gate version sent to review only because a merge attempt failed is evaluated again and merged;
 - a PR whose checks fail is in review while they fail; the notice names the failing tests and, from their story tags, whether the pipeline wrote them (`lib/ci-origin.mjs`): such a failure is a defect in the pipeline's own tests to diagnose, never an infrastructure failure to re-run. Once the checks pass, that trigger no longer holds;
 - a PR with a new human reopen goes back to review (see below);
@@ -115,18 +115,20 @@ Green is never "nothing is red" (a fast check that passes while the application 
 
 ## Human reopens
 
-A **human reopen** is a person sending a triaged bug fix back after the gate assessed it. It is counted apart from feature verification's `bugFixCycles` (those are the pipeline's own tests failing before the PR existed). `board sync` finds them (`lib/sync.mjs`, `lib/reopens.mjs`):
+A **human reopen** is a person rejecting a delivery of a bug fix, rated by the gate or not yet. It is counted apart from feature verification's `bugFixCycles` (those are the pipeline's own tests failing before the PR existed). Once a person has rejected a ticket, every later delivery of it needs a person's review and never merges itself, whatever its new rating says. `board sync` and `implement requeue` find them (`lib/sync.mjs`, `lib/reopens.mjs`):
 
 | Source | Detected when |
 | --- | --- |
-| `card` | the card moved back to **In Progress** from Pending Review or Done with **no pipeline event behind it**: the last pipeline event on the card (its hidden marker) left it in review or done. The board is a user project, so `projects_v2_item` webhooks don't fire and GitHub Actions can't watch lane moves; the sync compares the card with that last event instead |
-| `issue` | the issue was reopened (open, closed earlier, its card still in Done) |
-| `changes-requested` | a "changes requested" review on an open gated PR, against the tickets it **names** (in its body or inline comments), or against **every ticket in the PR** when it names none. Each review counts once (the PR's gate state keeps the ids) |
+| `card` | the card moved back to **In Progress**, **Ready** or **Backlog** from Pending Review or Done with **no pipeline event behind it**: the last pipeline event on the card (its hidden marker) left it in review or done. The board is a user project, so `projects_v2_item` webhooks don't fire and GitHub Actions can't watch lane moves; the sync compares the card with that last event instead |
+| `issue` | the issue was reopened (open, closed earlier, its card in any column); an issue that stands reopened is one reopen until it is closed again, not one more at each later pipeline event |
+| `changes-requested` | a "changes requested" review on an open gated PR, against the tickets it **names** (in its body or inline comments), or against **every ticket in the PR** when it names none. Each review counts once (the PR's gate state keeps the ids); an assessment also counts the ones on its own PR that no sync has recorded yet |
+| `pr-closed` | a gated PR closed without merge by a close that is not one of the pipeline's own recorded holds (below): a rejection of each of its tickets. The close is marked handled only after every ticket's rejection is stored; until then the next sync tries again. A close whose history cannot be read is stored as nothing yet (the gate reads it as unknown, so review) and tried again at the next sync |
+| `requeue` | `implement requeue` running a ticket again after a person resolved an escalation of a delivery that had a PR. Stored before `escalation-resolved` is cleared; if it cannot be, the label stays and the ticket waits for the next requeue |
 
 Each reopen:
 
-- bumps the ticket's severity **+1 level**, capped at Severe, recomputed from the stored ratings and floor ("Impact Medium, Fix risk Low → Medium, +1 reopen → High"), and **blocks auto-merge for that ticket for good** (the reopen stays in its `## Triage`);
-- updates the `## Triage` section and the **Severity** and **Human reopens** fields, labels the issue `reopened`, and appends a `type: "reopen"` record to `decision-outcomes.jsonl` (`story`, `pr`, `source`, `by`, `afterMerge`, `reopens`, `severity`);
+- bumps the ticket's severity **+1 level**, capped at Severe, recomputed from the stored ratings and floor ("Impact Medium, Fix risk Low → Medium, +1 reopen → High"), and **blocks auto-merge for that ticket for good**, and so for any PR that delivers it, a group PR included (the reopen stays in its `## Triage`, written there for a ticket the gate never rated too);
+- updates the `## Triage` section and the **Severity** and **Human reopens** fields, labels the issue `reopened`, and appends a `type: "reopen"` record to `decision-outcomes.jsonl` (`story`, `pr`, `source`, `detail`, `by`, `afterMerge`, `reopens`, `severity`);
 - adds the reason (the reviewer's comments, or the people's comments on the issue since the last pipeline event) as a new round under **`## Decisions`** in the issue body, so every agent of the re-run gets it as a binding requirement, like a human's answers to escalation questions;
 - posts a `reopened` board event (Pending Review or Done → In Progress), which also keeps the next sync from counting the same move again.
 
@@ -134,6 +136,67 @@ What happens next depends on the PR:
 
 - **Before the PR merges:** the PR's auto-merge is turned off (`gh pr merge --disable-auto`), its gate goes back to **review** (`approvals:N`, `needs-human`, the notice names the reopen), and the ticket re-runs **on its PR's branch**: a single-ticket PR's branch (fetched from origin when this machine has none, fast-forwarded to a person's commits on it), or its bug-epic **PR group's branch** (it joins the delivered group while the group PR is open). The push updates the PR, the ticket goes back to Pending Review with it, and the gate assesses the PR again.
 - **After it merged:** the fix runs as a **follow-up** on a new branch from the base (`<branch>-r<n>`), and its new PR goes through the same gate; the ticket's reopens keep it from auto-merging.
+
+**Positive proof before any merge.** Every path that can merge a PR on its own (the gate at the open, a regate from
+`board sync`, after the CI wait or by hand, a retried merge) decides through one read of each ticket's history at that
+moment (`lib/rejections.mjs`), and `decideGate` merges no ticket that read did not clear. The read takes:
+
+- the reopens the ticket's `## Triage` section and the metrics (this checkout's and its main checkout's) record (a
+  triage written again never drops one), and its issue standing reopened now; the count of rejections the gate stored
+  on the PR must not be more than the read finds;
+- every PR of the ticket: those its records name (the triage's `prs` and `pr`, written by every publication; its run
+  record's PR, its earlier runs' PRs and attempts), those the code host finds by targeted queries read to the end (the
+  PRs on its branches, the PRs with its key, quoted, in their title; up to 1,000 PRs are read per query and the cap of
+  500 applies to the PRs kept after the key filter: a query that fills either is unknown, so review), and the PR being
+  decided. On each, every page of its reviews and close and reopen events: a person's "changes requested" stays live
+  until the same person approves later (a dismissal or a comment does not clear it). A dismissed review counts by what
+  it was (GitHub's timeline names it): a dismissed "changes requested" is one, a dismissed approval or comment is not,
+  and one whose earlier state the host does not tell makes the history unknown (review, nothing stored). On GitLab a
+  reviewer's "requested changes" is read beside their approval, by time, and one with no time wins. Every close or
+  reopen that is not one of the pipeline's own holds is a person's. A strict read takes every page and refuses an
+  answer that is not a list of pages, or a row without its fields (unknown, so review); the PR's comments (where the
+  hold records and the gate notice are) are read on every page too.
+
+**The pipeline's own holds.** A `close-reopen` hold records its close, and later its reopen, on the PR once the host has
+made it: a comment naming that exact event, by the host's event id (else the exact time and actor the host returned),
+and only an event that is new since a read of the PR's events taken right before its own update. An update that threw,
+did nothing (the PR already closed, or already open) or made no new event records nothing. The record is written after
+the close, so a person using the pipeline's own login who closes or reopens the PR between that read and the update is
+taken for the pipeline (a record of the intent written before the close is not kept).
+The gate trusts a record only when the comment's author is the identity the pipeline acts as on the host (resolved once
+per run), and only for an event that identity made: one record, one event, no time window. A record written by anyone
+else is ignored, and a close the host refused leaves no record. An event with no record is a person's, so a run that
+stops between the close and its record costs review, never a wrong merge: a close or reopen made by the pipeline's own
+login that no record names has an unknown provenance (an interrupted hold, or a person using that same login); it is
+never stored as a person's rejection, and the gate reads the ticket as unknown, so review, until it can be told apart.
+A host that gives neither event ids nor actors, or an identity that cannot be read, makes every close and reopen a
+person's. A merge's own close (the same
+commit, or the same time and actor as the merge event) is no rejection.
+
+**Unknown is review:** a ticket with no issue, an issue, PR list or PR history that cannot be read in full (a denied or
+failed read, a page that is not a list), a code host that does not report a PR's closes and reopens (the `stateEvents`
+capability: GitHub and GitLab do; Azure Repos and Bitbucket do not, so a bug fix there never merges itself), more
+rejections stored on the PR than the read finds, or a run that may have missed one (`implement run --force`, or a run
+whose board sync failed before it claimed the card) leaves the ticket unchecked, and the PR goes to a person ("could
+not be checked for a rejection by a person earlier", with why). The gate comment and a section of the PR description,
+rebuilt from this read every time the gate decides, say why a person reviews it and what settles it: a person's approval
+of this PR, or the number of approvals of its head the PR needs when that is more than one.
+
+**At the merge.** A decision to merge reads every ticket's history once more immediately before the host's merge call,
+in one place for every route (after the PR's merge state was read and waited for, nothing else in between), and any
+rejection that arrived since (or a read that fails now) decides again: review. The merge itself is bound to the head the gate
+assessed (the host's head guard). The host is not asked to refuse a merge with an outstanding "changes requested" (the
+factory's ruleset requires no approvals), so a rejection made between that last read and the host's merge call is not
+covered.
+
+**The host's own auto-merge** (`implement.autoMerge.native: true`, off by default) is armed only when the gate decides
+to merge, and cancelled every time a later decision does not, also when a merge attempt ends waiting or failed; a cancel
+the host refuses is reported. A host that cannot
+cancel it never arms it. Between a person's action and the next decision (`board sync`), an armed auto-merge can still
+merge: with native auto-merge on, that window is outside the guarantee.
+
+Not covered: a card moved back and forth between two syncs is not seen (a run started without a sync reads the history
+as unknown, as above); a PR on another branch, without the key in its title and in no record of the ticket.
 
 The re-runs start from [`implement requeue`](escalations.md#requeue-on-a-timer) (by hand or on its timer): `board sync --json` lists the reopened tickets (`reopened`), and requeue runs them with `--force`, apart from the tickets a human resolved. The run removes the `reopened` label (`board clear-reopened`) once the open PR's hold is confirmed, or when it starts if it has no open PR to hold (a follow-up, or a run without `--pr`); the reopen itself stays on the ticket.
 

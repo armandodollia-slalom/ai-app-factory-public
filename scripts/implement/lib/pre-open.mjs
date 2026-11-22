@@ -26,49 +26,36 @@ import { git } from '../../pipeline/lib/git.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { ciFor } from '../../pipeline/lib/ci/index.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
+import { AFTER_OPEN, PRE_OPEN_DEFAULTS, PRE_OPEN_REMOVED, addConfigWarning, preOpenProblems } from '../../pipeline/lib/config.mjs';
 import { branchFlaky, branchLabel, branchWait, ciFixRounds, ciGate, ciLine, deliveryDecision } from './ci-wait.mjs';
 import { headSha } from './gitops.mjs';
 
-export const PRE_OPEN_DEFAULTS = { branches: null, afterOpen: 'draft', wipLabel: 'work-in-progress', draftCycles: 1 };
-const AFTER_OPEN = ['draft', 'label', 'close-reopen'];
-const REMOVED = {
-  enabled: 'implement.preOpen.enabled was removed: every pipeline PR now opens finished (all agent work done, CI proven on its head), and an open PR that agents work on again is held (implement.preOpen.afterOpen); remove the setting',
-  failedStory: 'implement.preOpen.failedStory was removed: a story whose PR check or CI never passes now always escalates on its ticket, with its branch pushed, the findings on the ticket and no PR; remove the setting',
-};
+export { PRE_OPEN_DEFAULTS, preOpenProblems };
 
 export function preOpenSettings(config) {
   const s = { ...PRE_OPEN_DEFAULTS, ...(config.implement?.preOpen ?? {}) };
   if (!AFTER_OPEN.includes(s.afterOpen)) s.afterOpen = 'draft';
   // The order is not optional (owner requirement C16/C18): no setting opens a PR before its work and CI are done.
-  for (const k of Object.keys(REMOVED)) delete s[k];
+  for (const k of Object.keys(PRE_OPEN_REMOVED)) delete s[k];
   return s;
 }
 
-export function preOpenProblems(config, { host = null } = {}) {
-  const raw = config.implement?.preOpen;
-  if (raw === undefined) return [];
-  const p = [];
-  const known = Object.keys(PRE_OPEN_DEFAULTS);
-  for (const k of Object.keys(raw ?? {})) if (REMOVED[k]) p.push(REMOVED[k]);
-  for (const k of Object.keys(raw ?? {})) if (!known.includes(k) && !REMOVED[k]) p.push(`implement.preOpen.${k} is not a setting (${known.join(', ')})`);
-  if (raw?.afterOpen !== undefined && !AFTER_OPEN.includes(raw.afterOpen)) p.push(`implement.preOpen.afterOpen must be one of ${AFTER_OPEN.join(', ')}`);
-  if (raw?.afterOpen === 'close-reopen') {
-    let h = host;
-    if (!h && config?.host) {
-      try {
-        h = hostFor(config).sync;
-      } catch {
-        h = null;
-      }
-    }
-    if (h?.reopenPr === false || h?.capabilities?.reopenPr === false) {
-      p.push(`implement.preOpen.afterOpen "close-reopen" is not supported on ${h.label ?? h.type} (cannot reopen a closed pull request); "draft" is used instead`);
+// A hold mode the code host cannot do works with a fallback (holdMode): a warning, not a problem. `close-reopen` on a
+// host that cannot reopen a closed pull request (Bitbucket Cloud) holds as a draft.
+export function preOpenWarnings(config, { host = null } = {}) {
+  if (config.implement?.preOpen?.afterOpen !== 'close-reopen') return [];
+  let h = host;
+  if (!h) {
+    try {
+      h = hostFor(config).sync;
+    } catch {
+      h = null;
     }
   }
-  if (raw?.branches !== undefined && raw.branches !== null && !(Array.isArray(raw.branches) && raw.branches.every((b) => typeof b === 'string' && b))) p.push('implement.preOpen.branches must be a list of branch patterns');
-  if (raw?.draftCycles !== undefined && !(Number.isInteger(raw.draftCycles) && raw.draftCycles >= 0)) p.push('implement.preOpen.draftCycles must be a whole number');
-  return p;
+  return h?.reopenPr === false || h?.capabilities?.reopenPr === false ? [`implement.preOpen.afterOpen "close-reopen" is not supported on ${h.label ?? h.type} (a declined pull request cannot be reopened); "draft" is used instead`] : [];
 }
+// Config validation warns about it whenever this module is loaded (the run, doctor, the review gate).
+addConfigWarning((config) => preOpenWarnings(config));
 
 // The branch patterns whose pushes run CI before a PR exists (the CI renderers write them into the workflows' push
 // triggers; provider neutral: each renderer says it in its own syntax).
@@ -155,6 +142,88 @@ export function confirmPrState(host, pr, { mode, label, held, attempts = 3, dela
   return false;
 }
 
+// ---- the hold record: the pipeline's own closes and reopens of a PR (close-reopen holds) ---------------------------
+// After the host confirms a close or reopen the pipeline made, it records that exact event on the PR (a comment of its
+// own): the host's event id, else the exact time and actor the host returned. The review gate trusts a record only when
+// the comment's author is the identity the pipeline acts as on the host, and only for an event that identity made with
+// that id: one record, one event, no time window. Any other close or reopen is a person's. A close whose record could not
+// be written (a crash in between, a failed read) is therefore a person's: one more review, never a wrong merge.
+export const HOLD_LEDGER = '<!-- factory:holds';
+const identities = new WeakMap();
+// The login the pipeline acts as on `host`, resolved once per host (null when it cannot be read: then no close or reopen
+// is taken for the pipeline's).
+export function pipelineIdentity(host) {
+  if (!host || typeof host !== 'object') return null;
+  if (!identities.has(host)) {
+    let login;
+    try {
+      login = host.identity?.()?.login ?? null;
+    } catch {
+      login = null;
+    }
+    identities.set(host, typeof login === 'string' && login ? login : null);
+  }
+  return identities.get(host);
+}
+// The entries of the PR's hold records written by `identity` (comments by anyone else are ignored).
+export function readHoldLedger(host, pr, identity = pipelineIdentity(host)) {
+  if (!identity) return [];
+  const entries = [];
+  for (const c of host.pr.comments(pr) ?? []) {
+    if (c.author !== identity || !String(c.body ?? '').includes(HOLD_LEDGER)) continue;
+    const m = /<!-- factory:holds (\[[\s\S]*?\]) -->/.exec(c.body);
+    if (!m) throw new Error('a hold record on the PR cannot be read');
+    entries.push(...JSON.parse(m[1]));
+  }
+  return entries;
+}
+const eventKey = (e) => (e.id != null ? `id:${e.id}` : `at:${e.at}|${e.actor}`);
+const entryKey = (h) => (h.event != null ? `id:${h.event}` : `at:${h.at}|${h.actor}`);
+// The events (of `events`) that are the pipeline's own: made by `identity`, each named by one record of that type.
+export function pipelineEvents(events, ledger, identity) {
+  const own = new Set();
+  if (!identity) return own;
+  const records = new Map(ledger.filter((h) => h && (h.event != null || (h.at && h.actor))).map((h) => [entryKey(h), h]));
+  for (const e of events) {
+    if (!['closed', 'reopened'].includes(e.type) || e.actor !== identity || (e.id == null && !e.at)) continue;
+    const h = records.get(eventKey(e));
+    if (h && h.type === e.type) {
+      own.add(e);
+      records.delete(eventKey(e));
+    }
+  }
+  return own;
+}
+// The PR's close and reopen events before the pipeline's own update (a snapshot of their keys), or null when they cannot
+// be read: then nothing the update makes can be told from a person's event, and nothing is recorded.
+export function eventSnapshot(host, pr) {
+  try {
+    if (host.capabilities?.stateEvents !== true) return null;
+    const events = host.pr.stateEvents?.(pr);
+    return Array.isArray(events) ? new Set(events.map(eventKey)) : null;
+  } catch {
+    return null;
+  }
+}
+// Records the pipeline's own close or reopen of `pr` that its update just made: an event of that type, made by its
+// identity, that is new since `before` (the snapshot taken right before the update). An update that threw, did nothing
+// (the PR already closed or open) or made no new event records nothing: that event stays a person's. Returns the entry,
+// or null.
+export function recordOwnEvent(host, pr, type, before, why = null) {
+  try {
+    const identity = pipelineIdentity(host);
+    if (!identity || !before || host.capabilities?.stateEvents !== true) return null;
+    const fresh = (host.pr.stateEvents?.(pr) ?? []).filter((x) => x.type === type && x.actor === identity && (x.id != null || x.at) && !before.has(eventKey(x)));
+    if (fresh.length !== 1) return null;
+    const [e] = fresh;
+    const entry = { type, ...(e.id != null ? { event: e.id } : { at: e.at, actor: e.actor }), ...(why ? { why: String(why).slice(0, 200) } : {}) };
+    host.pr.comment(pr, `${HOLD_LEDGER} ${JSON.stringify([entry])} -->\nThe pipeline ${type === 'closed' ? 'closed' : 'reopened'} this PR itself (a hold while agents work on it again); any other close or reopen is a person's.`);
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
 // Takes an open PR out of the ready state before any agent works on it again; returns the hold to record. Auto-merge is
 // disarmed first (where the host can), so a PR on hold never merges. Confirms by re-reading the PR from the host.
 export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', why, at = nowIso(), attempts = 3, delayMs = 1000, sleep = syncSleep } = {}) {
@@ -167,6 +236,8 @@ export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', w
     }
   }
   let ok;
+  let threw = false;
+  const before = m === 'close-reopen' ? eventSnapshot(host, pr) : null;
   try {
     if (m === 'draft') host.pr.update(pr, { draft: true });
     else if (m === 'label') {
@@ -179,8 +250,11 @@ export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', w
     } else host.pr.update(pr, { state: 'closed' });
     ok = confirmPrState(host, pr, { mode: m, label, held: true, attempts, delayMs, sleep });
   } catch {
+    threw = true;
     ok = confirmPrState(host, pr, { mode: m, label, held: true, attempts: 1, delayMs: 0, sleep });
   }
+  // The close is the pipeline's only once recorded by the event its own update made (otherwise a person's).
+  const recorded = m === 'close-reopen' ? (ok && !threw ? Boolean(recordOwnEvent(host, pr, 'closed', before, why)) : false) : null;
   if (ok) {
     try {
       host.pr.comment(pr, `**On hold: the pipeline is working on this PR again** (${m === 'draft' ? 'converted to draft' : m === 'label' ? `labelled \`${label}\`` : 'closed until it is complete'}).\n\nWhy: ${why}\n\nIt is marked ready again only when the change has passed the whole stack again (static analysis, council, architecture review, feature verification, PR check, CI on the head).`, { marker: '<!-- factory:hold -->' });
@@ -188,18 +262,23 @@ export function holdPr(host, pr, { mode = 'draft', label = 'work-in-progress', w
       // the record keeps the hold
     }
   }
-  return { mode: m, label, ok, from: at, why };
+  return { mode: m, label, ok, from: at, why, ...(recorded === null ? {} : { recorded }) };
 }
 
 export function releasePr(host, pr, { mode = 'draft', label = 'work-in-progress', attempts = 3, delayMs = 1000, sleep = syncSleep } = {}) {
+  const before = mode === 'close-reopen' ? eventSnapshot(host, pr) : null;
   try {
     if (mode === 'draft') host.pr.update(pr, { draft: false });
     else if (mode === 'label') host.pr.update(pr, { labels: { remove: [label] } });
     else host.pr.update(pr, { state: 'open' });
-    return confirmPrState(host, pr, { mode, label, held: false, attempts, delayMs, sleep });
   } catch {
+    // An update that threw records nothing, whatever the PR shows now.
     return confirmPrState(host, pr, { mode, label, held: false, attempts: 1, delayMs: 0, sleep });
   }
+  const ok = confirmPrState(host, pr, { mode, label, held: false, attempts, delayMs, sleep });
+  // The reopen is recorded by the event its own update made (none, or unrecorded: the gate takes it for a person's).
+  if (ok && mode === 'close-reopen') recordOwnEvent(host, pr, 'reopened', before);
+  return ok;
 }
 
 // ---- the audit: no agent run after the PR is ready ---------------------------------------------------------------

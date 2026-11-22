@@ -62,10 +62,18 @@ export function fakeGithubCombined(repo = 'acme/shop') {
         state.statuses.push({ sha, ...JSON.parse(input) });
         return ok('{}');
       }
+      // Lists as `gh api --paginate` answers them: a list of pages with `--slurp`, else one row per line.
+      const serve = (list) => ok(args.includes('--slurp') ? [list] : list.map((x) => JSON.stringify(x)).join('\n'));
       if (a === 'api' && /^repos\/[^/]+\/[^/]+\/pulls\/\d+\/(reviews|comments|commits)$/.test(b)) {
         const [, , , , n, what] = b.split('/');
         const p = state.prs.get(Number(n));
-        return ok({ reviews: p.reviews, comments: [], commits: p.commits }[what].map((x) => JSON.stringify(x)).join('\n'));
+        return serve({ reviews: p.reviews, comments: [], commits: p.commits }[what]);
+      }
+      if (a === 'api' && /^repos\/[^/]+\/[^/]+\/issues\/\d+\/(comments|events|timeline)$/.test(b)) {
+        const [, , , , n, what] = b.split('/');
+        const on = Number(n);
+        const base = (state.prs.get(on) ?? state.issues.get(on))?.url ?? '';
+        return serve(what === 'comments' ? commentsOf(on).map((c) => ({ id: c.id, body: c.body, user: { login: c.author }, created_at: c.createdAt ?? null, html_url: `${base}#issuecomment-${c.id}` })) : []);
       }
       if (a === 'pr' && b === 'create') {
         const n = nextNumber();

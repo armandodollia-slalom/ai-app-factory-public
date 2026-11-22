@@ -29,6 +29,8 @@ export const setTriageFields = (config, gh, issue, values) => tracker(config, gh
 // The ticket's body (Markdown), its replacement, a label (created first where the tracker needs it), and
 // its assignees. On GitHub these are the same gh commands the gate ran before the tracker layer.
 export const ticketBody = (config, gh, number) => tracker(config, gh).tickets.get(number)?.body ?? '';
+// The ticket as the tracker has it now (body, state, stateReason, labels), or null.
+export const ticketNow = (config, gh, number) => tracker(config, gh).tickets.get(number) ?? null;
 export const setTicketBody = (config, gh, number, body) => tracker(config, gh).tickets.update(number, { body });
 export function addTicketLabel(config, gh, number, label) {
   const t = tracker(config, gh);

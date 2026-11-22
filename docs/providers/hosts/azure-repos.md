@@ -32,6 +32,7 @@
 | `botIdentity` | yes | nothing to change |
 | `diff` | no | git diff of the base and head locally |
 | `reviewCommentThreads` | yes | nothing to change |
+| `stateEvents` | no | a person's close or reopen of a PR cannot be told from the pipeline's holds, so a bug fix on this host never merges itself (the review gate asks a person) |
 <!-- /generated:capabilities-azure-devops -->
 
 **Verified:** against fakes only. API docs: <https://learn.microsoft.com/rest/api/azure/devops/git/pull-requests>, <https://learn.microsoft.com/rest/api/azure/devops/git/pull-request-statuses>, <https://learn.microsoft.com/rest/api/azure/devops/policy/configurations>. Azure DevOps has no unified diff API: `pr.diff` is unsupported, and the pipeline diffs locally.

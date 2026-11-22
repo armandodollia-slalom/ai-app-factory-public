@@ -60,6 +60,16 @@ Three sections of the overlay (`lsp`, `stack`, `teststack`) belong to tools with
 
 After changing the pin or the overlay, run `factory render`. Every file it writes outside `.factory/` is listed in `.factory/manifest.json`; `factory uninstall` removes exactly those.
 
+### Upgrading from 0.2.96
+
+- Payment request and response bodies are no longer published in a backend bug's request evidence: an exchange with any
+  card data by name or by shape shows only its method, its path without the query and its status, with "bodies
+  withheld: payment data" (`video.apiEvidence.paymentBodies`, default `withhold`). Set `paymentBodies: "mask"` to
+  publish them with card data masked (best effort; [card data](ai-pipeline/pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix)).
+  A value other than `withhold` or `mask` stops every command that loads the config.
+- A bug PR's rating is bound to its own change (its diff against the merge base, read from the target fetched now), not
+  to its head commit: the pipeline's base merges keep it; a rating made by an earlier version is rated again once.
+
 ### Upgrading from 0.2.95
 
 - New optional setting `council.intercom`, off by default: a council's members can discuss their first round with each other before the merge ([council-intercom.md](ai-pipeline/council-intercom.md#settings)). Without it nothing runs differently, except as listed under [Changes when the setting is off](ai-pipeline/council-intercom.md#changes-when-the-setting-is-off).
@@ -153,14 +163,14 @@ Each stage page under [ai-pipeline/](ai-pipeline/README.md) documents its own se
 | `precheck` | `lint` and `fix` by file extension (`{files}`), `testRunners` (how written tests are run and discovered) |
 | `testRoots`, `testExtensions`, `implExclude` | what is a test file, and what is not implementation |
 | `implement.prCheck` | `mode` (`fix` or `report`), `fixUntil` (`major`), `bugFixUntil` (`minor`), `fixLenses`, `fixRounds` (3), and `returnToImplementation`: `enabled` (true), `maxReturns` (2), `minSeverity` (`major`), `implementationLenses`, `lightLenses`, `lightPaths` (governance; [pr-check.md](ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation)) |
-| `implement.preOpen` | how the PR opens finished (governance): `branches` (branch patterns whose pushes run CI before the PR; default from the branch prefixes), `afterOpen` (`draft`, `label` or `close-reopen`: how an open PR is held while agents work on it again; `close-reopen` becomes `draft` on a host that cannot reopen, such as Bitbucket, and `factory doctor` reports it), `wipLabel` (`work-in-progress`), `draftCycles` (1). Unknown keys are reported. The order itself is not a setting ([implement.md](ai-pipeline/implement.md#the-pr-opens-finished)) |
+| `implement.preOpen` | how the PR opens finished (governance): `branches` (branch patterns whose pushes run CI before the PR; default from the branch prefixes), `afterOpen` (`draft`, `label` or `close-reopen`: how an open PR is held while agents work on it again; `close-reopen` becomes `draft` on a host that cannot reopen, such as Bitbucket, with a warning when `implement`, the review gate or `factory doctor` load the config, and a WARN row in `factory doctor`), `wipLabel` (`work-in-progress`), `draftCycles` (1). An unknown or removed key, or a value not listed, stops the config from loading, whichever command reads it first. The order itself is not a setting ([implement.md](ai-pipeline/implement.md#the-pr-opens-finished)) |
 | `implement.ciFixRounds`, `implement.ciWait` | `ciFixRounds` (1): `0` means no CI fixing round, any positive number one round per CI wait (`PIPELINE_CI_FIX_ROUNDS` for one run); `ciWait` (true): `false` skips both the CI proof before the open and the wait after it ([implement-reference.md](ai-pipeline/implement-reference.md#config)) |
 | `implement.delivery`, `implement.epic` | `delivery` (`epic` or `story`), and for epics `prSplit` (`epic`, `story` or `groups`; `story` and `groups` proven by fixture tests only), `maxStoriesPerGroup`, `grouping` (`auto`, `epic`, `ticket`), `branchPrefix`, `bugfixPrefix`, `featureVerification`, `prCheck` (`fix`, `report`, `off`) ([implement.md](ai-pipeline/implement.md#delivery-modes)) |
 | `implement.reviewGate`, `implement.autoMerge` | the review gate's severity floor, confidence and approvals per severity; auto-merge on or off, merge identity and method ([review-gate.md](ai-pipeline/review-gate.md)) |
 | `review` | `maxRounds`, `policy` (the architecture policy step) |
 | `prCheck` | `frontendPaths`, `conventions` (documents the style critic checks against) |
 | `prVideo` | `specPatterns` (which e2e specs record a demo), `videosDir`, `storageBranch`, `recordCmd`, `slotWaitSec`, `localTimeoutSec`, `testTimeoutSec`, `backendPaths`, `neutralPaths`, `api` |
-| `video` | narration (`enabled`, `voice`, `speed`, `lang`, `model`), `pacing`, `size`, `ffmpeg`, `licenceReview`, `critic`; `script` (narration by the `demo-narrator` agent: `scope` `headline`, `all` or `none`, checked when the config loads, `model`, `timeoutSec`, the length limits, `speakEvidence`); `bugPair` (`enabled`, `requireBefore`: a bug whose reproduction cannot be shown before the fix opens no PR); `apiEvidence` (a backend bug's requests before and after the fix: `enabled`, `headers`, `maxBodyBytes`, `maxPairs`) ([pr-demo-video.md](ai-pipeline/pr-demo-video.md#turning-it-on)) |
+| `video` | narration (`enabled`, `voice`, `speed`, `lang`, `model`), `pacing`, `size`, `ffmpeg`, `licenceReview`, `critic`; `script` (narration by the `demo-narrator` agent: `scope` `headline`, `all` or `none`, checked when the config loads, `model`, `timeoutSec`, the length limits, `speakEvidence`); `bugPair` (`enabled`, `requireBefore`: a bug whose reproduction cannot be shown before the fix opens no PR); `apiEvidence` (a backend bug's requests before and after the fix: `enabled`, `headers`, `maxBodyBytes`, `maxPairs`, `paymentBodies`: `withhold` (default) or `mask`, checked when the config loads) ([pr-demo-video.md](ai-pipeline/pr-demo-video.md#turning-it-on)) |
 | `tickets`, `board` | the GitHub tracker: `repo`, `owner`, `projectNumber`. `repo` and `owner` default to the GitHub `origin`. Other trackers: [`tracker`](#code-host-tracker-and-ci) |
 | `agent` | `cli` (`claude`, `copilot`, `codex`), `models` per agent, `modelIds`, `claude.promptCacheTtl` (`5m` by default: a headless agent run is one short session, and the 1-hour cache Claude Code picks on a subscription is written at 1.6x the price), `claude.toolSearch` (`false` by default: MCP tools such as the language servers are listed to the agent directly, not deferred behind ToolSearch) |
 | `bot` | the PR bot ([setup](ai-pipeline/setup.md#the-pipelines-pr-bot)) |
@@ -174,6 +184,7 @@ Each stage page under [ai-pipeline/](ai-pipeline/README.md) documents its own se
 | `lsp` | `servers[]`: for each language server its command, file extensions, whether it is heavy (`leased`), an optional `prepare` and `scope` helper | [code-intelligence.md](code-intelligence.md) |
 | `stack` | compose file, ports and URLs per slot, services and how each is built | [test-stack.md](test-stack.md) |
 | `teststack` | scenario folders, the data stores and how a scenario loads into each | [test-stack.md](test-stack.md) |
+| `prune` | the disk prune (`enabled`, `minFreeGb`, `worktreeDays`, ...); `afterDelivery` (alpha, default `false`: off, nothing of a delivered run is removed; `true` removes what the run made once the remote confirms it) and `keepLocal` (default `false`), both `true` or `false` or the config does not load | [disk.md](ai-pipeline/disk.md#settings) |
 
 ## Metrics: `metrics.sink`
 

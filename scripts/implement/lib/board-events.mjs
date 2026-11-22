@@ -28,9 +28,11 @@ export function boardEvent(root, key, args, opts) {
   return r;
 }
 
+// Returns whether the sync ran to the end.
 export function syncBoard(root) {
   const r = board(root, ['sync']);
   log(`board: ${lastLine(r)}`);
+  return r.status === 0;
 }
 
 // Claims the stories' cards for this machine. Returns key -> { status, owner, from }; only `refused`

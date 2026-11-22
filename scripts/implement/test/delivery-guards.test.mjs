@@ -10,11 +10,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { afterOpen, deliverFinished, describePlan, plan, saveRun, startResolvedReruns } from '../lib/implement.mjs';
+import { afterOpen, carryHeldPr, confirmRecordedHold, deliverFinished, describePlan, headMovedSince, takeRemoteHead, loadRun, openPending, plan, publishRatingOrHold, saveRun, startResolvedReruns } from '../lib/implement.mjs';
 import { prIsOpen } from '../lib/reopen.mjs';
 import { reviewGateAssess, reviewGatePublish } from '../lib/post-publish.mjs';
-import { agentRunsAfterReady, confirmPrState, headActivities, holdMode, holdPr, preOpenProblems, releasePr } from '../lib/pre-open.mjs';
+import { agentRunsAfterReady, confirmPrState, headActivities, holdMode, holdPr, preOpenProblems, preOpenWarnings, releasePr } from '../lib/pre-open.mjs';
 import { createBitbucketHost } from '../../pipeline/lib/hosts/bitbucket.mjs';
+import { configWarnings, loadConfig } from '../../pipeline/lib/config.mjs';
 import { UnsupportedError } from '../../pipeline/lib/hosts/errors.mjs';
 
 function tmpRepo() {
@@ -42,7 +43,8 @@ function baseIo(order, extra = {}) {
     gate: async () => GREEN,
     prOpen: () => false,
     publishTicket: () => {},
-    assess: () => (order.push('assess'), { severity: { level: 'Low' }, tickets: [] }),
+    // A rating is made for the head it rates (publishRatingOrHold publishes it only for that head).
+    assess: (o) => (order.push('assess'), { severity: { level: 'Low' }, tickets: [], headSha: sh('git', ['rev-parse', 'HEAD'], { cwd: o.worktree, encoding: 'utf8' }).stdout.trim() }),
     publishGate: (opts) => order.push(['publishGate', Boolean(opts.assessment), Boolean(opts.noAgent)]),
     regate: () => {},
     analyse: async () => {},
@@ -110,7 +112,8 @@ test('D2: bug-fix delivery passes noAgent: true on publishGate and allows open w
     open: async () => (order1.push('open'), { pushed: true, url: 'https://github.com/acme/shop/pull/43' }),
   });
   assert.equal(out1.pr, 'https://github.com/acme/shop/pull/43');
-  assert.deepEqual(order1, ['assess', 'open', ['publishGate', true, true]]);
+  // (Round 5: with no target branch to compute the PR's change from, the release publishes again first: fail closed.)
+  assert.deepEqual(order1.slice(0, 3), ['assess', 'open', ['publishGate', true, true]]);
 
   // Gate off ({ skipped: true }): PR opens normally and publishGate is skipped.
   const order2 = [];
@@ -266,6 +269,8 @@ test('ADV-6 (D3): holdPr and releasePr confirm by re-reading PR state (ignoring 
       },
       get: () => ({ ...state, labels: [...state.labels] }),
       comment: (_pr, body) => comments.push(body),
+      // The hold ledger a close-reopen hold writes before it closes.
+      comments: () => comments.map((body) => ({ body })),
     },
   };
   const hDraft = holdPr(workingHost, 7, { mode: 'draft', why: 'ci' });
@@ -422,6 +427,11 @@ test('ADV-15 (D3): plan() derives reopenedPr from saved hold-failed open PR; sta
   assert.deepEqual([pOpen.reopenedPr, pOpen.fromRemote, pOpen.branch], [prUrl, true, 'feat/bug-15-fix']);
   const [pClosed] = plan(cfg, [storyFile], { base: 'main', reopenDeps: { prIsOpen: () => false } });
   assert.equal(pClosed.reopenedPr ?? null, null);
+  // Closed by the run's own close-reopen hold (recorded, not released): still this ticket's PR on hold (resuming-26).
+  saveRun(cfg, 'BUG-15', { phase: 'branch-ci', outcome: 'error', holds: [{ mode: 'close-reopen', ok: true, from: '2026-11-20T01:00:00.000Z', why: 'ci' }] });
+  const [pHeld] = plan(cfg, [storyFile], { base: 'main', reopenDeps: { prIsOpen: () => false } });
+  assert.deepEqual([pHeld.reopenedPr, pHeld.fromRemote], [prUrl, true]);
+  saveRun(cfg, 'BUG-15', { outcome: 'hold-failed', phase: null, holds: [{ mode: 'draft', ok: false, from: '2026-11-20T01:00:00.000Z', why: 'reopened' }] });
 
   const events = [];
   startResolvedReruns(cfg, [
@@ -501,25 +511,36 @@ test('ADV-18 & ADV-29: confirmPrState retries bounded 3 attempts; draft-first ho
   assert.equal(out.outcome, 'done');
 });
 
-test('Bitbucket close-reopen: preOpenProblems and factory doctor report it is unsupported and draft is used', (t) => {
+test('Bitbucket close-reopen: a warning from config validation and factory doctor, not a problem; draft is used', (t) => {
   const bb = createBitbucketHost({ url: 'https://bitbucket.org', repo: 'ws/repo' }, { token: 'bb-tok' });
-  const problems = preOpenProblems({ implement: { preOpen: { afterOpen: 'close-reopen' } } }, { host: bb });
-  assert.equal(problems.length, 1);
-  assert.match(problems[0], /close-reopen.*not supported on Bitbucket.*"draft" is used instead/i);
+  const cfg = { implement: { preOpen: { afterOpen: 'close-reopen' } } };
+  assert.deepEqual(preOpenProblems(cfg), [], 'the setting is valid: it runs as draft');
+  const warnings = preOpenWarnings(cfg, { host: bb });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /close-reopen.*not supported on Bitbucket.*"draft" is used instead/i);
 
   const r = tmpRepo();
   t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(r.dir, '.factory'), { recursive: true });
   fs.writeFileSync(path.join(r.dir, '.factory/config.json'), JSON.stringify({ host: { type: 'bitbucket', url: 'https://bitbucket.org', repo: 'ws/repo' }, implement: { preOpen: { afterOpen: 'close-reopen' } } }));
+  // Config validation: the setting loads, with the warning on stderr.
+  const loaded = loadConfig('implement', r.dir);
+  assert.equal(loaded.warnings.length, 1);
+  assert.match(loaded.warnings[0], /close-reopen.*not supported on Bitbucket.*"draft" is used instead/i);
   const factoryCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../factory/factory.mjs');
-  const doc = sh(process.execPath, [factoryCli, 'doctor'], { cwd: r.dir, encoding: 'utf8', timeout: 60_000 });
-  assert.match(doc.stdout, /MISSING\s+PR delivery settings \(implement\.preOpen\)/);
-  assert.match(doc.stdout, /close-reopen.*not supported on Bitbucket.*"draft" is used instead/i);
+  // No host token reaches the doctor this test runs against a Bitbucket config (other-38; the runner strips them too).
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(GH|GITHUB|GITLAB|AZURE_DEVOPS|BITBUCKET)_.*TOKEN$|^SYSTEM_ACCESSTOKEN$/.test(k)));
+  const doc = sh(process.execPath, [factoryCli, 'doctor'], { cwd: r.dir, encoding: 'utf8', timeout: 60_000, env });
+  assert.doesNotMatch(doc.stdout, /MISSING\s+PR delivery settings \(implement\.preOpen\)/);
+  assert.match(doc.stdout, /WARN\s+PR delivery settings \(implement\.preOpen\)\s+\(implement\.preOpen\.afterOpen "close-reopen" is not supported on Bitbucket/);
+  // A host that can reopen: no warning.
+  assert.deepEqual(preOpenWarnings(cfg, { host: { label: 'GitHub', capabilities: { drafts: true } } }), []);
+  assert.deepEqual(configWarnings({ ...cfg, implement: { preOpen: { afterOpen: 'draft' } } }), []);
 });
 
 // A simulated code host for the real holdPr / releasePr / confirmPrState: `getFails` reads throw first.
 function simHost({ draft = false, labels = [], getFails = 0 } = {}) {
-  const st = { draft, labels: new Set(labels), state: 'open' };
+  const st = { draft, labels: new Set(labels), state: 'open', comments: [] };
   const log = [];
   let fails = getFails;
   return {
@@ -543,7 +564,13 @@ function simHost({ draft = false, labels = [], getFails = 0 } = {}) {
         for (const l of u.labels?.remove ?? []) st.labels.delete(l);
         if (u.state) st.state = u.state;
       },
-      comment: () => {},
+      // Comments edited in place by marker (the hold ledger is one).
+      comments: () => st.comments,
+      comment: (_pr, body, o = {}) => {
+        const i = o.marker ? st.comments.findIndex((c) => c.body.includes(o.marker)) : -1;
+        if (i >= 0) st.comments[i] = { body };
+        else st.comments.push({ body });
+      },
     },
   };
 }
@@ -652,4 +679,374 @@ test('ADV-36 (ADV-15): without --pr, a reopened ticket with an open PR has its r
   const withPr = [];
   startResolvedReruns({ root: '/nonexistent' }, stories, { pr: true, event: (_root, key, args) => withPr.push([key, ...args]) });
   assert.deepEqual(withPr, [], 'with --pr the worker clears it once the hold is confirmed');
+});
+
+// A rating that failed on a PR already open and on hold started the whole ticket over (planning, coding, verification,
+// review, tests, PR check) on the next run, or the adoption path released the PR unrated.
+test('a rating that fails on a PR open and on hold keeps the resume point at the rating, with the PR still on hold', async (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const cfg = { ...r.config, baseRef: 'main', implement: { branchPrefix: 'feat/', worktreeDir: path.join(r.dir, '.wts') } };
+  const wt = path.join(r.dir, '.wts', 'wt-held');
+  fs.mkdirSync(wt, { recursive: true });
+  const pr = 'https://github.com/acme/shop/pull/181';
+  const holds = [{ mode: 'draft', label: 'work-in-progress', ok: true, from: '2026-11-20T01:00:00.000Z', why: 'reopened' }];
+  const saves = [];
+  const out = await deliverFinished(cfg, cfg, { id: 'BUG-18', keys: ['BUG-18'], label: 'BUG-18', branch: 'feat/bug-18', worktree: r.dir, base: 'main', title: 'BUG-18: fix', body: 'Implements BUG-18.\n', isBug: true, existingPr: pr, holds, openedAt: '2026-11-19T00:00:00.000Z', readyAt: null, save: (s) => saves.push(s), io: baseIo([], { assess: () => null, updateBody: () => assert.fail('the held PR is not updated before it is rated') }), open: async () => assert.fail('never opened again') });
+  const head = sh('git', ['rev-parse', 'HEAD'], { cwd: r.dir, encoding: 'utf8' }).stdout.trim();
+  assert.deepEqual([out.outcome, out.phase, out.pr, out.provenHead], ['gate-assessment-failed', 'pre-open', pr, head]);
+  assert.match(out.reason, /stays on hold/);
+  const last = saves.at(-1);
+  assert.deepEqual([last.phase, last.pr, last.provenHead, last.holds], ['pre-open', pr, head, holds], 'the record keeps the resume point, not phase null');
+  saveRun(cfg, 'BUG-18', { status: 'finished', outcome: out.outcome, reason: out.reason, ...last, branch: 'feat/bug-18', worktree: wt });
+  assert.equal(openPending(loadRun(cfg, 'BUG-18')), true);
+  const [p] = plan(cfg, [writeTicketFixture(r.dir, 'BUG-18')], { base: 'main', reopenDeps: { prIsOpen: () => true } });
+  assert.equal(p.resume, true, 'the next run resumes at the rating');
+  // A PR that is not on hold any more is not rated and updated behind a person's back.
+  assert.equal(openPending({ ...loadRun(cfg, 'BUG-18'), holds: [{ ...holds[0], to: '2026-11-20T02:00:00.000Z' }] }), false);
+});
+
+test('a resume continues at the delivery only while the branch is at the head CI proved, here and on the remote', (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const g = (cwd, ...a) => sh('git', a, { cwd, encoding: 'utf8' });
+  const origin = `${r.dir}-origin.git`;
+  t.after(() => fs.rmSync(origin, { recursive: true, force: true }));
+  g(r.dir, 'init', '-q', '--bare', origin);
+  g(r.dir, 'remote', 'add', 'origin', origin);
+  g(r.dir, 'checkout', '-qb', 'feat/bug-19');
+  g(r.dir, 'push', '-q', 'origin', 'feat/bug-19');
+  const proven = g(r.dir, 'rev-parse', 'HEAD').stdout.trim();
+  const rec = { provenHead: proven, pr: 'https://github.com/acme/shop/pull/19' };
+  assert.equal(headMovedSince(r.dir, 'feat/bug-19', rec), null);
+  const why = (x) => x?.why ?? '';
+  // A person pushed to the PR's branch in between: their commit is reviewed, never skipped.
+  const other = `${r.dir}-other`;
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  g(r.dir, 'clone', '-q', '-b', 'feat/bug-19', origin, other);
+  fs.writeFileSync(path.join(other, 'fix.txt'), 'a person\'s change\n');
+  g(other, '-c', 'user.email=p@example.com', '-c', 'user.name=P', 'commit', '-qam', 'x', '--allow-empty');
+  g(other, 'push', '-q', 'origin', 'feat/bug-19');
+  assert.match(why(headMovedSince(r.dir, 'feat/bug-19', rec)), /pushed in between/);
+  // The remote's own answer counts, not a tracking ref: with the ref gone and the fetch narrowed, the move is still seen.
+  g(r.dir, 'config', 'remote.origin.fetch', '+refs/heads/main:refs/remotes/origin/main');
+  g(r.dir, 'update-ref', '-d', 'refs/remotes/origin/feat/bug-19');
+  assert.match(why(headMovedSince(r.dir, 'feat/bug-19', rec)), /pushed in between/);
+  // A local commit after the proof: moved. A remote that cannot be read: unreadable (the resume stops, Sol 23).
+  assert.match(why(headMovedSince(r.dir, 'feat/bug-19', { ...rec, provenHead: 'f'.repeat(40) })), /not f{7} that CI proved/);
+  g(r.dir, 'remote', 'set-url', 'origin', path.join(r.dir, 'no-such-remote'));
+  assert.deepEqual(headMovedSince(r.dir, 'feat/bug-19', rec), { why: 'origin/feat/bug-19 could not be read', unreadable: true });
+  // A record from before the proven head was kept: an open PR could have moved, so no resume; no PR resumes as before.
+  assert.match(why(headMovedSince(r.dir, 'feat/bug-19', { pr: rec.pr })), /not recorded/);
+  // A record from before the proven head with no PR still reads the remote (round 4): unreadable here.
+  assert.deepEqual(headMovedSince(r.dir, 'feat/bug-19', {}), { why: 'origin/feat/bug-19 could not be read', unreadable: true });
+});
+
+test('a resume records and narrates the demo again only when this commit has no stored media from a finished step', async (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const head = sh('git', ['rev-parse', 'HEAD'], { cwd: r.dir, encoding: 'utf8' }).stdout.trim();
+  const stateDir = path.join(r.dir, '.factory/state/pr-check');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const deliver = async (record, media) => {
+    if (record) fs.writeFileSync(path.join(stateDir, 'FEAT-2-demo-video.json'), JSON.stringify(record));
+    const order = [];
+    await deliverFinished(r.config, r.config, { id: 'FEAT-2', keys: ['FEAT-2'], label: 'FEAT-2', branch: 'feat/feat-2', worktree: r.dir, base: 'main', title: 'FEAT-2: x', body: 'Implements FEAT-2.\n', isBug: false, resumed: true, save: () => {}, io: baseIo(order, { demoVideo: async () => (order.push('demo-video'), { exit: 0 }), media: () => media }), open: async () => ({ url: 'https://github.com/acme/shop/pull/2', pushed: true }) });
+    return order.includes('demo-video');
+  };
+  const stored = { video: 'the stored section', notes: [] };
+  assert.equal(await deliver({ head, exit: 0 }, stored), false, 'stored media of this commit: no recording, no narration');
+  assert.equal(await deliver({ head, exit: 0, block: 'the reproduction could not be shown' }, stored), true, 'a step that blocked runs again');
+  assert.equal(await deliver({ head: 'f'.repeat(40), exit: 0 }, stored), true, 'another commit');
+  assert.equal(await deliver({ head, exit: 0 }, { notes: [] }), true, 'nothing stored');
+});
+
+test('a ticket delivered earlier whose local branch was removed after delivery is still done (its remote branch counts)', (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const g = (...a) => sh('git', a, { cwd: r.dir, encoding: 'utf8' });
+  const cfg = { ...r.config, baseRef: 'main', implement: { branchPrefix: 'feat/', worktreeDir: path.join(r.dir, '.wts') } };
+  saveRun(cfg, 'BUG-20', { status: 'finished', outcome: 'done', pr: 'https://github.com/acme/shop/pull/20', branch: 'feat/bug-20', worktree: path.join(r.dir, '.wts', 'gone') });
+  g('update-ref', 'refs/remotes/origin/feat/bug-20', 'HEAD');
+  const [p] = plan(cfg, [writeTicketFixture(r.dir, 'BUG-20')], { base: 'main', reopenDeps: { prIsOpen: () => true } });
+  assert.match(p.skip ?? '', /done in a previous run/);
+});
+
+// ADV2-15: a bug PR was released without its rating when the run stopped between the open and the publication.
+test('the open is recorded at once, and a rating that cannot be published holds the PR instead of releasing it', async (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const saves = [];
+  const actions = [];
+  const out = await deliverFinished(r.config, r.config, { id: 'BUG-21', keys: ['BUG-21'], label: 'BUG-21', branch: 'feat/bug-21', worktree: r.dir, base: 'main', title: 'BUG-21: fix', body: 'Implements BUG-21.\n', isBug: true, save: (s0) => saves.push(s0), io: baseIo([], { publishGate: () => (actions.push('publish'), { status: 1, stderr: 'no host' }), hold: (pr, o) => (actions.push(['hold', pr]), { mode: 'draft', label: 'work-in-progress', ok: true, from: new Date().toISOString(), why: o.why }), release: () => actions.push('release') }), open: async () => ({ pushed: true, url: 'https://github.com/acme/shop/pull/21' }) });
+  const recorded = saves.findIndex((s0) => s0.pr === 'https://github.com/acme/shop/pull/21' && s0.opened);
+  assert.ok(recorded >= 0, 'the open is recorded before the publication');
+  // A bug PR opens held (Sol 22): never ready before its rating; the failed publication keeps that hold.
+  assert.deepEqual(actions, [['hold', 'https://github.com/acme/shop/pull/21'], 'publish']);
+  assert.equal(saves.at(-1).readyAt, null);
+  assert.deepEqual([out.outcome, out.phase, out.pr], ['gate-assessment-failed', 'pre-open', 'https://github.com/acme/shop/pull/21']);
+  assert.match(out.reason, /could not be published.*stays on hold/);
+  assert.equal(openPending({ ...saves.at(-1), outcome: out.outcome }), true, 'a resume publishes it again');
+});
+
+test('publishing the rating on an open PR uses the rating of this head only, else a result that needs a person', (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const head = sh('git', ['rev-parse', 'HEAD'], { cwd: r.dir, encoding: 'utf8' }).stdout.trim();
+  const dir = path.join(r.dir, '.factory/state/pr-check');
+  fs.mkdirSync(dir, { recursive: true });
+  const calls = [];
+  const o = { id: 'BUG-22', keys: ['BUG-22'], label: 'BUG-22', branch: 'feat/bug-22', worktree: r.dir, base: 'main', isBug: true, save: () => {}, io: baseIo([], { publishGate: (x) => (calls.push(x.assessment), { status: 0 }) }) };
+  for (const headSha of [head, 'f'.repeat(40)]) {
+    fs.writeFileSync(path.join(dir, 'BUG-22-gate-assessment.json'), JSON.stringify({ headSha, tickets: [] }));
+    assert.equal(publishRatingOrHold(r.config, r.config, o, { prUrl: 'https://github.com/acme/shop/pull/22' }), null);
+  }
+  assert.deepEqual(calls, [path.join(dir, 'BUG-22-gate-assessment.json'), null]);
+});
+
+// ADV2-17: a recorded hold was trusted on resume although a person could have released it.
+test('a recorded hold is confirmed on the host before agents work on its PR again', () => {
+  const rec = { pr: 'https://github.com/acme/shop/pull/23', holds: [{ mode: 'close-reopen', ok: true, from: '2026-11-20T00:00:00Z', why: 'reopened' }] };
+  const seen = [];
+  assert.equal(confirmRecordedHold({}, rec, { io: { confirmHold: (pr, o) => (seen.push(o.mode), true) } }).ok, true);
+  assert.deepEqual(seen, ['close-reopen']);
+  const gone = confirmRecordedHold({}, rec, { io: { confirmHold: () => false } });
+  assert.equal(gone.ok, false);
+  assert.match(gone.reason, /not confirmed on the host/);
+  assert.equal(confirmRecordedHold({}, { ...rec, holds: [] }, { io: { confirmHold: () => true } }).ok, false, 'no recorded hold: nothing to trust');
+});
+
+test('a resume whose branch moved keeps its known PR, a closed hold included, as the PR to hold and update', () => {
+  const opts = { key: 'BUG-24', pr: false };
+  assert.deepEqual(carryHeldPr(opts, { pr: 'https://github.com/acme/shop/pull/24', holds: [{ mode: 'close-reopen', ok: true }] }), { key: 'BUG-24', pr: true, reopenedPr: 'https://github.com/acme/shop/pull/24', fromRemote: true });
+  assert.equal(carryHeldPr(opts, { pr: null }), opts);
+});
+
+// ---- round 3: both reviews' reproductions --------------------------------------------------------------------------
+
+test('the PR is recorded the moment the host returns it, before any follow-up call; a bug PR opens held, never ready before its rating (Sol 21, Sol 22)', async (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const saves = [];
+  const seen = [];
+  await deliverFinished(r.config, r.config, {
+    id: 'BUG-61', keys: ['BUG-61'], label: 'BUG-61', branch: 'feat/bug-61', worktree: r.dir, base: 'main', title: 'BUG-61: fix', body: 'Implements BUG-61.\n', isBug: true, save: (s0) => saves.push(s0),
+    io: baseIo([], { publishGate: () => (seen.push(['publish', saves.at(-1)?.readyAt ?? null]), { status: 0 }) }),
+    // The host returned the PR; posting the left-out sections then stalls (a crash here must not lose the PR).
+    open: async ({ draft, onOpened }) => {
+      seen.push(['draft', draft]);
+      await onOpened('https://github.com/acme/shop/pull/61');
+      seen.push(['recorded before the follow-ups', saves.some((s0) => s0.pr === 'https://github.com/acme/shop/pull/61' && s0.opened)]);
+      return { pushed: true, url: 'https://github.com/acme/shop/pull/61' };
+    },
+  });
+  assert.deepEqual(seen.slice(0, 2), [['draft', true], ['recorded before the follow-ups', true]]);
+  // Recorded with the draft hold it asked for, not yet confirmed (never `holds: []` for a PR opened held).
+  const first = saves.find((s0) => s0.pr && s0.opened);
+  assert.deepEqual(first.holds.map((h) => [h.mode, h.ok]), [['draft', false]]);
+  assert.deepEqual(seen.find((x) => x[0] === 'publish'), ['publish', null], 'not ready when the rating is published');
+});
+
+test('a resumed checkout takes a person\'s commits from the remote, or stops: unreadable, diverged (Sol 23, Sol 24)', (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const g = (cwd, ...a) => sh('git', ['-c', 'user.email=p@example.com', '-c', 'user.name=P', ...a], { cwd, encoding: 'utf8' });
+  const origin = `${r.dir}-origin.git`;
+  const other = `${r.dir}-other`;
+  t.after(() => fs.rmSync(origin, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  g(r.dir, 'init', '-q', '--bare', origin);
+  g(r.dir, 'remote', 'add', 'origin', origin);
+  g(r.dir, 'checkout', '-qb', 'feat/bug-62');
+  g(r.dir, 'push', '-q', 'origin', 'feat/bug-62');
+  assert.deepEqual(takeRemoteHead(r.dir, 'feat/bug-62').moved, false);
+  g(r.dir, 'clone', '-q', '-b', 'feat/bug-62', origin, other);
+  g(other, 'commit', '-q', '--allow-empty', '-m', 'a person\'s fix');
+  g(other, 'push', '-q', 'origin', 'feat/bug-62');
+  const pushed = g(other, 'rev-parse', 'HEAD').stdout.trim();
+  assert.deepEqual(takeRemoteHead(r.dir, 'feat/bug-62'), { head: pushed, moved: true });
+  assert.equal(g(r.dir, 'rev-parse', 'HEAD').stdout.trim(), pushed, 'the stages that run again review the person\'s commit');
+  // Diverged: a local commit the remote does not have, and another pushed meanwhile.
+  g(r.dir, 'commit', '-q', '--allow-empty', '-m', 'local');
+  g(other, 'commit', '-q', '--allow-empty', '-m', 'remote');
+  g(other, 'push', '-q', 'origin', 'feat/bug-62');
+  assert.match(takeRemoteHead(r.dir, 'feat/bug-62').stop, /diverged/);
+  g(r.dir, 'remote', 'set-url', 'origin', path.join(r.dir, 'no-such-remote'));
+  assert.match(takeRemoteHead(r.dir, 'feat/bug-62').stop, /could not be read/);
+  // The resume routes stop on these, never continue into the stages or the CI wait.
+  const src = fs.readFileSync(new URL('../lib/implement.mjs', import.meta.url), 'utf8');
+  assert.match(src, /if \(moved\?\.unreadable\) return stop\(moved\.why\);\s+if \(moved\) \{\s+\/\/[^\n]*\n\s+const taken = takeRemoteHead\(worktree, branch\);\s+if \(taken\.stop\) return stop\(taken\.stop\);/);
+  assert.match(src, /const m = movedAfterOpen\('at the CI wait', saved\.deliveredHead \?\? null\);\s+if \(m\?\.stop\) \{\s+log\(`\$\{key\}: not resumed at the CI wait/);
+});
+
+test('a recorded hold is confirmed on the host again before a CI fixing round; one a person released is held again first (Sol 26)', async (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const actions = [];
+  let n = 0;
+  const out = await afterOpen(r.config, r.config, {
+    id: 'BUG-63', keys: ['BUG-63'], label: 'BUG-63', prUrl: 'https://github.com/acme/shop/pull/63', branch: 'feat/bug-63', worktree: r.dir, base: 'main', isBug: false, result: { outcome: 'done' }, readyAt: null,
+    holds: [{ mode: 'draft', label: 'work-in-progress', ok: true, from: '2026-11-20T01:00:00.000Z', why: 'draft-back' }],
+    save: () => {}, load: () => ({}),
+    io: baseIo([], {
+      gate: async (o) => (actions.push(['gate', o.fixRounds]), n++ ? GREEN : { state: 'failure', names: ['CI'], failing: ['x'], pending: [], rounds: 0 }),
+      confirmHold: () => (actions.push('confirm'), false),
+      hold: () => (actions.push('hold'), { mode: 'draft', label: 'work-in-progress', ok: true, from: new Date().toISOString(), why: 'ci' }),
+    }),
+  });
+  assert.deepEqual(actions.slice(0, 3), [['gate', 0], 'confirm', 'hold'], 'confirmed (it was not), held again, then the fixing round');
+  assert.equal(out.holds[0].unconfirmed, true);
+});
+
+// ---- round 4 -----------------------------------------------------------------------------------------------------------
+
+test('a bug PR is released only on a head whose rating the host shows: after a fixing commit the new head is rated while held (resuming-22)', async (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const rated = sh('git', ['rev-parse', 'HEAD'], { cwd: r.dir, encoding: 'utf8' }).stdout.trim();
+  const order = [];
+  let n = 0;
+  await afterOpen(r.config, r.config, {
+    id: 'BUG-71', keys: ['BUG-71'], label: 'BUG-71', prUrl: 'https://github.com/acme/shop/pull/71', branch: 'feat/bug-71', worktree: r.dir, base: 'main', isBug: true, result: { outcome: 'done' }, readyAt: null, ratedHead: rated,
+    holds: [{ mode: 'draft', label: 'work-in-progress', ok: true, from: '2026-11-20T01:00:00.000Z', why: 'opened held' }],
+    save: () => {}, load: () => ({}),
+    io: baseIo([], {
+      // The CI fixer commits a fix in the fixing round; then CI is green on the new head.
+      gate: async (o) => {
+        if (o.fixRounds > 0) sh('git', ['-c', 'user.email=f@example.com', '-c', 'user.name=F', 'commit', '-q', '--allow-empty', '-m', 'ci fix'], { cwd: r.dir });
+        return n++ === 0 ? { state: 'failure', names: ['CI'], failing: ['x'], pending: [], rounds: 0 } : GREEN;
+      },
+      confirmHold: () => true,
+      publishGate: (o) => (order.push(['publish', sh('git', ['rev-parse', 'HEAD'], { cwd: o.worktree, encoding: 'utf8' }).stdout.trim() !== rated]), { status: 0 }),
+      release: () => (order.push('release'), true),
+    }),
+  });
+  assert.deepEqual(order, [['publish', true], 'release'], 'the new head is rated (published and shown) before the release');
+  // A publication that fails keeps it held and stops.
+  n = 0;
+  const actions = [];
+  const out = await afterOpen(r.config, r.config, {
+    id: 'BUG-72', keys: ['BUG-72'], label: 'BUG-72', prUrl: 'https://github.com/acme/shop/pull/72', branch: 'feat/bug-72', worktree: r.dir, base: 'main', isBug: true, result: { outcome: 'done' }, readyAt: null, ratedHead: rated,
+    holds: [{ mode: 'draft', label: 'work-in-progress', ok: true, from: '2026-11-20T01:00:00.000Z', why: 'opened held' }],
+    save: () => {}, load: () => ({}),
+    io: baseIo([], { gate: async () => GREEN, confirmHold: () => true, publishGate: () => (actions.push('publish'), { status: 3, stderr: 'not shown' }), release: () => (actions.push('release'), true) }),
+  });
+  assert.deepEqual(actions, ['publish']);
+  assert.equal(out.outcome, 'gate-assessment-failed');
+});
+
+test('a record from before the proven head was kept still reads the remote: unreadable stops (resuming-23)', () => {
+  const calls = [];
+  const gitImpl = (cwd, args) => (calls.push(args[0]), args[0] === 'rev-parse' ? { status: 0, stdout: `${'a'.repeat(40)}\n` } : { status: 128, stdout: '', stderr: 'unreachable' });
+  assert.deepEqual(headMovedSince('/w', 'feat/x', {}, { gitImpl }), { why: 'origin/feat/x could not be read', unreadable: true });
+  assert.ok(calls.includes('ls-remote'));
+  const moved = (cwd, args) => (args[0] === 'rev-parse' ? { status: 0, stdout: 'a'.repeat(40) } : { status: 0, stdout: `${'b'.repeat(40)}\trefs/heads/feat/x\n` });
+  assert.match(headMovedSince('/w', 'feat/x', {}, { gitImpl: moved }).why, /pushed in between/);
+});
+
+test('a resume after the open whose branch a person moved runs the stages again on it with the PR held, never only the steps after the open (resuming-24)', () => {
+  const src = fs.readFileSync(new URL('../lib/implement.mjs', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('async function implementStoryInner('));
+  // The CI-wait route and the opened-but-unpublished route both go through movedAfterOpen, which routes a moved head to
+  // the reopened PR route (held first, stages again) and stops when the remote head cannot be taken.
+  assert.match(fn, /const movedAfterOpen = \(where, ours = null\) => \{[\s\S]*?opts = carryHeldPr\(opts, saved\);\s*rerun = true;/);
+  assert.match(fn, /const m = movedAfterOpen\('at the CI wait', saved\.deliveredHead \?\? null\);\s*if \(m\?\.stop\)/);
+  assert.match(fn, /&& fs\.existsSync\(worktree\) && !rerun\) \{\s*log\(`\$\{key\}: resuming at the CI wait/);
+  assert.match(fn, /saved\.pr && saved\.opened && movedAfterOpen\('after the open', saved\.provenHead \?\? null\)\?\.stop/);
+});
+
+// ---- round 5 -----------------------------------------------------------------------------------------------------------
+
+test('the release reads the PR\'s change from the host, not this checkout: a head pushed there is rated before the release (resuming-22, ADV2-R4-01)', async (t) => {
+  const r = tmpRepo();
+  t.after(() => fs.rmSync(r.dir, { recursive: true, force: true }));
+  const order = [];
+  // The host's change is not the one rated (a person pushed B; this checkout and its rating stayed on A).
+  await afterOpen(r.config, r.config, {
+    id: 'BUG-81', keys: ['BUG-81'], label: 'BUG-81', prUrl: 'https://github.com/acme/shop/pull/81', branch: 'feat/bug-81', worktree: r.dir, base: 'main', isBug: true, result: { outcome: 'done' }, readyAt: null, ratedDiff: 'a'.repeat(24),
+    holds: [{ mode: 'draft', label: 'work-in-progress', ok: true, from: '2026-11-20T01:00:00.000Z', why: 'opened held' }],
+    save: () => {}, load: () => ({}),
+    io: baseIo([], { gate: async () => GREEN, confirmHold: () => true, prDiffKey: () => 'b'.repeat(24), publishGate: () => (order.push('publish'), { status: 0 }), release: () => (order.push('release'), true) }),
+  });
+  assert.deepEqual(order, ['publish', 'release']);
+  // The same change as rated (the pipeline's base merge since): released without publishing again.
+  const same = [];
+  await afterOpen(r.config, r.config, {
+    id: 'BUG-82', keys: ['BUG-82'], label: 'BUG-82', prUrl: 'https://github.com/acme/shop/pull/82', branch: 'feat/bug-82', worktree: r.dir, base: 'main', isBug: true, result: { outcome: 'done' }, readyAt: null, ratedDiff: 'a'.repeat(24),
+    holds: [{ mode: 'draft', label: 'work-in-progress', ok: true, from: '2026-11-20T01:00:00.000Z', why: 'opened held' }],
+    save: () => {}, load: () => ({}),
+    io: baseIo([], { gate: async () => GREEN, confirmHold: () => true, prDiffKey: () => 'a'.repeat(24), publishGate: () => (same.push('publish'), { status: 0 }), release: () => (same.push('release'), true) }),
+  });
+  assert.deepEqual(same, ['release']);
+});
+
+// A delivery resumed on a repository with a real remote: what the resume did before anything else, from its log.
+async function resumeOf(t, setup) {
+  const r = tmpRepo();
+  const g = (cwd, ...a) => sh('git', ['-c', 'user.email=p@example.com', '-c', 'user.name=P', ...a], { cwd, encoding: 'utf8' });
+  const origin = `${r.dir}-origin.git`;
+  const other = `${r.dir}-other`;
+  t.after(() => [r.dir, origin, other].forEach((d) => fs.rmSync(d, { recursive: true, force: true })));
+  g(r.dir, 'init', '-q', '--bare', origin);
+  g(r.dir, 'remote', 'add', 'origin', origin);
+  const wt = path.join(r.dir, '.wts', 'bug-70');
+  g(r.dir, 'worktree', 'add', '-q', '-b', 'feat/bug-70', wt, 'main');
+  g(wt, 'commit', '-q', '--allow-empty', '-m', 'the fix');
+  g(wt, 'push', '-q', 'origin', 'feat/bug-70');
+  const pushed = g(wt, 'rev-parse', 'HEAD').stdout.trim();
+  const config = { ...r.config, baseRef: 'main', implement: { branchPrefix: 'feat/', worktreeDir: path.join(r.dir, '.wts') } };
+  const person = () => {
+    g(r.dir, 'clone', '-q', '-b', 'feat/bug-70', origin, other);
+    g(other, 'commit', '-q', '--allow-empty', '-m', 'a person\'s commit');
+    g(other, 'push', '-q', 'origin', 'feat/bug-70');
+    return g(other, 'rev-parse', 'HEAD').stdout.trim();
+  };
+  setup({ config, wt, pushed, person, g, dir: r.dir });
+  const { implementStory } = await import('../lib/implement.mjs');
+  const logged = [];
+  const write = process.stderr.write;
+  process.stderr.write = (s0) => (logged.push(String(s0)), true);
+  let out;
+  try {
+    out = await implementStory(config, { key: 'BUG-70', base: 'main', branch: 'feat/bug-70', worktree: wt, resume: true, pr: true });
+  } catch (error) {
+    out = { threw: String(error?.message ?? error) };
+  } finally {
+    process.stderr.write = write;
+  }
+  return { out, log: logged.join('') };
+}
+
+test('a branch-CI resume reads the remote first: unreadable stops before the checkout is prepared (resuming-23)', async (t) => {
+  const { out, log } = await resumeOf(t, ({ config, wt, pushed, g, dir }) => {
+    saveRun(config, 'BUG-70', { phase: 'branch-ci', branch: 'feat/bug-70', worktree: wt, base: 'main', pushedHead: pushed });
+    g(wt, 'remote', 'set-url', 'origin', path.join(dir, 'no-such-remote'));
+  });
+  assert.equal(out.outcome, 'error');
+  assert.match(out.reason, /not resumed at the branch CI of feat\/bug-70: origin\/feat\/bug-70 could not be read/);
+  assert.doesNotMatch(log, /reusing worktree/, 'stopped before the checkout was prepared');
+});
+
+test('a resume compares the remote with the commit the run itself pushed, not with a checkout already brought forward (resuming-24)', async (t) => {
+  // At the CI wait: a person pushed B, and an earlier resume already fast-forwarded the checkout to B.
+  const ciWait = await resumeOf(t, ({ config, wt, pushed, person, g }) => {
+    person();
+    g(wt, 'pull', '-q', '--ff-only', 'origin', 'feat/bug-70');
+    saveRun(config, 'BUG-70', { phase: 'ci-wait', branch: 'feat/bug-70', worktree: wt, base: 'main', pr: 'https://github.com/acme/shop/pull/70', preOpen: true, deliveredHead: pushed, holds: [] });
+  });
+  assert.match(ciWait.log, /was pushed to feat\/bug-70 while the run was stopped: the stages run again on it, with https:\/\/github\.com\/acme\/shop\/pull\/70 held first/);
+  assert.doesNotMatch(ciWait.log, /resuming at the CI wait/);
+  // Before the open, no rating pending and no PR recorded: the same, from the head CI proved.
+  const preOpen = await resumeOf(t, ({ config, wt, pushed, person, g }) => {
+    person();
+    g(wt, 'pull', '-q', '--ff-only', 'origin', 'feat/bug-70');
+    saveRun(config, 'BUG-70', { phase: 'pre-open', branch: 'feat/bug-70', worktree: wt, base: 'main', greenAt: '2026-11-20T01:00:00.000Z', provenHead: pushed, outcome: 'error' });
+  });
+  assert.match(preOpen.log, /was pushed to feat\/bug-70 while the run was stopped: the stages run again on it/);
+  assert.doesNotMatch(preOpen.log, /continuing after the open/);
+  // Nothing moved: the CI wait resumes as before.
+  const same = await resumeOf(t, ({ config, wt, pushed }) => {
+    saveRun(config, 'BUG-70', { phase: 'ci-wait', branch: 'feat/bug-70', worktree: wt, base: 'main', pr: 'https://github.com/acme/shop/pull/70', preOpen: true, deliveredHead: pushed, holds: [] });
+  });
+  assert.match(same.log, /resuming at the CI wait of https:\/\/github\.com\/acme\/shop\/pull\/70/);
 });

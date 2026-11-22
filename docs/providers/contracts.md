@@ -88,13 +88,14 @@ Capabilities of a tracker adapter (`safety`: the harness keeps the safety proper
 | `repo.ensureLabel` | write | `labels` | a label exists (GitHub needs it before use) | `name, { color, description }` | `nothing` |
 | `pr.open` | write | required | opens a pull request | `{ head, base, title, body, draft, labels, reviewers }` | `pr` |
 | `pr.get` | read | required | one pull request by number, URL or head branch | `pr` | `pr \| null (normalised: number, url, title, body, state open\|merged\|closed, draft, head, base, headSha, author, labels, mergeable, mergeState, autoMerge, createdAt, updatedAt, mergedAt, closedAt, mergeCommit)` |
-| `pr.list` | read | required | pull requests by state, head, base or label | `{ state, head, base, label, limit }` | `[pr]` |
+| `pr.list` | read | required | pull requests by state, head, base, label or words in the title | `{ state, head, base, label, search, limit }` | `[pr]` |
 | `pr.update` | write | required | title, body, labels { add, remove }, state, draft | `pr, changes` | `nothing` |
 | `pr.close` | write | required | closes a pull request (the retro self-test) | `pr` | `nothing` |
 | `pr.comment` | write | required | adds or edits in place the comment carrying a marker | `pr, body, { marker }` | `{ id, url }` |
 | `pr.comments` | read | required | the conversation comments | `pr` | `[{ id, author, body, createdAt, url }]` |
 | `pr.reviews` | read | required | reviews with their state and commit | `pr` | `[{ id, author, bot, state approved\|changes_requested\|commented\|dismissed, submittedAt, commit, body }]` |
 | `pr.reviewComments` | read | `reviewCommentThreads` | line review comments | `pr` | `[{ id, author, body, path, line, reviewId, createdAt }]` |
+| `pr.stateEvents` | read | `stateEvents` | the PR's close, reopen and merge events | `pr` | `[{ id, type closed\|reopened\|merged, at, actor }]` |
 | `pr.commits` | read | required | the PR's commits | `pr` | `[{ sha, author, committedAt, parents, message }]` |
 | `pr.files` | read | required | the changed files | `pr` | `[{ path, status, additions, deletions }]` |
 | `pr.diff` | read | `diff` | the unified diff | `pr` | `string` |
@@ -125,6 +126,7 @@ Capabilities of a host adapter (`safety`: the harness keeps the safety property 
 | `botIdentity` | no | a separate PR identity (an App, a project access token, a service principal) | PRs open as the developer's own identity; doctor says so |
 | `diff` | no | the PR's unified diff from the API | git diff of the base and head locally |
 | `reviewCommentThreads` | no | line review comments | reopens are counted from review states only |
+| `stateEvents` | yes | the close, reopen and merge events of a pull request | a person's close or reopen of a PR cannot be told from the pipeline's holds, so a bug fix on this host never merges itself (the review gate asks a person) |
 
 ### ci
 

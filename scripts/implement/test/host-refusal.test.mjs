@@ -237,6 +237,17 @@ test('openPullRequest: refused even with the shortest body and title -> refused,
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.factory/state/pr-open/feat__pwd-1.json'), 'utf8')).refused, true);
 });
 
+test('openPullRequest hands the PR to the caller the moment the host returns it, before the left-out sections are posted (Sol 21)', async () => {
+  const { dir } = tmpRepo();
+  const { host } = filterHost();
+  const order = [];
+  const comment = host.pr.comment;
+  host.pr.comment = (...a) => (order.push('comment'), comment(...a));
+  const opened = await openPullRequest(publisherFor(host, dir), { cwd: dir, branch: 'feat/pwd-1', base: 'main', title: TITLE, body: BODY }, { mergeBase: () => null, onOpened: (url) => order.push(`opened ${url}`) });
+  assert.equal(order[0], `opened ${opened.url}`);
+  assert.ok(order.slice(1).every((x) => x === 'comment') && order.length > 1);
+});
+
 // ---- the delivery: a distinct, resumable outcome ------------------------------------------------------------------------
 
 const GREEN = { state: 'success', names: ['AI app factory'], failing: [], pending: [], rounds: 0 };
@@ -297,12 +308,13 @@ test('openPending: pr-refused and the pre-0.2.83 record of a failed open after g
   assert.equal(openPending({ ...base, pr: 'https://x/pull/1', outcome: 'pr-refused' }), false);
 });
 
-test('a resumed delivery opens with no agent: it reuses the gate rating it made before and keeps the first push time', async () => {
+test('a resumed delivery opens with no agent: it reuses the gate rating it made before on this head and keeps the first push time', async () => {
   const r = tmpRepo();
   const order = [];
   const stateDir = path.join(r.dir, '.factory/state/pr-check');
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, 'BUG-9-gate-assessment.json'), JSON.stringify({ severity: 'Low', tickets: [] }));
+  const head = sh('git', ['rev-parse', 'HEAD'], { cwd: r.dir, encoding: 'utf8' }).stdout.trim();
+  fs.writeFileSync(path.join(stateDir, 'BUG-9-gate-assessment.json'), JSON.stringify({ severity: 'Low', tickets: [], headSha: head }));
   const out = await deliverFinished(r.config, r.config, {
     id: 'BUG-9', keys: ['BUG-9'], label: 'BUG-9', branch: 'feat/bug-9', worktree: r.dir, base: 'main', title: 'BUG-9: x', body: 'Implements BUG-9.\n\n- Test plan and automated tests: verified\n', isBug: true, resumed: true,
     result: { firstPushAt: '2026-11-19T02:49:26.762Z' }, save: () => {}, io: io(order),
@@ -312,6 +324,18 @@ test('a resumed delivery opens with no agent: it reuses the gate rating it made 
   assert.equal(order.filter((x) => x === 'open').length, 1);
   assert.equal(out.firstPushAt, '2026-11-19T02:49:26.762Z');
   assert.equal(out.pr, 'https://github.com/acme/shop/pull/9');
+
+  // A rating saved for another head (or one that does not say which) is not reused: this head is rated.
+  for (const saved of [{ severity: 'Low', tickets: [], headSha: 'f'.repeat(40) }, { severity: 'Low', tickets: [] }]) {
+    fs.writeFileSync(path.join(stateDir, 'BUG-9-gate-assessment.json'), JSON.stringify(saved));
+    const again = [];
+    await deliverFinished(r.config, r.config, {
+      id: 'BUG-9', keys: ['BUG-9'], label: 'BUG-9', branch: 'feat/bug-9', worktree: r.dir, base: 'main', title: 'BUG-9: x', body: 'Implements BUG-9.\n\n- Test plan and automated tests: verified\n', isBug: true, resumed: true,
+      result: {}, save: () => {}, io: io(again),
+      open: async () => ({ url: 'https://github.com/acme/shop/pull/9', pushed: true }),
+    });
+    assert.ok(again.includes('assess'), `rated again: ${again.join(',')}`);
+  }
 });
 
 test('rebuildDeliveryInput: a run from before the input was kept gets its title and body from the run records', () => {

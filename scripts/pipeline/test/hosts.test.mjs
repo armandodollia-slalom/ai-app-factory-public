@@ -83,6 +83,8 @@ function fakeGhCli() {
     if (a === 'pr' && b === 'checks') return { status: 8, stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }, { name: 'e2e', bucket: 'pending', link: 'u' }]), stderr: '' };
     if (a === 'pr' && b === 'diff') return out('diff --git a/a.js b/a.js\n');
     if (a === 'api' && b === 'user') return out({ login: 'octocat', id: 1 });
+    // A PR's comments from the issues API, every page (`--paginate --slurp`: a list of pages).
+    if (a === 'api' && /issues\/5\/comments$/.test(b) && args.includes('--slurp')) return out([[{ id: 77, body: 'x <!-- m -->', user: { login: 'dev' }, html_url: 'https://github.com/acme/shop/pull/5#issuecomment-77' }]]);
     if (a === 'api' && /pulls\/5\/reviews$/.test(b)) return out(`${JSON.stringify({ id: 1, user: { login: 'alice', type: 'User' }, state: 'APPROVED', submitted_at: 't1', commit_id: 'abc', body: '' })}\n`);
     if (a === 'api' && /pulls\/5\/comments$/.test(b)) return out(`${JSON.stringify({ id: 2, user: { login: 'alice' }, body: 'nit', path: 'a.js', line: 3, pull_request_review_id: 1, created_at: 't2' })}\n`);
     if (a === 'api' && /pulls\/5\/commits$/.test(b)) return out(`${JSON.stringify({ sha: 'abc', author: { login: 'dev' }, commit: { committer: { date: 't0' } } })}\n`);

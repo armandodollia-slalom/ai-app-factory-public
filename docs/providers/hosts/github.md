@@ -32,6 +32,7 @@
 | `botIdentity` | yes | nothing to change |
 | `diff` | yes | nothing to change |
 | `reviewCommentThreads` | yes | nothing to change |
+| `stateEvents` | yes | nothing to change |
 <!-- /generated:capabilities-github -->
 
 **Verified:** read-only `factory adapter check host` against the public test repository on 2026-11-17 (20 pass, 4 skipped write checks), and the v0.2.68 test suites, which run unchanged.

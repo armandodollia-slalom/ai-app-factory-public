@@ -11,12 +11,21 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const preload = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'temp-preload.mjs')).href;
+const here = path.dirname(fileURLToPath(import.meta.url));
+const preload = pathToFileURL(path.join(here, 'temp-preload.mjs')).href;
+const offline = pathToFileURL(path.join(here, 'offline-preload.mjs')).href;
 const base = process.env.FACTORY_TEST_TMP_PARENT || os.tmpdir();
 const registry = fs.mkdtempSync(path.join(base, 'ftrun-'));
 const keep = process.env.FACTORY_TEST_KEEP_TMP === '1';
+// No test contacts a code host: a `gh` that fails comes first on PATH, the hosts' tokens are not passed on, and every
+// test process blocks a fetch that leaves this machine (offline-preload.mjs).
+const noHost = fs.mkdtempSync(path.join(base, 'ftrun-nohost-'));
+fs.writeFileSync(path.join(noHost, 'gh'), '#!/bin/sh\necho "gh: tests run offline" >&2\nexit 1\n', { mode: 0o755 });
+fs.writeFileSync(path.join(noHost, 'gh.cmd'), '@echo gh: tests run offline 1>&2\r\n@exit /b 1\r\n');
 // FACTORY_PRUNE=0: no test's `implement run` prunes this machine's real images or engine installs.
-const env = { ...process.env, FACTORY_PRUNE: '0', TMPDIR: base, TMP: base, TEMP: base, FACTORY_TEST_TMP_REGISTRY: registry, NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${preload}`].filter(Boolean).join(' ') };
+// Git reaches only local repositories (a fetch from an https or ssh remote a fixture names fails at once).
+const env = { ...process.env, GIT_ALLOW_PROTOCOL: 'file', GIT_TERMINAL_PROMPT: '0', FACTORY_PRUNE: '0', TMPDIR: base, TMP: base, TEMP: base, FACTORY_TEST_TMP_REGISTRY: registry, PATH: `${noHost}${path.delimiter}${process.env.PATH ?? ''}`, NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${preload}`, `--import=${offline}`].filter(Boolean).join(' ') };
+for (const k of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITLAB_TOKEN', 'AZURE_DEVOPS_TOKEN', 'AZURE_DEVOPS_EXT_PAT', 'SYSTEM_ACCESSTOKEN', 'BITBUCKET_TOKEN']) delete env[k];
 // A run started from inside a test (the guard test) is a run of its own.
 delete env.FACTORY_TEST_TMP_FILE;
 delete env.NODE_TEST_CONTEXT;
@@ -31,6 +40,7 @@ const cleanup = () => {
     }
   }
   fs.rmSync(registry, { recursive: true, force: true });
+  fs.rmSync(noHost, { recursive: true, force: true });
 };
 const child = spawn(process.execPath, ['--test', ...process.argv.slice(2)], { stdio: 'inherit', env });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));

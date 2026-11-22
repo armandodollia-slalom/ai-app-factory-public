@@ -13,17 +13,19 @@ import { addTicketLabel, setTicketBody, setTriageFields, ticketAssignees, ticket
 import { confidence, ticketSignals } from './confidence.mjs';
 import { ciFlaky } from '../../implement/lib/ci-wait.mjs';
 import { applyDeliveryCheck } from './delivery-check.mjs';
-import { autoMergePr, disarmUnlessMerging } from './automerge.mjs';
 import { failedTestsIn, originLine, pipelineOrigin } from './ci-origin.mjs';
 import { MARKER, applyReview, decideGate, gateState, isMergeTrigger, readPrState, renderNotice } from './gate.mjs';
 import { checksState, prFiles, disableAutoMerge, prCommits, prHost, prReviewComments, prReviews, prView, toReview, upsertComment } from './github.mjs';
-import { readCodeowners } from './publish.mjs';
+
+import { gateEffects, mergeAtBoundary, readCodeowners } from './publish.mjs';
 import { ciTarget } from '../../pipeline/lib/ci/index.mjs';
-import { cardReopen, newChangesRequested, reopenDecisionNote, withReopen } from './reopens.mjs';
+import { cardReopen, mergeReopens, newChangesRequested, reopenDecisionNote, ticketReopens, withReopen } from './reopens.mjs';
+import { isBugTicket } from '../../implement/lib/epic-plan.mjs';
+import { personEvents, withCurrentRejections } from './rejections.mjs';
 import { prClass, prSeverity } from './severity.mjs';
 import { gateSystemsSettings, systemsTouched } from './systems.mjs';
 import { extractTriage, upsertTriage } from './triage-section.mjs';
-import { fieldValues, recordTicket } from './assessment.mjs';
+import { fieldValues, liveDiffKey, recordTicket } from './assessment.mjs';
 import { quorum, requiredApprovals } from './quorum.mjs';
 import { prReviewRecord, revertsOf } from './pr-review.mjs';
 import { headActivities } from '../../implement/lib/pre-open.mjs';
@@ -43,36 +45,53 @@ const nextRound = (body) => {
   return rounds.length ? Math.max(...rounds) + 1 : 1;
 };
 
-// Records one human reopen of a triaged ticket. Returns the updated triage data, or null when the
-// ticket has no triage (never assessed by the gate).
+// Records one human reopen of a ticket. Returns the updated triage data. A ticket the gate never assessed gets a triage
+// section that holds only its reopens, so its next assessment still knows a person rejected it.
 export function recordReopen(config, gh, { key, issue, reopen }, { metricsConfig, applyEvent = null, log = () => {} }) {
   const body = ticketBody(config, gh, issue.number);
-  const triage = extractTriage(body);
-  if (!triage) return null;
+  const triage = extractTriage(body) ?? { v: 1, key, pr: reopen.pr ?? null, reopens: [] };
+  // Stored once: a retry of a rejection already on the ticket changes nothing (the same source, PR and time).
+  if (mergeReopens(triage.reopens ?? [], [reopen]).length === (triage.reopens ?? []).length) return triage;
   const next = withReopen(triage, reopen, config.implement.reviewGate);
   let updated = upsertTriage(body, next);
   updated = upsertDecisions(updated, { round: nextRound(updated), by: reopen.by ?? 'review-gate', at: reopen.at.slice(0, 10), answers: [], note: reopenDecisionNote(reopen) });
   setTicketBody(config, gh, issue.number, updated);
   safe(() => setTriageFields(config, gh, issue, fieldValues(next)), null, (e) => log(`${key}: board fields not updated: ${e.message.split('\n')[0]}`));
   safe(() => addTicketLabel(config, gh, issue.number, config.implement.reviewGate.labels?.reopened ?? 'reopened'), null, (e) => log(`${key}: label not added: ${e.message.split('\n')[0]}`));
-  appendJsonl(metricsFile(metricsConfig, OUTCOMES_FILE), { ts: reopen.at, type: 'reopen', story: key, pr: reopen.pr ?? null, source: reopen.source, by: reopen.by ?? null, afterMerge: Boolean(reopen.afterMerge), reopens: next.reopens.length, severity: next.severity?.level ?? null, severityBase: next.severity?.base ?? null });
+  appendJsonl(metricsFile(metricsConfig, OUTCOMES_FILE), { ts: reopen.at, type: 'reopen', story: key, pr: reopen.pr ?? null, source: reopen.source, detail: reopen.detail ?? null, by: reopen.by ?? null, afterMerge: Boolean(reopen.afterMerge), reopens: next.reopens.length, severity: next.severity?.level ?? null, severityBase: next.severity?.base ?? null });
   if (applyEvent) {
     const n = next.reopens.length;
-    const comment = `Human reopen #${n} (${reopen.detail ?? reopen.source}${reopen.pr ? `, ${reopen.pr}` : ''}). Severity is now **${next.severity?.level}** (${next.severity?.explanation}); this ticket can no longer auto-merge. ${reopen.afterMerge ? 'Its PR already merged, so `implement requeue` runs the fix again as a follow-up PR through the same gate.' : '`implement requeue` runs it again on its PR\'s branch.'} The reason is recorded under **Decisions** in the issue body for the re-run.`;
+    const comment = `Human reopen #${n} (${reopen.detail ?? reopen.source}${reopen.pr ? `, ${reopen.pr}` : ''}). ${next.severity?.level ? `Severity is now **${next.severity.level}** (${next.severity.explanation}); ` : ''}rejected by a person: this ticket can no longer auto-merge. ${reopen.afterMerge ? 'Its PR already merged, so `implement requeue` runs the fix again as a follow-up PR through the same gate.' : '`implement requeue` runs it again on its PR\'s branch.'} The reason is recorded under **Decisions** in the issue body for the re-run.`;
     safe(() => applyEvent(key, { type: 'reopened', id: `reopen:${key}:${n}`, body: comment }), null, (e) => log(`${key}: card not moved: ${e.message.split('\n')[0]}`));
   }
-  log(`${key}: human reopen #${next.reopens.length} (${reopen.source}); severity ${next.severity?.level}.`);
+  log(`${key}: human reopen #${next.reopens.length} (${reopen.source}); severity ${next.severity?.level ?? 'not assessed'}.`);
   return next;
 }
 
 // An assessment rebuilt from what GitHub holds (the PR's gate state and each ticket's triage data), so
 // any machine can evaluate a PR again without the original run.
-export function rebuildAssessment(config, gh, pr, state, { log = () => {} } = {}) {
+export function rebuildAssessment(config, gh, pr, state, { log = () => {}, cwd = config.root } = {}) {
   const repo = config.board.repo;
   const view = prView(prHost(config, gh), repo, pr);
+  const outcomes = safe(() => readMetricsLocal(config, OUTCOMES_FILE), []);
+  const errors = [];
+  // A rating counts only for the PR's own change it rated (its diff key): the pipeline's base merges keep it; any other
+  // commit (a person's push, a fixing round, a conflict resolved differently), or no rating on the ticket at all (the
+  // severity the gate's comment shows is not one), is not assessed until it is rated, and says why.
+  const head = view.headRefOid ?? null;
+  let liveKey;
+  const currentKey = () => (liveKey === undefined ? (liveKey = liveDiffKey({ cwd, base: view.baseRefName ?? config.baseRef, head, host: prHost(config, gh), pr })) : liveKey);
   const tickets = (state.tickets ?? []).map((t) => {
-    const triage = t.issue ? safe(() => extractTriage(ticketBody(config, gh, t.issue)), null, (e) => log(`${t.key}: triage not read: ${e.message}`)) : null;
-    return { key: t.key, issue: t.issue ? { number: t.issue } : null, signals: t.signals ?? null, ...(triage ?? {}), severity: triage?.severity ?? { level: t.severity ?? null }, confidence: triage?.confidence ?? { score: null, high: t.high, reasons: [] }, reopens: triage?.reopens ?? [], systems: triage?.systems ?? [], paths: triage?.paths ?? [] };
+    const read = t.issue ? safe(() => extractTriage(ticketBody(config, gh, t.issue)), null, (e) => log(`${t.key}: triage not read: ${e.message}`)) : null;
+    const rated = Boolean(read && (read.severity?.level || read.impact));
+    const stale = !rated || !read.ratedDiff || !currentKey() || read.ratedDiff !== currentKey();
+    // The PR's change that cannot be read for sure (no merge base to trust, no host diff) is unknown: rated again.
+    if (stale) errors.push(!rated ? `${t.key} has no rating on its ticket for the PR's head ${String(head ?? '?').slice(0, 7)}` : read.ratedDiff && !currentKey() ? `${t.key}'s rating cannot be matched to the PR's change at ${String(head ?? '?').slice(0, 7)} (it could not be read for sure): it is rated again` : `${t.key}'s rating is for another change than the PR's head ${String(head ?? '?').slice(0, 7)} holds`);
+    const triage = stale && read ? { ...read, severity: { level: null, explanation: errors.at(-1) } } : read;
+    // Every recorded reopen counts; the live read (withCurrentRejections) reads the ticket again and compares with the
+    // count the gate stored on the PR (`storedReopens`): fewer found is unknown, so review.
+    const reopens = ticketReopens({ key: t.key, triage, outcomes });
+    return { key: t.key, issue: t.issue ? { number: t.issue } : null, signals: t.signals ?? null, ...(triage ?? {}), severity: triage?.severity ?? { level: null, explanation: errors.at(-1) }, confidence: triage?.confidence ?? { score: null, high: t.high, reasons: [] }, reopens, storedReopens: Number(t.reopens ?? 0), systems: triage?.systems ?? [], paths: triage?.paths ?? [] };
   });
   // The systems come from the PR's files as they are now, with today's settings (council C8: a regate kept the systems
   // of the first assessment, so the pipeline's own files stayed a system named "Other" after the gate stopped counting
@@ -112,7 +131,7 @@ export function rebuildAssessment(config, gh, pr, state, { log = () => {} } = {}
   }
   // The signals the gate recorded when it first assessed the PR, with CI as it is now.
   for (const t of tickets) if (t.signals) t.signals = { ...t.signals, ci: ci ?? t.signals.ci ?? null };
-  return { pr: view.url ?? pr, view, tickets, severity, systems, class: prClass({ severity: severity.level, shared: systems.shared || systems.contract }), ci, headSha: view.headRefOid ?? null, assessedAt: state.assessedAt ?? null, ciReadAt: nowIso(), errors: [] };
+  return { pr: view.url ?? pr, view, tickets, severity, systems, class: prClass({ severity: severity.level, shared: systems.shared || systems.contract }), ci, headSha: view.headRefOid ?? null, assessedAt: state.assessedAt ?? null, ciReadAt: nowIso(), errors };
 }
 
 // Evaluates an open gated PR again and applies the result (the notice, labels, reviewers), auto-merging
@@ -162,22 +181,30 @@ export function postQuorumStatus(config, gh, pr, { ci = null } = {}) {
 
 export function regate(config, gh, pr, { prior, cwd = config.root, log = () => {}, extraState = {}, delivery = undefined, retryCheck = ciFlaky }) {
   const repo = config.board.repo;
-  const a = rebuildAssessment(config, gh, pr, prior, { log });
+  const a = rebuildAssessment(config, gh, pr, prior, { log, cwd });
   applyDeliveryCheck(a, prior, { gh, repo, pr, delivery, retryCheck, log });
   if (prior?.headSha && a.headSha && prior.headSha !== a.headSha) a.baseMergesOnly = safe(() => onlyBaseMergesSince(prCommits(prHost(config, gh), repo, pr), prior.headSha), false);
   if (a.ci === 'failure') {
     a.ciOrigin = safe(() => ciFailureOrigin(config, gh, a), null);
     if (a.ciOrigin) log(`${pr}: CI is red: ${a.ciOrigin}`);
   }
-  const decision = decideGate(a, { settings: config.implement.reviewGate, autoMerge: config.implement.autoMerge, prior });
-  const state = { ...gateState(a, decision, prior), ...extraState };
+  // A person's rejection, read now from the ticket and the host, on this path too (a direct regate after the CI wait).
+  Object.assign(a, withCurrentRejections(config, gh, a, { cwd }));
+  let decision = decideGate(a, { settings: config.implement.reviewGate, autoMerge: config.implement.autoMerge, prior });
+  let state = { ...gateState(a, decision, prior), ...extraState };
   const assignees = Object.fromEntries(a.tickets.map((t) => [t.key, t.issue ? safe(() => ticketAssignees(config, gh, t.issue.number), []) : []]));
   const context = { assignees, codeowners: readCodeowners(cwd, config.baseRef), author: a.view.author, currentLabels: a.view.labels ?? [] };
-  disarmUnlessMerging(prHost(config, gh), repo, pr, decision, { log, headSha: a.headSha });
+  gateEffects(config, gh, { ...a, pr }, decision, { log });
   if (decision.action === 'auto-merge') {
-    const m = autoMergePr(config, gh, a, decision, state, context);
-    log(`${pr}: ${m.merged ? 'checks green; auto-merge' : m.problems[0]}`);
-    return { decision: m.decision, state: m.state, merged: m.merged };
+    const r = mergeAtBoundary(config, gh, a, decision, state, context, { cwd, prior });
+    if (r.merge) {
+      log(`${pr}: ${r.merge.merged ? 'checks green; auto-merge' : r.merge.problems[0]}`);
+      return { decision: r.merge.decision, state: r.merge.state, merged: r.merge.merged };
+    }
+    // Decided again at the merge boundary: the PR's effects follow the new decision.
+    decision = r.decision;
+    state = { ...gateState(a, decision, prior), ...extraState };
+    gateEffects(config, gh, { ...a, pr }, decision, { log });
   }
   const applied = applyReview(config, gh, a, decision, state, context);
   for (const p of applied.problems) log(`${pr}: ${p}`);
@@ -202,9 +229,10 @@ export function syncGate(config, deps) {
   const out = { reopens: [], regated: [], reviews: [], reverts: [] };
   const regate_ = new Set();
 
-  // 1a. Cards and issues reopened by a person.
-  for (const item of items.filter((i) => i.key && i.severity && !i.labels?.includes(config.board.epicLabel))) {
-    const candidate = item.column === 'inProgress' || (item.state === 'OPEN' && item.column === 'done' && item.stateReason === 'REOPENED');
+  // 1a. Cards and issues reopened by a person: assessed tickets, and bug tickets the gate has not rated (yet).
+  const bug = (i) => Boolean(i.severity) || isBugTicket({ key: i.key, type: i.type ?? (i.labels?.includes('bug') ? 'bug' : null) });
+  for (const item of items.filter((i) => i.key && bug(i) && !i.labels?.includes(config.board.epicLabel))) {
+    const candidate = ['inProgress', 'ready', 'backlog'].includes(item.column) || (item.state === 'OPEN' && item.stateReason === 'REOPENED');
     if (!candidate) continue;
     const marker = safe(() => deps.markerOf(item.number), null, (e) => log(`${item.key}: comments not read: ${e.message}`));
     const found = cardReopen(item, marker);
@@ -212,10 +240,12 @@ export function syncGate(config, deps) {
     safe(
       () => {
         const triage = extractTriage(ticketBody(config, gh, item.number));
-        if (!triage) return;
-        const pr = triage.pr ? safe(() => prView(prHost(config, gh), config.board.repo, triage.pr), null) : null;
+        // An issue that stands reopened is one reopen until it is closed again: once recorded, a later pipeline marker
+        // (the re-run's review) does not count it twice. The pipeline never closes an issue; a merge does (then Done).
+        if (found.source === 'issue' && marker?.column !== 'done' && (triage?.reopens ?? []).some((r) => r.source === 'issue')) return;
+        const pr = triage?.pr ? safe(() => prView(prHost(config, gh), config.board.repo, triage.pr), null) : null;
         const feedback = (deps.commentsOf?.(item.number) ?? []).filter((c) => !/<!-- pipeline-board:/.test(c.body ?? '') && (!marker?.at || String(c.createdAt ?? '') > marker.at)).map((c) => `${c.author ? `@${c.author}: ` : ''}${String(c.body ?? '').replace(/\s+/g, ' ').trim()}`).join(' / ');
-        recordReopen(config, gh, { key: item.key, issue: { number: item.number, url: item.url }, reopen: { at, source: found.source, detail: found.detail, pr: triage.pr ?? null, afterMerge: pr?.state === 'MERGED', feedback: feedback || null } }, deps);
+        recordReopen(config, gh, { key: item.key, issue: { number: item.number, url: item.url }, reopen: { at, source: found.source, detail: found.detail, pr: triage?.pr ?? null, afterMerge: pr?.state === 'MERGED', feedback: feedback || null } }, deps);
         out.reopens.push(item.key);
         if (pr?.state === 'OPEN') regate_.add(pr.url);
       },
@@ -235,13 +265,25 @@ export function syncGate(config, deps) {
         const fresh = newChangesRequested(prReviews(prHost(config, gh), config.board.repo, p.url), prReviewComments(prHost(config, gh), config.board.repo, p.url), keys, prior.countedReviews);
         const counted = [...(prior.countedReviews ?? [])];
         for (const cr of fresh) {
+          // The review is counted only once every ticket it names has the rejection stored (a ticket with no issue, or a
+          // write that fails, leaves it to the next sync; a write that succeeded is not repeated, recordReopen).
+          let stored = true;
           for (const key of cr.keys) {
             const t = prior.tickets.find((x) => x.key === key);
-            if (!t?.issue) continue;
-            recordReopen(config, gh, { key, issue: { number: t.issue }, reopen: { at: cr.review.submitted_at ?? at, source: 'changes-requested', detail: `changes requested by @${cr.review.user?.login ?? '?'}`, by: cr.review.user?.login ?? null, pr: p.url, afterMerge: false, feedback: cr.feedback || null } }, deps);
-            out.reopens.push(key);
+            if (!t?.issue) {
+              stored = false;
+              log(`${key}: the changes requested on ${p.url} have no issue to be stored on; counted again next sync`);
+              continue;
+            }
+            try {
+              recordReopen(config, gh, { key, issue: { number: t.issue }, reopen: { at: cr.review.submitted_at ?? at, source: 'changes-requested', detail: `changes requested by @${cr.review.user?.login ?? '?'}`, by: cr.review.user?.login ?? null, pr: p.url, afterMerge: false, feedback: cr.feedback || null } }, deps);
+              out.reopens.push(key);
+            } catch (error) {
+              stored = false;
+              log(`${key}: reopen not recorded: ${error.message.split('\n')[0]}`);
+            }
           }
-          counted.push(cr.review.id);
+          if (stored) counted.push(cr.review.id);
         }
         // A reopened ticket blocks the PR's auto-merge for good.
         if (fresh.length || regate_.has(p.url)) disableAutoMerge(prHost(config, gh), config.board.repo, p.url);
@@ -301,11 +343,54 @@ export function recordClosedPrs(config, gh, { metricsConfig, log = () => {}, bas
         const state = readPrState(prHost(config, gh), repo, p.url);
         if (!state) return;
         const view = prView(prHost(config, gh), repo, p.url);
-        // A PR closed without merge (superseded by a later run, or dropped) is not a review: it is marked once and
-        // kept out of the review statistics (dogfood C2: the retired attempts' PRs counted as 0-approval reviews).
+        // A PR closed without merge is not a review: it is marked once and kept out of the review statistics (dogfood
+        // C2: the retired attempts' PRs counted as 0-approval reviews). The pipeline never closes a PR it delivered,
+        // except to hold it (implement.preOpen.afterOpen close-reopen, which leaves its hold comment): any other close is
+        // a person rejecting the delivery, recorded as a reopen of each of its tickets.
         if (!view.mergedAt) {
-          appendJsonl(file, { type: 'pr-closed', ts: now ?? nowIso(), pr: p.url, superseded: true, closedAt: view.closedAt ?? null });
-          log(`${p.url}: closed without merge; not counted in the review statistics.`);
+          // The pipeline's own close (a close-reopen hold it recorded by its event) is left for the hold to end; a close
+          // that is a person's is a rejection of each of its tickets; one whose provenance cannot be read is recorded as
+          // nothing yet (the gate reads it live as unknown, so review) and tried again next sync.
+          const why = 'PR closed without merge';
+          let held;
+          try {
+            const { events, person, unknown } = personEvents(prHost(config, gh), p.url);
+            const last = events.filter((e) => e.type === 'closed').at(-1);
+            // Made by the pipeline's own login with no record of the pipeline naming it: never stored as a person's
+            // rejection; the gate reads it as unknown (review) meanwhile.
+            if (last && unknown.includes(last)) throw new Error('the close was made by the pipeline\'s own login and no record of the pipeline names it');
+            held = Boolean(last) && !person.includes(last);
+          } catch (error) {
+            log(`${p.url}: closed without merge; whether by a person could not be read (${error.message.split('\n')[0]}): review until it can, tried again next sync.`);
+            return;
+          }
+          if (held) {
+            log(`${p.url}: closed by a pipeline hold; not recorded until the hold ends.`);
+            return;
+          }
+          const rejected = [];
+          const failed = [];
+          for (const t of state.tickets ?? []) {
+            if (!t?.issue) {
+              failed.push(t?.key ?? '?');
+              continue;
+            }
+            try {
+              recordReopen(config, gh, { key: t.key, issue: { number: t.issue }, reopen: { at: view.closedAt ?? now ?? nowIso(), source: 'pr-closed', detail: why, pr: p.url, afterMerge: false } }, { metricsConfig, log });
+              rejected.push(t.key);
+            } catch (error) {
+              failed.push(t.key);
+              log(`${t.key}: reopen not recorded: ${error.message.split('\n')[0]}`);
+            }
+          }
+          // Persisted before the close is consumed: a ticket not recorded keeps the PR unrecorded, so the next sync tries
+          // again (the gate reads the close live meanwhile).
+          if (failed.length) {
+            log(`${p.url}: closed without merge; the rejection of ${failed.join(', ')} was not recorded yet: tried again next sync.`);
+            return;
+          }
+          appendJsonl(file, { type: 'pr-closed', ts: now ?? nowIso(), pr: p.url, superseded: true, closedAt: view.closedAt ?? null, ...(rejected.length ? { rejected } : {}) });
+          log(`${p.url}: closed without merge; not counted in the review statistics${rejected.length ? `; a rejection of ${rejected.join(', ')}` : ''}.`);
           return;
         }
         // An auto-merge the gate enabled has now happened: the notice says so, with the time.

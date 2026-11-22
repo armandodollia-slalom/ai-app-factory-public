@@ -43,7 +43,7 @@ test('a failure in a test class the pipeline wrote names its story and says it i
 });
 
 test('failing checks hold a Low PR in review only while they fail', () => {
-  const t = { key: 'BUG-3', severity: { level: 'Low' }, confidence: { high: true, reasons: [] }, reopens: [] };
+  const t = { key: 'BUG-3', severity: { level: 'Low' }, confidence: { high: true, reasons: [] }, reopens: [], rejectionChecked: true };
   const settings = { approvals: { Low: 1 } };
   const red = decideGate({ tickets: [t], severity: { level: 'Low' }, class: 'Low', ci: 'failure', ciOrigin: 'failing tests the pipeline wrote (BUG-16: …)' }, { settings, autoMerge: { enabled: true } });
   assert.equal(red.action, 'review');

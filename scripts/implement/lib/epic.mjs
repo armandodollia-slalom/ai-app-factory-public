@@ -34,13 +34,12 @@ import { OUTCOMES_FILE } from './decisions.mjs';
 import { councilRecords, councilReviewSection, withCouncilReview } from '../../pipeline/lib/council.mjs';
 import { EPIC_PLAN_STAGE, featureGroupTitle, deliveryShape, epicDeps, journeyGroup, epicPlanDecision, epicPlanTask, epicPrBody, epicSlug, epicTestKey, groupDeps, groupOutcome, groupsDecision, journeyTicket, nextStories, noteMarkdown, singleGroups, validateNote } from './epic-plan.mjs';
 import { parityGate, paritySection } from './ci-parity.mjs';
-import { HARNESS_EXCLUDES, commitAll, commitEnv, commitRecords, headSha, mergeInProgress, mustGit, unmergedFiles } from './gitops.mjs';
-import { adoptOpenedPr, afterOpen, prCheckHold, deliverFinished, deliveryIo, holdOpenPr, fullProjectRuns, fullProjectsSection, plan as planStories, prCheckFollowUps, runConditions, runConditionsSection, runsDir, shipMetrics, skippedOutcome, startWorker, withoutResolved, ownerDecisionBlock, waitingForPerson } from './implement.mjs';
+import { HARNESS_EXCLUDES, commitAll, commitEnv, commitRecords, headSha, mergeInProgress, mustGit, stackedRef, unmergedFiles } from './gitops.mjs';
+import { adoptOpenedPr, afterOpen, cleanDelivered, confirmRecordedHold, loadRun, takeRemoteHead, publishRatingOrHold, prCheckHold, deliverFinished, deliveryIo, holdOpenPr, fullProjectRuns, fullProjectsSection, plan as planStories, prCheckFollowUps, runConditions, runConditionsSection, runsDir, saveRun, shipMetrics, skippedOutcome, startWorker, withoutResolved, ownerDecisionBlock, waitingForPerson } from './implement.mjs';
 import { lspAdapter } from './lsp.mjs';
 import { waitForMemory } from './resources.mjs';
 import { agentSettings, createContext, runSelf } from './orchestrate.mjs';
 import { parsePlanOutput } from './plan.mjs';
-import { syncFromRemote } from './reopen.mjs';
 import { withDerivedClasses } from '../../pipeline/lib/policy-classes.mjs';
 
 const FV_CLI = path.join(INSTALL_ROOT, 'scripts/feature-verification/feature-verification.mjs');
@@ -86,7 +85,8 @@ export function epicToJoin(config, tickets, { standalone = false, reopen = false
   if (!state) return null;
   const unit = Object.values(state.units ?? {}).find((u) => tickets.every((t) => u.keys?.includes(t.key)));
   if (SETTLED.has(state.status) && !(reopen && unit?.kind === 'group' && unit.pr && prOpen(unit.pr))) return null;
-  if (!unit || !revExists(config.root, `refs/heads/${unit.branch}`)) return null;
+  // A delivered unit's local branch is removed once it is on the remote: the remote one is joined.
+  if (!unit || !(revExists(config.root, `refs/heads/${unit.branch}`) || revExists(config.root, `refs/remotes/origin/${unit.branch}`))) return null;
   return { state, unit };
 }
 
@@ -96,12 +96,19 @@ export function epicToJoin(config, tickets, { standalone = false, reopen = false
 
 // Creates (or reuses) a unit's branch and worktree; `merge` are branches it also builds on (other
 // groups it depends on). Copies the tickets (epic, stories, their mockups) into its ticket cache.
-export function prepareUnitWorktree(config, { branch, worktree, base, merge = [], tickets = [] }) {
+export function prepareUnitWorktree(config, { branch, worktree, base: base0, merge: merge0 = [], tickets = [], record = null }) {
+  // A stacked unit's blocker delivered earlier may be on the remote only (its local branch removed after delivery).
+  const base = stackedRef(config.root, base0);
+  const merge = merge0.map((m) => stackedRef(config.root, m));
   if (!fs.existsSync(worktree)) {
     const exists = revExists(config.root, `refs/heads/${branch}`);
-    if (!exists && !revExists(config.root, base)) throw new Error(`base ${base} does not exist`);
+    // A branch delivered earlier and removed here (prune.mjs removeDelivered) comes back from the remote.
+    const start = !exists && revExists(config.root, `refs/remotes/origin/${branch}`) ? `refs/remotes/origin/${branch}` : base;
+    if (!exists && !revExists(config.root, start)) throw new Error(`base ${base} does not exist`);
     fs.mkdirSync(path.dirname(worktree), { recursive: true });
-    addWorktree(config.root, ['-q', ...(exists ? [worktree, branch] : ['-b', branch, worktree, base])], { env: commitEnv });
+    addWorktree(config.root, ['-q', ...(exists ? [worktree, branch] : ['-b', branch, worktree, start])], { env: commitEnv });
+    // The manifest: what this run created, the only things its cleanup may remove.
+    record?.({ worktree: fs.realpathSync(worktree), branch: exists ? null : branch });
   }
   for (const other of merge) {
     if (git(worktree, ['merge', '--no-edit', '-q', other], { env: commitEnv }).status !== 0) {
@@ -361,14 +368,14 @@ export async function prCheckUnit(env, keys, { fix = false } = {}) {
 // as the developer's gh login when the bot is not set up. Called only by the delivery (implement.mjs deliverFinished),
 // once, on the head CI proved: nothing is committed or merged here. An open PR is never opened again or pushed to from
 // here (council C11, owner C18): a unit whose PR is open is put on hold and delivered through `existingPr`.
-export async function openPr(env, { title, body: plainBody, existing = null, records = false, draft = false }, deps = {}) {
+export async function openPr(env, { title, body: plainBody, existing = null, records = false, draft = false, onOpened = null }, deps = {}) {
   if (existing) throw new Error(`openPr: ${existing} is already open; it is re-delivered on hold through the delivery, never opened again`);
   const { worktree, branch, prBase } = env;
   const body = withDerivedClasses(plainBody, worktree, prBase ? `origin/${String(prBase).replace(/^origin\//, '')}` : null, { runner: deps.run ?? run });
   const publisher = deps.publisher ?? (await prPublisher(env.wtConfig ?? env.config));
   const host = publisherHost(publisher, { cwd: worktree, ...(deps.run ? { run: deps.run } : {}) });
   if (records) commitRecords(worktree, 'Pipeline records (PR check, run conditions, usage) before the PR');
-  const opened = await openPullRequest(publisher, { cwd: worktree, branch, base: prBase.replace(/^origin\//, ''), title, body, draft }, { run: deps.run, ...(records ? {} : { mergeBase: () => null }) });
+  const opened = await openPullRequest(publisher, { cwd: worktree, branch, base: prBase.replace(/^origin\//, ''), title, body, draft }, { run: deps.run, onOpened, ...(records ? {} : { mergeBase: () => null }) });
   if (opened.url) return { url: opened.url, pushed: true, draft, ...(opened.reduced ? { reduced: opened.reduced } : {}) };
   // The PR exists but this run has no record of it (an earlier run stopped right after opening it): adopted as it is.
   if (opened.pushed && /already exists/.test(opened.reason ?? '')) {
@@ -424,6 +431,28 @@ const ciEnv = (env) => {
 const DONE = new Set(['done']);
 const sum = (xs) => (xs.some((x) => x != null) ? Math.round(xs.reduce((n, x) => n + (x ?? 0), 0) * 1e6) / 1e6 : null);
 
+// What the delivered units of an epic made on this machine: a unit whose PR opened (or was updated) and passed its CI wait.
+// Only what the runs recorded they created (the unit's manifest, its tickets' run records), and not while another unit
+// that has not delivered builds on it (a stacked group starts from it): that one is its last consumer.
+async function cleanDeliveredUnits(config, epicKey, deps) {
+  const st = loadEpicRun(config, epicKey) ?? {};
+  const units = Object.values(st.units ?? {});
+  const delivered = (u) => u.status === 'done' && u.outcome === 'done' && Boolean(u.pr);
+  for (const u of units) {
+    if (!delivered(u) || !u.created) continue;
+    const consumer = units.find((o) => o.id !== u.id && (o.deps ?? []).includes(u.id) && !delivered(o));
+    if (consumer) {
+      defaultLog(`${epicKey} ${u.id}: local files kept: ${consumer.id} still builds on ${u.branch}`);
+      continue;
+    }
+    // A ticket's branch was merged into the unit's, which is the branch delivered: the remote check reads that one.
+    const tickets = (u.keys ?? []).filter((k) => loadRun(config, k)?.created).map((k) => ({ ...loadRun(config, k).created, deliveredOn: u.branch, key: k }));
+    // A removed item's record goes with it (it never outlives what it describes).
+    const retire = (item) => (item.key ? saveRun(config, item.key, { created: null }) : saveUnit(config, epicKey, u.id, { created: null }));
+    await cleanDelivered(config, { key: `${epicKey} ${u.id}`, items: [u.created, ...tickets] }, { cleanup: deps.cleanup, retire });
+  }
+}
+
 // Runs (or continues) an epic. `tickets` are the epic's ticket objects (key, title, type, epic, issue,
 // blockedBy, file), `inputs` their story files. `grouping` is auto, epic or ticket (bug epics). `only`
 // runs just those tickets in their existing unit (a single ticket joining an in-progress epic): no epic
@@ -462,6 +491,9 @@ export async function runEpic(config, { epic, tickets, inputs, base, parallel = 
     // The records the epic run wrote in this checkout (the epic plan's usage and its decisions) go to the store too,
     // whatever happened after the plan; the groups' worktrees ship their own.
     await deps.shipMetrics?.(config);
+    // Once the whole epic run has ended (a later group branches from an earlier group's local branch while it runs), the
+    // delivered units' worktrees, their stories' worktrees and their local branches go (prune.mjs planDelivered).
+    if (!only) await cleanDeliveredUnits(config, epic.key, deps);
   }
 }
 
@@ -477,7 +509,7 @@ async function epicFlow(env) {
   // The epic worktree of a feature epic exists before the plan (the plan reads the code there); a bug
   // epic plans from this checkout and gets its group worktrees from the plan.
   const epicUnit = { id: 'epic', kind: 'epic', branch: epicBranchFor(config, epic.key), worktree: epicWorktreeFor(config, epic.key), keys: stories.map((s) => s.key), deps: [] };
-  const epicWt = feature ? prepareUnitWorktree(config, { branch: epicUnit.branch, worktree: epicUnit.worktree, base: epicBase, tickets: [...(epic.file ? [epic] : []), ...tickets] }) : null;
+  const epicWt = feature ? prepareUnitWorktree(config, { branch: epicUnit.branch, worktree: epicUnit.worktree, base: epicBase, tickets: [...(epic.file ? [epic] : []), ...tickets], record: (created) => saveUnit(config, epic.key, epicUnit.id, { created }) }) : null;
   if (feature) await deps.lsp.start?.(epicUnit.worktree, { key: epic.key });
 
   // 1. The epic plan (once; a resumed or joined run reuses the note). Each step's phase is saved before it starts.
@@ -683,26 +715,94 @@ async function deliverUnit(env, unit, units, epicWt) {
   const unitBase = depBranches[0] ?? epicBase;
   let wtConfig = epicWt;
   try {
-    wtConfig ??= prepareUnitWorktree(config, { branch: unit.branch, worktree: unit.worktree, base: unitBase, merge: depBranches.slice(1), tickets: [...(epic.file ? [epic] : []), ...tickets.filter((t) => unit.keys.includes(t.key))] });
+    wtConfig ??= prepareUnitWorktree(config, { branch: unit.branch, worktree: unit.worktree, base: unitBase, merge: depBranches.slice(1), tickets: [...(epic.file ? [epic] : []), ...tickets.filter((t) => unit.keys.includes(t.key))], record: (created) => saveUnit(config, epic.key, unit.id, { created }) });
   } catch (error) {
     const results = unit.keys.map((k) => ({ key: k, outcome: 'blocked', reason: error.message }));
     saveUnit(config, epic.key, unit.id, { status: 'failed', outcome: 'blocked', reason: error.message });
     return { outcome: 'blocked', results, reason: error.message };
   }
   const uenv = { ...env, unit, wtConfig, worktree: unit.worktree, branch: unit.branch, base: unitBase, prBase: unitBase, log, stories: env.stories.filter((s) => unit.keys.includes(s.key)) };
-  // A group whose PR is already open (a reopened bug fix joins it): take a person's commits on the PR first.
-  const openPr = only && !feature ? loadEpicRun(config, epic.key).units?.[unit.id]?.pr ?? null : null;
-  if (openPr && !syncFromRemote(unit.worktree, unit.branch, commitEnv)) log(`${unit.branch} could not be fast-forwarded to origin; continuing from the local branch`);
   const shared = unitDelivery(env, unit, uenv, { feature });
   const io = { ...deliveryIo(wtConfig), ...shared.io };
   const prior = loadEpicRun(config, epic.key).units?.[unit.id] ?? {};
+  // What CI runs on the PR, run here first; failures go back through the fixing loop (dogfood C4), and the results go into
+  // the PR body. Every PR gets it, on every delivery route (a ticket joining an open group PR included): a bug group always
+  // (implement.ciParity does not apply to it, as before); a feature epic as one PR, and each PR of a split epic, like a
+  // single ticket (implement.ciParity: false turns it off).
+  const runParity = () => {
+    // A bug group's tickets as CI will read them: published from this unit's copy and fetched back from the board first,
+    // so its `fv check` reads the same text CI does (council C4, D-C7-1: parity read a group copy the board never got).
+    // A feature unit's parity reads its own ticket copies offline (docs/ai-pipeline/ci-parity.md).
+    if (!feature && env.pr && !prsDisabled()) {
+      for (const k of unit.keys) {
+        deps.board(unit.worktree, k, ['publish', k]);
+        deps.board(unit.worktree, k, ['fetch', k, '--refresh']);
+      }
+    }
+    if (!(env.pr && !prsDisabled() && (!feature && !unit.feature ? true : config.implement?.ciParity !== false) && deps.parityGate)) return null;
+    const penv = { ...process.env, PIPELINE_ROOT: unit.worktree, PIPELINE_BASE_REF: unitBase, PIPELINE_HEADLESS: '1', PIPELINE_TICKETS_OFFLINE: '1', PIPELINE_STORY_SOURCES: [process.env.PIPELINE_STORY_SOURCES, ...unit.keys.map((k) => ticketDir(wtConfig, k))].filter(Boolean).join(path.delimiter) };
+    delete penv.PIPELINE_CHILD;
+    delete penv.PIPELINE_DISABLE;
+    const out = deps.parityGate({ cwd: unit.worktree, base: unitBase, targetArgs: ['--stories', unit.keys.join(',')], seedFile: path.join(unit.worktree, wtConfig.stateDir ?? '.factory/state', 'pr-check', `${unit.id}-ci-parity.json`), prCheckCli: PR_CHECK_CLI, env: penv, log });
+    commitAll(unit.worktree, `${feature ? epic.key : unit.id}: Record CI parity metrics`, [wtConfig.metricsDir]);
+    return out;
+  };
+  // A group whose PR is already open (a reopened bug fix joins it), or a run resumed after its PR opened: a person's
+  // commits on the PR reach this checkout first, or nothing runs (the remote unreadable, the checkout diverged).
+  const openPr = only && !feature ? loadEpicRun(config, epic.key).units?.[unit.id]?.pr ?? null : null;
+  // Any delivery that already pushed (a PR or not) reads the remote's head of the branch first; unreadable stops.
+  let remoteMoved = false;
+  if (openPr || (env.pr && !prsDisabled() && (prior.delivery?.pr || prior.delivery?.phase))) {
+    const taken = (deps.remoteHead ?? takeRemoteHead)(unit.worktree, unit.branch);
+    if (taken.stop) {
+      const reason = `not continued on ${unit.branch}: ${taken.stop}; nothing ran`;
+      log(reason);
+      saveUnit(config, epic.key, unit.id, { status: 'failed', outcome: 'error', reason });
+      return { outcome: 'error', results: unit.keys.map((k) => ({ key: k, outcome: 'error', reason, pr: openPr ?? prior.delivery?.pr ?? null })), reason, pr: openPr ?? prior.delivery?.pr ?? null };
+    }
+    // A person's commits: the steps after the open are not taken alone; the unit runs its stages and rating again on
+    // them, with its PR held first (the open-PR route below).
+    // A checkout an earlier resume already brought forward is at the remote's head too: the head is also compared with
+    // the commit the run itself last pushed or proved.
+    const d = prior.delivery ?? {};
+    const ours = (['ci-wait', 'draft-back'].includes(d.phase) ? d.deliveredHead : d.phase === 'branch-ci' ? d.pushedHead : d.provenHead) ?? null;
+    remoteMoved = Boolean(taken.moved || (ours && taken.head && taken.head !== ours));
+    if (remoteMoved) log(`${taken.head.slice(0, 7)} pushed to ${unit.branch} meanwhile is taken; the unit's stages run again on it`);
+    // A PR the earlier run opened but did not record is found first, so it is held before the stages run again.
+    if (remoteMoved && prior.delivery?.phase === 'pre-open' && !prior.delivery.pr) {
+      const adopted = adoptOpenedPr(wtConfig, unit.branch, { io });
+      if (adopted) {
+        shared.save({ phase: 'pre-open', pr: adopted.pr, opened: true, preOpen: true, openedAt: adopted.openedAt, readyAt: adopted.readyAt, holds: adopted.holds });
+        prior.delivery = { ...prior.delivery, pr: adopted.pr, opened: true, openedAt: adopted.openedAt, readyAt: adopted.readyAt, holds: adopted.holds };
+      }
+    }
+  }
   // A run that stopped after the unit's PR opened continues after the open (resume): no agent runs again. A PR opened
   // right before the stop, before the run recorded it, is found on the host and adopted, never opened twice.
-  let after = !only && env.pr && !prsDisabled() && ['ci-wait', 'draft-back'].includes(prior.delivery?.phase) && prior.delivery?.pr ? prior.delivery : null;
-  if (!after && !only && env.pr && !prsDisabled() && prior.delivery?.phase === 'pre-open' && !prior.delivery.pr) {
+  let after = !only && !remoteMoved && env.pr && !prsDisabled() && ['ci-wait', 'draft-back'].includes(prior.delivery?.phase) && prior.delivery?.pr ? prior.delivery : null;
+  // Stopped after the open was recorded, before the rating was published: published now, then the run continues after
+  // the open (never the stages again on an open PR).
+  if (!after && !only && !remoteMoved && env.pr && !prsDisabled() && prior.delivery?.phase === 'pre-open' && prior.delivery.pr && prior.delivery.opened) {
+    log(`${prior.delivery.pr} was opened and recorded by the earlier run before it stopped; continuing after the open`);
+    const failed = publishRatingOrHold(config, wtConfig, { ...shared, io, result: {} }, { prUrl: prior.delivery.pr, holds: prior.delivery.holds ?? [], openedAt: prior.delivery.openedAt ?? null, readyAt: prior.delivery.readyAt ?? null, greenAt: prior.delivery.greenAt ?? null, provenHead: prior.delivery.provenHead ?? null });
+    if (failed) {
+      saveUnit(config, epic.key, unit.id, { status: 'failed', outcome: failed.outcome, reason: failed.reason, pr: prior.delivery.pr });
+      return { outcome: failed.outcome, results: unit.keys.map((k) => ({ key: k, outcome: failed.outcome, reason: failed.reason, pr: prior.delivery.pr })), reason: failed.reason, pr: prior.delivery.pr };
+    }
+    shared.save({ phase: 'ci-wait', pr: prior.delivery.pr, preOpen: true, opened: null });
+    after = prior.delivery;
+  }
+  if (!after && !only && !remoteMoved && env.pr && !prsDisabled() && prior.delivery?.phase === 'pre-open' && !prior.delivery.pr) {
     const adopted = adoptOpenedPr(wtConfig, unit.branch, { io });
     if (adopted) {
       log(`${adopted.pr} was opened by the earlier run before it stopped; continuing after the open`);
+      // Never released unrated: a bug group's rating is published first (or the PR is held for a person).
+      const failed = publishRatingOrHold(config, wtConfig, { ...shared, io, result: {} }, { prUrl: adopted.pr, holds: adopted.holds, openedAt: adopted.openedAt, readyAt: adopted.readyAt, greenAt: prior.delivery.greenAt ?? null, provenHead: prior.delivery.provenHead ?? null });
+      if (failed) {
+        const results = unit.keys.map((k) => ({ key: k, outcome: failed.outcome, reason: failed.reason, pr: adopted.pr }));
+        saveUnit(config, epic.key, unit.id, { status: 'failed', outcome: failed.outcome, reason: failed.reason, pr: adopted.pr });
+        return { outcome: failed.outcome, results, reason: failed.reason, pr: adopted.pr };
+      }
       shared.save({ phase: 'ci-wait', pr: adopted.pr, preOpen: true, openedAt: adopted.openedAt, readyAt: adopted.readyAt, holds: adopted.holds });
       after = { ...prior.delivery, ...adopted };
     }
@@ -722,8 +822,13 @@ async function deliverUnit(env, unit, units, epicWt) {
   // the PR is put on hold before any agent runs, and marked ready again only by the delivery, once CI is green.
   // An unreadable PR state counts as open (fail closed): the hold either confirms or the unit stops with hold-failed. A kept
   // hold is trusted only when its release was never attempted; one whose release is unconfirmed is held and confirmed again.
-  const openNow = env.pr && !prsDisabled() ? openPr ?? (prior.pr && prior.status !== 'done' && ['OPEN', 'UNKNOWN'].includes(deps.prState?.(prior.pr)) ? prior.pr : null) : null;
-  if (openNow && !prior.delivery?.holds?.some((h) => !h.to && h.ok !== false && h.releaseConfirmed !== false)) {
+  // A known PR with a hold still recorded (a close-reopen hold leaves it CLOSED) is a hold candidate whatever its state.
+  const recordedHold = (prior.delivery?.holds ?? []).some((h) => !h.to && h.ok !== false);
+  const knownPr = prior.pr ?? prior.delivery?.pr ?? null;
+  const openNow = env.pr && !prsDisabled() ? openPr ?? (knownPr && (prior.status !== 'done' || remoteMoved) && (recordedHold || remoteMoved || ['OPEN', 'UNKNOWN'].includes(deps.prState?.(knownPr))) ? knownPr : null) : null;
+  // A recorded hold counts only once the host confirms it again (a person may have released it while the run was stopped).
+  const keptHold = openNow && prior.delivery?.holds?.some((h) => !h.to && h.ok !== false && h.releaseConfirmed !== false) ? confirmRecordedHold(wtConfig, { pr: openNow, holds: prior.delivery.holds }, { io }) : null;
+  if (openNow && !keptHold?.ok) {
     const hold = holdOpenPr(wtConfig, openNow, only ? `${only.join(', ')} joins it again` : 'its tickets are worked on again', { io });
     const holds = [...(prior.delivery?.holds ?? []), hold];
     if (!hold.ok) {
@@ -747,10 +852,12 @@ async function deliverUnit(env, unit, units, epicWt) {
     const state = loadEpicRun(config, epic.key);
     const merged = results.filter((x) => DONE.has(x.outcome) && state.stories?.[x.key]?.merged);
     const held = state.units?.[unit.id]?.delivery ?? {};
+    const joinedParity = paritySection(runParity()?.results);
+    const prBody = io.prBody?.(openPr) ?? `Fix ${unit.keys.join(', ')}: ${unit.group.title}`;
     const out = await deliverFinished(config, wtConfig, {
       ...shared,
       title: null,
-      body: io.prBody?.(openPr) ?? `Fix ${unit.keys.join(', ')}: ${unit.group.title}`,
+      body: joinedParity ? `${prBody.split('\n').filter((l) => !l.startsWith('- CI checks run before this PR:')).join('\n').replace(/\s+$/, '')}\n${joinedParity}` : prBody,
       result: {},
       existingPr: openPr,
       holds: held.holds ?? [],
@@ -828,35 +935,25 @@ async function deliverUnit(env, unit, units, epicWt) {
 
   // The PR check for the whole unit, in one run: every ticket (frontend ones get the design lens) and
   // the journeys. Each ticket's row in the PR body shows the unit's result.
-  let prChecks = { ...(state.units?.[unit.id]?.prChecks ?? {}) };
+  // A saved verdict counts only for the very commit it reviewed (saved after its own records commit): any commit since,
+  // a person's included, is checked again.
+  const checkedHead = state.units?.[unit.id]?.prCheckHead ?? null;
+  const unchanged = Boolean(checkedHead) && checkedHead === headSha(unit.worktree);
+  let prChecks = unchanged ? { ...(state.units?.[unit.id]?.prChecks ?? {}) } : {};
   const mode = E.prCheck ?? 'report';
   const checked = [...unit.keys, ...(fv?.status === 'verified' ? [fvKey] : [])];
   if (mode !== 'off' && !checked.every((k) => prChecks[k])) {
     log(`PR check ${checked.join(', ')} against ${unit.branch} (${mode})`);
     const result = await deps.prCheck(uenv, checked, { fix: mode === 'fix' });
     prChecks = Object.fromEntries(checked.map((k) => [k, result]));
-    saveUnit(config, epic.key, unit.id, { prChecks, prCheck: result });
     commitAll(unit.worktree, `${feature ? epic.key : unit.id}: Record PR check metrics`, [wtConfig.metricsDir]);
+    saveUnit(config, epic.key, unit.id, { prChecks, prCheck: result, prCheckHead: headSha(unit.worktree) });
   }
 
-  // The tickets as CI will read them: published from this unit's copy and fetched back from the board before the parity
-  // run, so its `fv check` reads the same text CI does (council C4, D-C7-1: parity read a group copy the board never got).
-  if (!feature && env.pr && !prsDisabled()) {
-    for (const k of unit.keys) {
-      deps.board(unit.worktree, k, ['publish', k]);
-      deps.board(unit.worktree, k, ['fetch', k, '--refresh']);
-    }
-  }
-
-  // What CI runs on the PR, run here first; failures go back through the fixing loop (dogfood C4).
-  let parity = null;
-  if (!feature && env.pr && !prsDisabled() && deps.parityGate) {
-    const penv = { ...process.env, PIPELINE_ROOT: unit.worktree, PIPELINE_BASE_REF: unitBase, PIPELINE_HEADLESS: '1', PIPELINE_TICKETS_OFFLINE: '1', PIPELINE_STORY_SOURCES: [process.env.PIPELINE_STORY_SOURCES, ...unit.keys.map((k) => ticketDir(wtConfig, k))].filter(Boolean).join(path.delimiter) };
-    delete penv.PIPELINE_CHILD;
-    delete penv.PIPELINE_DISABLE;
-    parity = deps.parityGate({ cwd: unit.worktree, base: unitBase, targetArgs: ['--stories', unit.keys.join(',')], seedFile: path.join(unit.worktree, wtConfig.stateDir ?? '.factory/state', 'pr-check', `${unit.id}-ci-parity.json`), prCheckCli: PR_CHECK_CLI, env: penv, log });
-    commitAll(unit.worktree, `${unit.id}: Record CI parity metrics`, [wtConfig.metricsDir]);
-  }
+  // What CI runs on the PR, run here first; failures go back through the fixing loop (dogfood C4), and the results go into
+  // the PR body. Every PR gets it: a bug group always (implement.ciParity does not apply to it, as before); a feature
+  // epic as one PR, and each PR of a split epic, like a single ticket (implement.ciParity: false turns it off).
+  const parity = runParity();
 
   // One PR for the unit, then the board.
   const runs = Object.fromEntries(results.map((r) => [r.key, r]));
@@ -885,6 +982,9 @@ async function deliverUnit(env, unit, units, epicWt) {
   const existing = now.pr && now.delivery?.holds?.some((h) => !h.to) ? now.pr : null;
   const out = await deliverFinished(config, wtConfig, {
     ...unitDelivery(env, unit, uenv, { feature, fvKey: fv?.key ?? null }),
+    // An earlier run reached the rating (its CI proof passed): the rating it saved and the demo media of the same head are
+    // reused, as for a single ticket, never repeated (a repeated rating can come out different).
+    resumed: now.delivery?.phase === 'pre-open' && Boolean(now.delivery.greenAt),
     title,
     body,
     result: {},

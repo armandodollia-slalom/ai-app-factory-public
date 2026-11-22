@@ -22,7 +22,10 @@ import { addUsage } from '../../pipeline/lib/usage.mjs';
 import { activeStoryFile } from '../../pipeline/lib/stories.mjs';
 import { openPullRequest, prPublisher, pushBranch, pushFoldedBranch } from '../../pipeline/lib/bot.mjs';
 import { RESOLVED_LABEL, clearEscalationNotes } from '../../board/lib/escalation.mjs';
-import { ticketFile, writeTicket } from '../../board/lib/source.mjs';
+import { readMeta, ticketFile, writeTicket } from '../../board/lib/source.mjs';
+import { gateConfig } from '../../review-gate/lib/config.mjs';
+import { liveDiffKey, localDiffKey } from '../../review-gate/lib/assessment.mjs';
+import { recordReopen } from '../../review-gate/lib/sync.mjs';
 import { metaFor } from '../../board/lib/ticket-format.mjs';
 import { appendJsonl, bootId, extractResult, isProcessAlive, log, nowIso, readJson, run, runAsync, sleep, stepRecord, tail, writeJson } from '../../pipeline/lib/util.mjs';
 import { branchFor, collectStories, orderStories, worktreeFor } from './batch.mjs';
@@ -37,7 +40,7 @@ import { freeReroute, returnSettings, returnTask, routeFindings, unaddressed } f
 import { dedupeFollowUps, followUpLine } from './follow-ups.mjs';
 
 export { dedupeFollowUps };
-import { commitAll, commitEnv, commitRecords, filesChanged, formattingOnlyHunks, headSha, listSubtaskWorktrees, mustGit, removeWorktree } from './gitops.mjs';
+import { commitAll, commitEnv, commitRecords, filesChanged, formattingOnlyHunks, headSha, listSubtaskWorktrees, mustGit, removeWorktree, stackedRef } from './gitops.mjs';
 import { formatDiagnostics, lspAdapter } from './lsp.mjs';
 import { LimitError, agentSettings, checkBudget, createContext, orchestrate, verifyLaterChange } from './orchestrate.mjs';
 import { applyResources, resourcesFromEnv, waitForMemory } from './resources.mjs';
@@ -51,6 +54,7 @@ import { push as sinkPush, sinkSettings } from '../../pipeline/lib/sink.mjs';
 import { isReopened, openPrFor, placeReopened, prIsOpen, syncFromRemote } from './reopen.mjs';
 import { confirmPrState, headActivities, holdPr, preOpenMedia, preOpenSettings, proveBeforeOpen, readyAudit, recordHeadActivity, releasePr } from './pre-open.mjs';
 import { keyFolder } from '../../pr-video/lib/pr-video.mjs';
+import { pruneRunLocal, removeDelivered } from '../../factory/lib/prune.mjs';
 
 // With a PR check council, the implementer answering a return says which lines answer which finding (council.mjs
 // fixDeclarationText); '' otherwise.
@@ -77,10 +81,47 @@ const RETRYABLE = new Set(['error', 'fv-not-started']);
 // resumable at the open is kept in `pendingOpen` until the run ends, so the story still takes the open-pending route
 // (held-out C22: the resume took the general route and reset the first push time).
 const pendingDisposition = (rec) => (rec && !rec.outcome && rec.pendingOpen ? { ...rec, ...rec.pendingOpen } : rec);
+// A rating that failed on a PR already open and on hold resumes at the rating too: the PR stays on hold meanwhile.
 export const openPending = (rec0) => {
   const rec = pendingDisposition(rec0);
-  return Boolean(rec && rec.phase === 'pre-open' && rec.greenAt && !rec.pr && (rec.outcome === 'pr-refused' || rec.outcome === 'gate-assessment-failed' || (rec.outcome === 'not-delivered' && /\b(?:pr|pull request) creat(?:e|ion) failed\b/.test(rec.reason ?? ''))));
+  if (!(rec && rec.phase === 'pre-open' && rec.greenAt)) return false;
+  if (rec.outcome === 'gate-assessment-failed') return !rec.pr || (rec.holds ?? []).some((h) => !h.to && h.ok !== false);
+  return Boolean(!rec.pr && (rec.outcome === 'pr-refused' || (rec.outcome === 'not-delivered' && /\b(?:pr|pull request) creat(?:e|ion) failed\b/.test(rec.reason ?? ''))));
 };
+// Why a delivery may not resume where it stopped, or null: { why, unreadable } when the branch head, here or on the
+// remote, is not the one CI proved (`provenHead`; a person pushed in between), or `unreadable` when either could not be
+// read to tell (the resume then stops: it never guesses). The remote's head is the SHA the remote itself answers
+// (`git ls-remote`), never a remote-tracking ref (which a narrowed fetch leaves stale). A record from before `provenHead`
+// was kept resumes as before, unless its PR is open (a person can push to it).
+export function headMovedSince(worktree, branch, rec, { gitImpl = git } = {}) {
+  if (!rec.provenHead && rec.pr) return { why: `the head CI proved was not recorded and ${rec.pr} is open` };
+  const local = gitImpl(worktree, ['rev-parse', '--verify', '-q', 'HEAD']);
+  if (local.status !== 0 || !local.stdout.trim()) return { why: 'its head could not be read', unreadable: true };
+  // A record from before the proven head was kept: the remote is compared with the local head instead.
+  const proven = rec.provenHead ?? local.stdout.trim();
+  if (local.stdout.trim() !== proven) return { why: `its head is ${local.stdout.trim().slice(0, 7)}, not ${proven.slice(0, 7)} that CI proved` };
+  const remote = gitImpl(worktree, ['ls-remote', 'origin', `refs/heads/${branch}`], { env: commitEnv });
+  const sha = remote.status === 0 ? remote.stdout.trim().split(/\s+/)[0] : '';
+  if (!/^[0-9a-f]{40}$/.test(sha)) return { why: `origin/${branch} could not be read`, unreadable: true };
+  if (sha !== proven) return { why: `origin/${branch} is at ${sha.slice(0, 7)}, not ${proven.slice(0, 7)} ${rec.provenHead ? 'that CI proved' : 'here'} (pushed in between)` };
+  return null;
+}
+// Brings a resumed run's checkout to the head the remote has now (a person may have pushed while the run was stopped), so
+// the stages that run again review those commits: { head, moved } or { stop } when the remote cannot be read, its
+// commits cannot be fetched, or the checkout cannot be fast-forwarded to them (never a merge or a reset of local work).
+// The caller also compares `head` with the commit the run itself last pushed or proved (a checkout an earlier resume
+// already brought forward is at the remote's head too: `moved` alone would not tell).
+export function takeRemoteHead(worktree, branch, { gitImpl = git } = {}) {
+  const remote = gitImpl(worktree, ['ls-remote', 'origin', `refs/heads/${branch}`], { env: commitEnv });
+  const sha = remote.status === 0 ? remote.stdout.trim().split(/\s+/)[0] : '';
+  if (!/^[0-9a-f]{40}$/.test(sha)) return { stop: `origin/${branch} could not be read` };
+  const local = gitImpl(worktree, ['rev-parse', '--verify', '-q', 'HEAD']).stdout?.trim() ?? '';
+  if (local === sha) return { head: sha, moved: false };
+  if (gitImpl(worktree, ['fetch', '-q', 'origin', `refs/heads/${branch}`], { env: commitEnv }).status !== 0) return { stop: `the commits on origin/${branch} could not be fetched` };
+  if (!local || gitImpl(worktree, ['merge-base', '--is-ancestor', local, sha]).status !== 0) return { stop: `this checkout (${local.slice(0, 7) || '?'}) and origin/${branch} (${sha.slice(0, 7)}) have diverged; a person brings them together` };
+  if (gitImpl(worktree, ['merge', '--ff-only', '-q', sha], { env: commitEnv }).status !== 0) return { stop: `this checkout could not be brought to ${sha.slice(0, 7)} on origin/${branch} (local changes in the way)` };
+  return { head: sha, moved: true };
+}
 // What to keep through planning and start-up: the earlier run's outcome and reason when it waits only for its PR to open.
 export const keepPendingOpen = (rec) => (openPending(rec) ? { pendingOpen: rec.pendingOpen && !rec.outcome ? rec.pendingOpen : { outcome: rec.outcome, reason: rec.reason ?? null } } : { pendingOpen: null });
 // Outcomes that wait for a human, and the stage whose escalation note says so: while the note is still in
@@ -123,7 +164,26 @@ export function resetEscalatedFv(config, key, worktree) {
 
 // A re-run of a ticket a human resolved starts clean: the escalation-resolved label comes off (a later
 // failure asks again) and the old escalation notes go, so the next failure comment only shows new ones.
-export function startResolvedReruns(config, stories, { event = boardEvent, pr = true } = {}) {
+// A ticket a person sends back after a delivery that had a PR (its escalation resolved, then a re-run) was rejected: the
+// review gate records it as a reopen on the ticket, so the re-run never merges itself (owner rule). Recorded also while the
+// gate is off, so turning it on again finds the decision. Returns what was stored.
+function recordRequeueRejection(config, { key, pr }) {
+  const gc = gateConfig(config.root);
+  const issue = readMeta(config, key)?.issue?.number;
+  if (!issue) throw new Error('the ticket has no issue in the ticket cache to record it on');
+  return recordReopen(gc, null, { key, issue: { number: issue }, reopen: { at: nowIso(), source: 'requeue', detail: 're-queued after a person resolved its escalation', pr, afterMerge: false } }, { metricsConfig: config, log: (m) => log(m) });
+}
+
+// Stories whose delivery the review gate must treat as having an unknown history (rejectionChecked false, so review):
+// recorded in each run record for this run and its resumes (a later run that is not forced starts without it).
+export function markHistoryUnknown(config, stories, why) {
+  for (const s of stories) {
+    s.historyUnknown = why;
+    saveRun(config, s.key, { historyUnknown: why });
+  }
+}
+
+export function startResolvedReruns(config, stories, { event = boardEvent, pr = true, recordRejection = recordRequeueRejection } = {}) {
   const started = [];
   // A reopened bug fix (review gate) re-runs once: for a follow-up (no open PR) the label comes off now; when an open PR
   // must be put on hold first, the label stays until the hold is confirmed in the worker (so a hold failure keeps it).
@@ -133,6 +193,18 @@ export function startResolvedReruns(config, stories, { event = boardEvent, pr = 
     log(`${s.key}: re-run of a reopened bug fix${s.reopenedPr ? ` on ${s.branch} (${s.reopenedPr})` : s.followUp ? ` as a follow-up on ${s.branch}` : ''}.`);
   }
   for (const s of stories.filter((x) => x.resolved && !x.skip)) {
+    const delivered = loadRun(config, s.key)?.pr;
+    if (delivered) {
+      // Recorded before the marker (escalation-resolved) is consumed: if it cannot be, the marker stays and the ticket
+      // waits for the next requeue, so the rejection is never lost.
+      try {
+        if (!recordRejection(config, { key: s.key, pr: delivered })) throw new Error('nothing was stored');
+      } catch (error) {
+        s.skip = `the rejection of ${delivered} could not be recorded on the ticket (${String(error?.message ?? error).split('\n')[0]}); escalation-resolved is kept and the next requeue tries again`;
+        log(`${s.key}: ${s.skip}`);
+        continue;
+      }
+    }
     const removed = clearEscalationNotes(config, s.key, [s.worktree]);
     const reset = resetEscalatedFv(config, s.key, s.worktree);
     event(config.root, s.key, ['clear-resolved', s.key]);
@@ -173,7 +245,8 @@ export function plan(config, inputs, { base = config.baseRef, force = false, pla
     // A later run continues where an interrupted one stopped: finished stories are kept, stories that
     // died part-way resume in their worktree.
     const prev = retry || s.skip ? null : loadRun(config, s.key);
-    if (prev?.outcome === 'done' && prev.branch && revExists(config.root, `refs/heads/${prev.branch}`)) {
+    // A delivered run's local branch is removed once it is on the remote (prune.mjs removeDelivered): the remote one counts.
+    if (prev?.outcome === 'done' && prev.branch && (revExists(config.root, `refs/heads/${prev.branch}`) || revExists(config.root, `refs/remotes/origin/${prev.branch}`))) {
       s.skip = `done in a previous run (--force to redo)`;
       s.doneBefore = true;
       if (prev.pr) s.ownPr = prev.pr;
@@ -227,7 +300,10 @@ export function plan(config, inputs, { base = config.baseRef, force = false, pla
         // Fails closed: a PR whose state could not be read ('unknown') is treated as open, so the worker holds it first
         // (and stops with hold-failed, no agent, when that hold cannot be confirmed either).
         const open = checkOpen(priorPr);
-        if (open === true || open === 'unknown') {
+        // A PR closed by the run's own close-reopen hold (recorded, not released) is still this ticket's PR on hold: it
+        // keeps the route, so the worker confirms that hold before any agent runs, never a second PR.
+        const closedByHold = (priorRec.holds ?? []).some((h) => h.mode === 'close-reopen' && !h.to && h.ok !== false);
+        if (open === true || open === 'unknown' || closedByHold) {
           s.reopenedPr = priorPr;
           s.fromRemote = true;
           if (priorRec.branch) s.branch = priorRec.branch;
@@ -350,7 +426,12 @@ export function startWorker(config, story, { pr, script }) {
     const reopenState = story.reopenedPr
       ? { pr: story.reopenedPr, reopenedPr: story.reopenedPr, ...(prior?.pr === story.reopenedPr ? { holds: prior.holds ?? [], readyAt: prior.readyAt ?? null, openedAt: prior.openedAt ?? null } : {}) }
       : {};
-    writeJson(runFile(config, story.key), { key: story.key, branch: story.branch, worktree: story.worktree, base: story.base, ...reopenState, ...running, updatedAt: nowIso() });
+    // The manifest of what earlier attempts created stays (a worktree they made is still theirs to remove after delivery),
+    // and so do the PRs earlier runs opened (the review gate reads a person's close of any of them); this run's unknown
+    // history (markHistoryUnknown) is recorded.
+    const old = loadRun(config, story.key) ?? {};
+    const earlierPrs = [...new Set([...(old.earlierPrs ?? []), old.pr, ...(old.attempts ?? []).map((a) => a?.pr)].filter(Boolean))];
+    writeJson(runFile(config, story.key), { key: story.key, branch: story.branch, worktree: story.worktree, base: story.base, merge: story.merge ?? [], ...(old.created ? { created: old.created } : {}), ...(earlierPrs.length ? { earlierPrs } : {}), ...(story.historyUnknown ? { historyUnknown: story.historyUnknown } : {}), ...reopenState, ...running, updatedAt: nowIso() });
   }
   log(`${story.key}: started on ${story.branch} (log: ${path.relative(config.root, logPath)})`);
   const fd = fs.openSync(logPath, 'a');
@@ -379,17 +460,24 @@ export function startWorker(config, story, { pr, script }) {
 // Worker: one story, start to finish, in its own worktree
 // ---------------------------------------------------------------------------------------------
 
-export function prepareWorktree(config, { key, file, base, branch, worktree, merge = [], fromRemote = false }) {
+export function prepareWorktree(config, { key, file, base: base0, branch, worktree, merge: merge0 = [], fromRemote = false }) {
+  // A stacked blocker delivered earlier may only be on the remote now (its local branch removed after delivery).
+  const base = stackedRef(config.root, base0);
+  const merge = merge0.map((m) => stackedRef(config.root, m));
   // A reopened bug fix re-runs on its open PR's branch: start from the remote branch when this machine
   // has none, and take a person's commits on the PR (fast-forward) when it has.
-  if (fromRemote && !revExists(config.root, `refs/heads/${branch}`) && git(config.root, ['fetch', '-q', 'origin', `${branch}:${branch}`], { env: commitEnv }).status === 0) log(`${key}: ${branch} fetched from origin (reopened bug fix)`);
+  const fetched = fromRemote && !revExists(config.root, `refs/heads/${branch}`) && git(config.root, ['fetch', '-q', 'origin', `${branch}:${branch}`], { env: commitEnv }).status === 0;
+  if (fetched) log(`${key}: ${branch} fetched from origin (reopened bug fix)`);
   const created = !fs.existsSync(worktree);
   if (created) {
     if (!revExists(config.root, base)) throw new Error(`base ${base} does not exist`);
     fs.mkdirSync(path.dirname(worktree), { recursive: true });
-    const exists = revExists(config.root, `refs/heads/${branch}`);
-    addWorktree(config.root, ['-q', ...(exists ? [worktree, branch] : ['-b', branch, worktree, base])], { env: commitEnv });
+    const exists = revExists(config.root, `refs/heads/${branch}`) && !fetched;
+    addWorktree(config.root, ['-q', ...(exists || fetched ? [worktree, branch] : ['-b', branch, worktree, base])], { env: commitEnv });
     log(`${key}: worktree ${worktree} on ${branch}${exists ? ' (existing branch)' : ` from ${base}`}`);
+    // The manifest: what this run created, the only things its cleanup may remove (prune.mjs removeDelivered). A branch
+    // that existed before this worktree was added is not this run's, whatever an earlier record says.
+    saveRun(config, key, { created: { worktree: fs.realpathSync(worktree), branch: exists ? null : branch } });
   } else {
     log(`${key}: reusing worktree ${worktree}`);
     // A re-run (resume, requeue, --force) takes what landed on its base since the branch was made, the factory's
@@ -525,6 +613,66 @@ export async function implementStory(config, opts) {
   }
 }
 
+// Removes what delivered runs recorded they created here (their manifests: [{ worktree, branch, deliveredOn }]), one item at
+// a time (prune.mjs removeDelivered, alpha: only with prune.afterDelivery), each checked against the repository the
+// delivery pushed to; never a reason for the run to fail. What is kept is logged with why. `retire(item)` is called for
+// each item that is gone afterwards, so its record never outlives it.
+export async function cleanDelivered(config, { key, items = [] }, { cleanup = pruneRunLocal, retire = () => {} } = {}) {
+  if (!items.length) return null;
+  let repo = null;
+  try {
+    repo = String(hostFor(config).sync.repo ?? '') || null;
+  } catch {
+    // origin must then fetch from where it pushes (prune.mjs remoteHas)
+  }
+  try {
+    const out = await (cleanup ?? pruneRunLocal)(config.mainRoot ?? config.root, (g) => {
+      const all = { removed: [], kept: [], gone: [] };
+      for (const item of items) {
+        const r = removeDelivered(g, { repo, ...item });
+        all.removed.push(...r.removed);
+        all.kept.push(...r.kept);
+        if (!r.kept.length) all.gone.push(item);
+      }
+      return all;
+    }, { label: key, log });
+    for (const item of out?.gone ?? []) retire(item);
+    return out;
+  } catch (error) {
+    log(`${key}: local files kept (${String(error?.message ?? error).split('\n')[0]})`);
+    return null;
+  }
+}
+
+// The detached `implement resume` a `--background` resume starts: an explicit --keep goes with it (the batch records it
+// too, so every later resume of the batch keeps the run's local state).
+export const backgroundResumeArgs = ({ keep = false } = {}) => ['resume', ...(keep ? ['--keep'] : [])];
+
+// At the end of a batch: each ticket delivered in it (done, its PR open and past its CI wait) whose run recorded what it
+// created, unless something still builds on its branch: a ticket of the batch that did not deliver, or any saved run
+// record not done (a resume reads it), that starts from it or merges it. Those wait for their last consumer.
+export async function cleanDeliveredBatch(config, stories, { cleanup } = {}) {
+  const delivered = (r) => r?.outcome === 'done' && r.pr && !r.phase;
+  const byKey = new Map(stories.map((s) => [s.key, loadRun(config, s.key)]));
+  const records = (() => {
+    try {
+      return fs.readdirSync(runsDir(config)).filter((f) => /^[A-Z][A-Z0-9]*-\d+\.json$/i.test(f)).map((f) => readJson(path.join(runsDir(config), f), null)).filter(Boolean);
+    } catch {
+      return [];
+    }
+  })();
+  const uses = (x, branch) => x?.base === branch || String(x?.base ?? '') === `origin/${branch}` || (x?.merge ?? []).includes(branch);
+  for (const s of stories) {
+    const rec = byKey.get(s.key);
+    if (s.skip || !delivered(rec) || !rec?.created) continue;
+    const consumer = stories.find((o) => o.key !== s.key && uses(o, s.branch) && !delivered(byKey.get(o.key))) ?? records.find((o) => o.key !== s.key && uses(o, s.branch) && !(o.outcome === 'done' && !o.phase));
+    if (consumer) {
+      log(`${s.key}: local files kept: ${consumer.key} still builds on ${s.branch}`);
+      continue;
+    }
+    await cleanDelivered(config, { key: s.key, items: [rec.created] }, { cleanup, retire: () => saveRun(config, s.key, { created: null }) });
+  }
+}
 // What a killed run leaves behind (council C11: a run killed during its CI wait left its
 // language-server daemon running and its worktree's metrics unshipped). For every story the dead run left
 // `running`: stop the daemons of its worktree and ship the worktree's metrics. Stack slot leases need nothing (a
@@ -664,7 +812,49 @@ async function implementStoryInner(config, opts, holder) {
 
   // A run interrupted while it waited for its PR's CI continues there, on the PR's branch as it is (council C11).
   const saved = opts.resume ? loadRun(config, key) : null;
+  // A resume after the open whose branch a person moved meanwhile: their commits are taken into the checkout and the
+  // stages run again on them, with the known PR held first (the reopened route), never only the steps after the open.
+  let rerun = false;
+  // `ours`: the commit the run itself last pushed or proved; a remote head other than it is a person's push.
+  const movedAfterOpen = (where, ours = null) => {
+    const taken = takeRemoteHead(worktree, branch);
+    if (taken.stop) return { stop: finish('error', `not resumed ${where} of ${saved.pr}: ${taken.stop}`, { pr: saved.pr, resumeStopped: taken.stop }), why: taken.stop };
+    if (!taken.moved && !(ours && taken.head !== ours)) return null;
+    log(`${key}: ${taken.head.slice(0, 7)} was pushed to ${branch} while the run was stopped: the stages run again on it, with ${saved.pr} held first`);
+    opts = carryHeldPr(opts, saved);
+    rerun = true;
+    return { moved: true };
+  };
+  // A delivery that pushed but did not reach a PR's CI wait (the branch's CI, or before the open with no rating pending):
+  // the remote's head is read first, or nothing runs; a person's push is taken into the checkout, and a PR the earlier
+  // run opened (recorded, or found on the host) is held first, so the stages run again on those commits.
+  if (fs.existsSync(worktree) && (saved?.phase === 'branch-ci' || (saved?.phase === 'pre-open' && !openPending(saved) && !(saved.pr && saved.opened)))) {
+    const where = saved.phase === 'branch-ci' ? 'at the branch CI' : 'before the open';
+    const taken = takeRemoteHead(worktree, branch);
+    if (taken.stop) {
+      log(`${key}: not resumed ${where} of ${branch}: ${taken.stop}; nothing ran`);
+      return finish('error', `not resumed ${where} of ${branch}: ${taken.stop}`, { pr: saved.pr ?? null, resumeStopped: taken.stop });
+    }
+    const ours = (saved.phase === 'branch-ci' ? saved.pushedHead : saved.provenHead) ?? null;
+    if (taken.moved || (ours && taken.head !== ours)) {
+      const adopted = saved.pr ? null : adoptOpenedPr(applyEnv(loadConfig('implement', worktree)), branch);
+      if (adopted) saveRun(config, key, { pr: adopted.pr, opened: true, preOpen: true, openedAt: adopted.openedAt, readyAt: adopted.readyAt, holds: adopted.holds });
+      const pr = saved.pr ?? adopted?.pr ?? null;
+      log(`${key}: ${taken.head.slice(0, 7)} was pushed to ${branch} while the run was stopped: the stages run again on it${pr ? `, with ${pr} held first` : ''}`);
+      if (pr) opts = carryHeldPr(opts, { pr });
+      rerun = true;
+    }
+  }
   if (['ci-wait', 'draft-back'].includes(saved?.phase) && saved.pr && fs.existsSync(worktree)) {
+    // The checkout takes what was pushed to the PR meanwhile (or the resume stops); afterOpen confirms a recorded hold on
+    // the host again before any fixing agent.
+    const m = movedAfterOpen('at the CI wait', saved.deliveredHead ?? null);
+    if (m?.stop) {
+      log(`${key}: not resumed at the CI wait of ${saved.pr}: ${m.why}; nothing ran`);
+      return m.stop;
+    }
+  }
+  if (['ci-wait', 'draft-back'].includes(saved?.phase) && saved.pr && fs.existsSync(worktree) && !rerun) {
     log(`${key}: resuming at the CI wait of ${saved.pr} (the earlier run stopped after the PR opened)`);
     const wtResume = applyEnv(loadConfig('implement', worktree));
     holder.wt = wtResume;
@@ -672,29 +862,69 @@ async function implementStoryInner(config, opts, holder) {
     const base0 = finish('done', null, { pr: saved.pr, resumedAt: saved.phase });
     // Older runs that waited on a PR opened before its CI (no `preOpen`) continue the same way: a failing check puts the PR
     // on hold before any fixing round (they have no ready time to audit).
-    return afterOpen(config, wtResume, { ...storyDelivery({ key, branch, worktree, base: saved.base ?? base, isBug: Boolean(saved.bug), issueUrl: saved.issueUrl ?? null }), prUrl: saved.pr, result: base0, readyAt: saved.readyAt ?? null, holds: saved.holds ?? [] });
+    return afterOpen(config, wtResume, { ...storyDelivery({ key, branch, worktree, base: saved.base ?? base, isBug: Boolean(saved.bug), issueUrl: saved.issueUrl ?? null }), prUrl: saved.pr, result: base0, readyAt: saved.readyAt ?? null, holds: saved.holds ?? [], ratedDiff: saved.ratedDiff ?? null });
   }
-  // A run that stopped right after its PR opened, before it recorded the open: the PR is adopted and the run continues
-  // after the open, never opening it again and never running agents while it is ready.
-  if (saved?.phase === 'pre-open' && fs.existsSync(worktree)) {
+  if (saved?.phase === 'pre-open' && fs.existsSync(worktree) && !rerun) {
     const wtResume = applyEnv(loadConfig('implement', worktree));
-    const adopted = adoptOpenedPr(wtResume, branch);
-    if (adopted) {
-      log(`${key}: ${adopted.pr} was opened by the earlier run before it stopped; continuing after the open`);
-      holder.wt = wtResume;
-      saveRun(config, key, { phase: 'ci-wait', pr: adopted.pr, preOpen: true, openedAt: adopted.openedAt, readyAt: adopted.readyAt, holds: adopted.holds });
-      return afterOpen(config, wtResume, { ...storyDelivery({ key, branch, worktree, base: saved.base ?? base, isBug: Boolean(saved.bug), issueUrl: saved.issueUrl ?? null }), prUrl: adopted.pr, result: finish('done', null, { pr: adopted.pr, resumedAt: 'pre-open' }), readyAt: adopted.readyAt, holds: adopted.holds });
-    }
-    // The code host refused the open earlier (or it failed after CI proved the head): the delivery runs again from its saved
-    // title and body, skipping implementation and review stages (delivery-stage agents such as the analysis fixer, CI fixer,
-    // bug triage if unsaved, or demo narrator may still run if needed).
+    // The code host refused the open earlier, it failed after CI proved the head, or the rating failed (before the open, or
+    // on a PR already open and on hold): the delivery runs again from its saved title and body at the step that failed,
+    // skipping implementation and review stages (delivery-stage agents such as the analysis fixer, CI fixer, bug triage if
+    // no rating was saved for this head, or demo narrator may still run if needed). Checked before the adoption below, which
+    // would take a held PR past its rating. Never when the branch moved since CI proved it (a person's commits are reviewed).
     if (openPending(saved)) {
-      const input = readJson(deliveryInputFile(worktree, wtResume, key), null) ?? rebuildDeliveryInput(wtResume, { key, worktree, issueUrl: saved.issueUrl ?? null, followUps: Array.isArray(saved.followUps) ? saved.followUps : [] });
-      log(`${key}: resuming the delivery of ${branch}: the PR did not open earlier (${String(saved.openRefused?.reason ?? saved.reason ?? '').slice(0, 160)}); skipping implementation and review to open on the CI-proven head (delivery-stage agents may still run if needed)${input.rebuilt ? ' (its body rebuilt from the run records)' : ''}`);
+      const moved = headMovedSince(worktree, branch, saved);
+      // A head that cannot be read stops the resume where it is (it resumes the same way once the remote answers).
+      const stop = (why) => {
+        const at = pendingDisposition(saved);
+        log(`${key}: not resumed: ${why}; nothing ran, and \`implement resume\` tries again`);
+        return finish(at.outcome, `${at.reason ?? ''} (not resumed: ${why})`.trim(), { pr: saved.pr ?? null, resumeStopped: why });
+      };
+      if (moved?.unreadable) return stop(moved.why);
+      if (moved) {
+        // A person's commits reach this checkout first, so the stages that run again review them.
+        const taken = takeRemoteHead(worktree, branch);
+        if (taken.stop) return stop(taken.stop);
+        log(`${key}: not resuming at the delivery of ${branch}: ${moved.why}; the stages run again on ${taken.head.slice(0, 7)}${saved.pr ? `, with ${saved.pr} held first` : ''}`);
+        // A known PR (on hold, closed by a close-reopen hold) stays this ticket's PR: it is held and confirmed again
+        // before any agent runs, and the delivery updates it; never a second PR.
+        opts = carryHeldPr(opts, saved);
+      } else {
+        const held = saved.pr ? confirmRecordedHold(wtResume, saved) : null;
+        if (held && !held.ok) return finish('hold-failed', held.reason, { pr: saved.pr });
+        const input = readJson(deliveryInputFile(worktree, wtResume, key), null) ?? rebuildDeliveryInput(wtResume, { key, worktree, issueUrl: saved.issueUrl ?? null, followUps: Array.isArray(saved.followUps) ? saved.followUps : [] });
+        log(`${key}: resuming the delivery of ${branch}: ${saved.pr ? `${saved.pr} (on hold) was not rated` : 'the PR did not open'} earlier (${String(saved.openRefused?.reason ?? saved.reason ?? '').slice(0, 160)}); skipping implementation and review to ${saved.pr ? 'rate and update it' : 'open'} on the CI-proven head (delivery-stage agents may still run if needed)${input.rebuilt ? ' (its body rebuilt from the run records)' : ''}`);
+        holder.wt = wtResume;
+        recordExternalCalls(wtResume, key);
+        const ticketMeta = readJson(path.join(worktree, wtResume.stateDir ?? '.factory/state', 'board', key, 'meta.json'), {}) ?? {};
+        return deliverStory(config, wtResume, { key, branch, worktree, base: saved.base ?? base, baseBranch: String(saved.base ?? base).replace(/^origin\//, ''), title: input.title, body: input.body, result: finish('done', null, { resumedAt: 'open-pending', firstPushAt: saved.firstPushAt ?? null }), isBug: Boolean(saved.bug) || isBugTicket({ key, type: ticketMeta.type }), issueUrl: saved.issueUrl ?? ticketMeta.issue?.url ?? null, questions: [], prcIncomplete: null, resumed: true, ...(saved.pr ? { existingPr: saved.pr, holds: held?.holds ?? saved.holds ?? [], openedAt: saved.openedAt ?? null, readyAt: saved.readyAt ?? null } : {}) });
+      }
+    } else if (saved.pr && saved.opened && movedAfterOpen('after the open', saved.provenHead ?? null)?.stop) {
+      return finish('error', `not resumed after the open of ${saved.pr}: the remote head could not be taken into the checkout`, { pr: saved.pr });
+    } else if (saved.pr && saved.opened && !rerun) {
+      // The run stopped after its PR opened and was recorded, before the rating was published: it is published now (the
+      // rating saved for this head, or a result that needs a person), then the run continues after the open.
+      log(`${key}: ${saved.pr} was opened and recorded by the earlier run before it stopped; continuing after the open`);
       holder.wt = wtResume;
-      recordExternalCalls(wtResume, key);
-      const ticketMeta = readJson(path.join(worktree, wtResume.stateDir ?? '.factory/state', 'board', key, 'meta.json'), {}) ?? {};
-      return deliverStory(config, wtResume, { key, branch, worktree, base: saved.base ?? base, baseBranch: String(saved.base ?? base).replace(/^origin\//, ''), title: input.title, body: input.body, result: finish('done', null, { resumedAt: 'open-pending', firstPushAt: saved.firstPushAt ?? null }), isBug: Boolean(saved.bug) || isBugTicket({ key, type: ticketMeta.type }), issueUrl: saved.issueUrl ?? ticketMeta.issue?.url ?? null, questions: [], prcIncomplete: null, resumed: true });
+      const o = { ...storyDelivery({ key, branch, worktree, base: saved.base ?? base, isBug: Boolean(saved.bug), issueUrl: saved.issueUrl ?? null }), result: finish('done', null, { pr: saved.pr, resumedAt: 'opened' }) };
+      const failed = publishRatingOrHold(config, wtResume, o, { prUrl: saved.pr, holds: saved.holds ?? [], openedAt: saved.openedAt ?? null, readyAt: saved.readyAt ?? null, greenAt: saved.greenAt ?? null, provenHead: saved.provenHead ?? null, firstPushAt: saved.firstPushAt ?? null });
+      if (failed) return failed;
+      saveRun(config, key, { phase: 'ci-wait', pr: saved.pr, preOpen: true, opened: null, deliveredHead: headSha(worktree) });
+      return afterOpen(config, wtResume, { ...o, prUrl: saved.pr, readyAt: saved.readyAt ?? null, holds: saved.holds ?? [] });
+    } else if (!saved.pr && !rerun) {
+      // A run that stopped right after its PR opened, before it recorded the open: the PR is adopted and the run continues
+      // after the open, never opening it again and never running agents while it is ready.
+      const adopted = adoptOpenedPr(wtResume, branch);
+      if (adopted) {
+        log(`${key}: ${adopted.pr} was opened by the earlier run before it stopped; continuing after the open`);
+        holder.wt = wtResume;
+        saveRun(config, key, { pr: adopted.pr, opened: true, preOpen: true, openedAt: adopted.openedAt, readyAt: adopted.readyAt, holds: adopted.holds });
+        const o = { ...storyDelivery({ key, branch, worktree, base: saved.base ?? base, isBug: Boolean(saved.bug), issueUrl: saved.issueUrl ?? null }), result: finish('done', null, { pr: adopted.pr, resumedAt: 'pre-open' }) };
+        // Never released unrated: the rating is published before the run continues after the open.
+        const failed = publishRatingOrHold(config, wtResume, o, { prUrl: adopted.pr, holds: adopted.holds, openedAt: adopted.openedAt, readyAt: adopted.readyAt, greenAt: saved.greenAt ?? null, provenHead: saved.provenHead ?? null, firstPushAt: saved.firstPushAt ?? null });
+        if (failed) return failed;
+        saveRun(config, key, { phase: 'ci-wait', pr: adopted.pr, preOpen: true, opened: null, openedAt: adopted.openedAt, readyAt: adopted.readyAt, holds: adopted.holds, deliveredHead: headSha(worktree) });
+        return afterOpen(config, wtResume, { ...o, prUrl: adopted.pr, readyAt: adopted.readyAt, holds: adopted.holds });
+      }
     }
   }
   const prep = prepareWorktree(config, opts);
@@ -705,7 +935,9 @@ async function implementStoryInner(config, opts, holder) {
   const reopened = opts.reopenedPr && opts.pr ? opts.reopenedPr : null;
   if (reopened) {
     const prior = loadRun(config, key) ?? {};
-    const kept = prior.pr === reopened && (prior.holds ?? []).some((h) => !h.to && h.ok !== false && h.releaseConfirmed !== false) ? prior.holds : null;
+    // A recorded hold is trusted only once the host confirms it again (a person may have released it).
+    const recorded = prior.pr === reopened && (prior.holds ?? []).some((h) => !h.to && h.ok !== false && h.releaseConfirmed !== false) ? confirmRecordedHold(applyEnv(prep.config), prior) : null;
+    const kept = recorded?.ok ? prior.holds : null;
     const hold = kept ? null : holdOpenPr(applyEnv(prep.config), reopened, 'the ticket was reopened; agents work on it again');
     if (hold && hold.ok === false) {
       const reason = `could not confirm putting reopened ${reopened} on hold (${hold.mode}); no agent ran (the PR may already be in draft or held on the host — check its state before resuming)`;
@@ -1172,7 +1404,7 @@ function deliverStory(config, wt, { key, branch, worktree, base, baseBranch, tit
     questions,
     prcIncomplete,
     save: (s) => saveRun(config, key, { ...s, ...(s.phase === 'branch-ci' || s.phase === 'pre-open' ? { bug: Boolean(isBug), issueUrl: issueUrl ?? null } : {}) }),
-    open: ({ title: t, body: b, draft }) => openStoryPr(wt, { worktree, branch, base: baseBranch, title: t, body: b, draft, records: false }),
+    open: ({ title: t, body: b, draft, onOpened }) => openStoryPr(wt, { worktree, branch, base: baseBranch, title: t, body: b, draft, records: false }, { onOpened }),
     onOpen: (url) => {
       publishTicket(worktree, key);
       reportToBoard(worktree, key, url);
@@ -1271,36 +1503,39 @@ export async function deliverFinished(config, wt, o) {
   // Owner questions are asked on the ticket before any PR exists; an unfinished PR check never opens one.
   if (questions.length) return notFinished(needsDecision(questions), 'it needs an owner decision, asked on the ticket');
   if (prcIncomplete) return notFinished({ outcome: prcIncomplete.outcome, reason: prcIncomplete.reason, findings: prcIncomplete.findings, delivery: prcIncomplete }, prcIncomplete.reason);
-  save({ phase: 'branch-ci', branch, worktree, base, firstPushAt, ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
+  save({ phase: 'branch-ci', branch, worktree, base, firstPushAt, pushedHead: headSha(worktree), ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
   const proof = await proveBeforeOpen(wt, { label, stories: keys, branch, worktree, base, issues, targetArgs, prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), stateDir, repo: io.repo(), sync: () => io.push({ worktree, branch, base, commitRecords: false }), log, gate: io.gate,
     // A red branch CI after its fixing round: the analysis jobs run here on the same head, and the secret decision table's
     // way out is taken (a fixing round for what is still in the files; the fold of the story's own branch with no PR for a
     // fake value in its pushed history); anything else escalates as before.
-    remedy: (ci) => (io.remedy ?? ((a) => remedyRedBranch(wt, a)))({ worktree, branch, base, ci, prOpen: existingPr ? true : (io.prOpen ?? ((b) => prOpenState(wt, b)))(branch), keys, targetArgs, seedFile: path.join(stateDir, `${id}-branch-remedy.json`), prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), push: () => io.push({ worktree, branch, base, commitRecords: false }), pushLease: (lease) => (io.pushLease ?? ((a) => pushLeaseDefault(wt, a)))({ worktree, branch, lease }), log: (m) => log(`${label}: ${m}`) }) });
+    remedy: (ci) => (io.remedy ?? ((a) => remedyRedBranch(wt, a)))({ worktree, branch, base, ci, prOpen: existingPr ? true : io.prOpen(branch), keys, targetArgs, seedFile: path.join(stateDir, `${id}-branch-remedy.json`), prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), push: () => io.push({ worktree, branch, base, commitRecords: false }), pushLease: (lease) => (io.pushLease ?? ((a) => pushLeaseDefault(wt, a)))({ worktree, branch, lease }), log: (m) => log(`${label}: ${m}`) }) });
   const { branchCi, draftFirst } = proof;
   if (proof.syncFailed) return { ...result, outcome: 'not-delivered', reason: `no PR: ${proof.syncFailed}`, pr: existingPr };
   if (proof.delivery) return notFinished({ outcome: proof.delivery.outcome, reason: `before its PR: ${proof.delivery.reason}`, findings: proof.delivery.findings, delivery: proof.delivery }, `its CI on the branch is not green (${proof.delivery.reason})`);
   const greenAt = nowIso();
-  save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, bug: Boolean(isBug), ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
+  // The head CI proved: a resume continues from here only while the branch is still at it (headMovedSince).
+  const provenHead = headSha(worktree);
+  const onHold = existingPr ? { pr: existingPr, holds, preOpen: true, openedAt: o.openedAt ?? null, readyAt: o.readyAt ?? null } : {};
+  save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, bug: Boolean(isBug), ...onHold });
   // The review gate's rating of a bug fix, guaranteed before the PR opens (the gate's only model call); published at open
   // without starting any agent. If the active gate cannot produce an assessment here, stop before opening the PR.
   const assessFile = path.join(stateDir, `${id}-gate-assessment.json`);
-  // A resumed delivery reuses the saved rating when present; if no rating was saved yet (e.g. after gate-assessment-failed),
-  // io.assess runs before the PR opens.
+  // A resumed delivery reuses the saved rating only when it was made for this head (a rating repeated can come out
+  // different and change whether the PR merges itself); otherwise io.assess runs before the PR opens.
   let assessment = null;
   let gateSkipped = false;
   if (isBug) {
-    const savedAssessment = o.resumed && fs.existsSync(assessFile) ? readJson(assessFile, null) : null;
+    const saved = o.resumed && fs.existsSync(assessFile) ? readJson(assessFile, null) : null;
+    const savedAssessment = saved?.headSha && saved.headSha === provenHead ? saved : null;
+    if (saved && !savedAssessment) log(`${label}: the saved rating is for ${String(saved.headSha ?? 'an unrecorded head').slice(0, 7)}, not ${provenHead.slice(0, 7)}; rating this head`);
     const assessed = savedAssessment ?? io.assess({ worktree, keys, base, out: assessFile });
     if (assessed?.skipped) gateSkipped = true;
     else if (!assessed) {
-      const reason = 'the review gate could not produce a bug-triage assessment before the PR opened; no PR opened (no agent may run after open)';
-      const failed = notFinished({ outcome: 'gate-assessment-failed', reason, findings: [{ id: 'GATE-ASSESS-FAILED', severity: 'major', title: 'Review gate pre-open assessment failed', detail: reason }] }, reason);
-      if (!existingPr) {
-        save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, bug: true });
-        return { ...failed, phase: 'pre-open', greenAt, bug: true };
-      }
-      return failed;
+      const reason = `the review gate could not produce a bug-triage assessment before the PR ${existingPr ? 'was updated' : 'opened'}; ${existingPr ? `${existingPr} stays on hold` : 'no PR opened'} (no agent may run after open), and \`implement resume\` rates it again on this head`;
+      log(`${label}: ${reason}`);
+      // The resume point stays at the rating, with an open PR on hold when there is one: no agent stage runs again.
+      save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, bug: true, ...onHold });
+      return { ...result, outcome: 'gate-assessment-failed', reason, findings: [{ id: 'GATE-ASSESS-FAILED', severity: 'major', title: 'Review gate pre-open assessment failed', detail: reason }], pr: existingPr, holds, branchPushed: true, phase: 'pre-open', greenAt, provenHead, bug: true };
     } else assessment = assessed;
   }
   // The body, whole: CI evidence, the gate's assessment, the demo video and the API summary of the branch run. The
@@ -1316,9 +1551,17 @@ export async function deliverFinished(config, wt, o) {
   // demo mode, narrated, rendered, checked for secrets, and stored for this head; the body below embeds it once.
   // Deterministic and never a reason to hold the delivery: a failure is a note in the section. The one exception is a
   // setting: a UI bug whose reproduction could not be shown before the fix (video.bugPair.requireBefore) opens no PR.
-  const video = io.demoVideo ? await io.demoVideo({ worktree, base, branch, head, keys, out: path.join(stateDir, `${id}-demo-video.json`) }) : null;
-  if (video?.block) return notFinished({ outcome: 'demo-video-blocked', reason: video.block, findings: video.findings ?? [] }, video.block);
-  const media = io.media({ folder: keyFolder(branch), head });
+  // A resume skips recording and narration when this very commit's step finished (nothing it blocked on) and its media
+  // is stored.
+  const videoFile = path.join(stateDir, `${id}-demo-video.json`);
+  const lastVideo = o.resumed ? readJson(videoFile, null) : null;
+  let media = lastVideo?.head === head && lastVideo.exit === 0 && !lastVideo.block ? io.media({ folder: keyFolder(branch), head }) : null;
+  if (media?.video || media?.api) log(`${label}: the demo media of ${head.slice(0, 7)} is stored already; not recorded or narrated again`);
+  else {
+    const video = io.demoVideo ? await io.demoVideo({ worktree, base, branch, head, keys, out: videoFile }) : null;
+    if (video?.block) return notFinished({ outcome: 'demo-video-blocked', reason: video.block, findings: video.findings ?? [] }, video.block);
+    media = io.media({ folder: keyFolder(branch), head });
+  }
   // The video and API summary are embedded below from the branch run: the sentence promising them later goes.
   body = withoutDemoPromise(body);
   const ciEvidence = branchCi?.state === 'success'
@@ -1333,7 +1576,7 @@ export async function deliverFinished(config, wt, o) {
   if (media.video) body += `\n\n<!-- pr-demo-video:start -->\n${media.video}\n<!-- pr-demo-video:end -->`;
   if (media.api) body += `\n\n<!-- pr-api-summary:start -->\n${media.api}\n<!-- pr-api-summary:end -->`;
   if (media.notes?.length && (media.video || media.api || branchCi?.state === 'success')) body += `\n\n<sub>Demo video and API summary: ${media.notes.join('; ')}.</sub>`;
-  save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
+  save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, ...onHold });
   let prUrl;
   let openedAt;
   let readyAt;
@@ -1345,33 +1588,47 @@ export async function deliverFinished(config, wt, o) {
     openedAt = o.openedAt ?? null;
     readyAt = o.readyAt ?? null;
   } else {
-    // The PR opens finished: once, on the head CI proved, with its whole body.
-    const opened = await o.open({ title, body, draft: draftFirst });
+    // The PR opens finished: once, on the head CI proved, with its whole body. A bug fix opens held (a draft, else
+    // labelled) until its rating is published: never ready before it.
+    const holdAtOpen = draftFirst || (isBug && !gateSkipped);
+    const holdWhy = draftFirst ? 'its checks run only once the PR exists' : 'its review gate rating is published first';
+    // Recorded the moment the host returns the PR, before any follow-up call (the left-out text's comments, metrics):
+    // a run that stops from there resumes after the open, never opening it again.
+    // A PR asked to open as a draft is recorded with that hold, not yet confirmed (the host's answer says whether it is a
+    // draft), so a resume from here releases it too and never takes the PR for one that was never held.
+    const recordOpen = (url) => {
+      const at = nowIso();
+      save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, pr: url, opened: true, preOpen: true, openedAt: at, readyAt: null, holds: holdAtOpen ? [{ mode: 'draft', label: preOpenSettings(wt).wipLabel, ok: false, from: at, why: holdWhy }] : [], bug: Boolean(isBug) });
+    };
+    const opened = await o.open({ title, body, draft: holdAtOpen, onOpened: recordOpen });
     if (opened.refused) {
       // Every implementation/review stage is done and CI proved this head: the delivery is kept, not lost. The record stays
       // at pre-open with the refusal, and `implement resume` retries delivery on this head (delivery-stage agents may still run if needed).
       const refusal = { at: nowIso(), head, attempts: opened.attempts ?? [], records: opened.records ?? null, reason: opened.reason };
-      save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, openRefused: refusal, ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
+      save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, openRefused: refusal, ...onHold });
       appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'host-refusal', what: 'pr-open', head, accepted: false, attempts: refusal.attempts.length }]);
       log(`${label}: ${opened.reason}; the branch ${branch} stays pushed and CI-proven on ${head.slice(0, 7)}: \`implement resume\` retries opening the PR`);
       return { ...result, outcome: 'pr-refused', reason: `no PR: ${opened.reason}; the CI-proven head ${head.slice(0, 7)} is kept and \`implement resume\` retries opening the PR without re-running implementation or review (delivery-stage agents may still run if needed)`, pr: null, finalSha: head, greenAt, openRefused: refusal };
     }
     if (!opened.pushed || !opened.url) return { ...result, outcome: 'not-delivered', reason: `no PR: ${opened.reason}` };
+    prUrl = opened.url;
+    openedAt = nowIso();
     if (opened.reduced) {
       appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'host-refusal', what: 'pr-open', head, accepted: true, pr: opened.url, attempts: opened.reduced.attempts.length, dropped: opened.reduced.dropped, comments: (opened.reduced.comments ?? []).map((c) => `${c.id}:${c.outcome}`) }]);
       log(`${label}: the code host refused the PR's full text; it opened with a shorter body (without ${opened.reduced.dropped.join(', ')}); the full text is in ${opened.reduced.records}`);
     }
-    prUrl = opened.url;
-    openedAt = nowIso();
+    // Recorded at once: a run that stops from here on resumes after the open (its rating published first), never opening
+    // the PR again and never releasing it unrated.
+    save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, pr: prUrl, opened: true, preOpen: true, openedAt, readyAt: null, holds: holdAtOpen && opened.draft ? [{ mode: 'draft', label: preOpenSettings(wt).wipLabel, ok: true, from: openedAt, why: holdWhy }] : [], bug: Boolean(isBug) });
     if (process.env.PIPELINE_TEST_DIE_AT === 'after-pr-open') process.exit(137);
     recordHeadActivity(wt, prUrl, headSha(worktree), 'opened', { at: openedAt });
-    if (draftFirst) {
+    if (holdAtOpen) {
       const wipLabel = preOpenSettings(wt).wipLabel;
       const draftConfirmed = opened.draft && (io.confirmHold ? io.confirmHold(prUrl, { mode: 'draft', label: wipLabel }) !== false : true);
       if (draftConfirmed) {
-        holds.push({ mode: 'draft', label: wipLabel, ok: true, from: openedAt, why: 'its checks run only once the PR exists' });
+        holds.push({ mode: 'draft', label: wipLabel, ok: true, from: openedAt, why: holdWhy });
       } else {
-        const why = 'its checks run only once the PR exists';
+        const why = holdWhy;
         // A draft the host may have applied without confirming it: recorded (not trusted), so afterOpen releases it too.
         if (opened.draft) holds.push({ mode: 'draft', label: wipLabel, ok: false, from: openedAt, why });
         let h;
@@ -1384,15 +1641,17 @@ export async function deliverFinished(config, wt, o) {
         holds.push({ ...(h && typeof h === 'object' ? h : { mode: 'label', label: wipLabel, from: openedAt, why }), ok });
       }
     }
-    readyAt = draftFirst && holds.at(-1)?.ok !== false ? null : openedAt;
+    readyAt = holdAtOpen && holds.at(-1)?.ok !== false ? null : openedAt;
   }
   await o.onOpen?.(prUrl, { existing: Boolean(existingPr) });
+  let ratedDiff = null;
   if (isBug && !gateSkipped) {
-    io.publishGate({ worktree, pr: prUrl, keys, base, assessment: assessment ? assessFile : null, noAgent: true });
-    recordHeadActivity(wt, prUrl, headSha(worktree), 'labeled');
+    const failed = publishRatingOrHold(config, wt, { ...o, io, save, result }, { prUrl, holds, openedAt, readyAt, greenAt, provenHead, firstPushAt, assessment });
+    if (failed) return failed;
+    ratedDiff = localDiffKey(worktree, base);
   }
-  save({ phase: 'ci-wait', pr: prUrl, branch, worktree, base, bug: Boolean(isBug), issues, questions: [], prCheckIncomplete: null, preOpen: true, firstPushAt, greenAt, openedAt, readyAt, holds, branchCi: branchCi ? { state: branchCi.state, head: branchCi.head ?? head, pipelines: branchCi.names ?? [], prOnly: branchCi.prOnly ?? [], rounds: branchCi.rounds ?? 0 } : null });
-  return afterOpen(config, wt, { ...o, io, save, issues, targetArgs, prUrl, result: { ...result, firstPushAt, greenAt, openedAt }, readyAt, holds });
+  save({ phase: 'ci-wait', opened: null, pr: prUrl, branch, worktree, base, deliveredHead: headSha(worktree), bug: Boolean(isBug), issues, questions: [], prCheckIncomplete: null, preOpen: true, firstPushAt, greenAt, openedAt, readyAt, holds, branchCi: branchCi ? { state: branchCi.state, head: branchCi.head ?? head, pipelines: branchCi.names ?? [], prOnly: branchCi.prOnly ?? [], rounds: branchCi.rounds ?? 0 } : null });
+  return afterOpen(config, wt, { ...o, io, save, issues, targetArgs, prUrl, result: { ...result, firstPushAt, greenAt, openedAt }, readyAt, holds, ratedDiff: gateSkipped ? localDiffKey(worktree, base) : ratedDiff, openedAt, greenAt, provenHead, firstPushAt });
 }
 
 // A PR found open for a branch whose run stopped between the open and its record (a crash right after `pr create`): it is
@@ -1401,6 +1660,64 @@ export function adoptOpenedPr(wt, branch, { io = deliveryIo(wt) } = {}) {
   const found = io.findOpenPr(branch);
   if (!found?.url) return null;
   return { pr: found.url, openedAt: found.createdAt ?? nowIso(), readyAt: found.draft ? null : found.createdAt ?? nowIso(), holds: found.draft ? [{ mode: 'draft', from: found.createdAt ?? nowIso(), why: 'opened as a draft' }] : [] };
+}
+
+// The review gate's rating published on an open bug PR before anything can release it. Publishing again is harmless
+// (the gate edits its one comment and its labels): the rating saved for this very head, or, with none, an unassessed
+// result that needs a person (--no-agent). If publication fails, the PR is held for a person (or stays held) and the
+// delivery stops at a point a resume publishes again: a bug PR is never released without its rating or a review state.
+// Returns null when published (or the gate is off), else the run's result.
+export function publishRatingOrHold(config, wt, o, { prUrl, holds = [], openedAt = null, readyAt = null, greenAt = null, provenHead = null, firstPushAt = null, assessment = null }) {
+  const { id, keys, label, branch, worktree, base } = o;
+  const io = { ...deliveryIo(wt), ...(o.io ?? {}) };
+  const save = o.save ?? ((s) => saveRun(config, id, s));
+  if (!o.isBug) return null;
+  const head = headSha(worktree);
+  const assessFile = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-gate-assessment.json`);
+  const rating = readJson(assessFile, null);
+  let r;
+  try {
+    // Only a rating made for this very head is published (the gate checks it against the PR's head again); otherwise a
+    // result that needs a person.
+    r = io.publishGate({ worktree, pr: prUrl, keys, base, assessment: (assessment ?? rating)?.headSha && (assessment ?? rating).headSha === head ? assessFile : null, noAgent: true });
+  } catch (error) {
+    r = { status: 1, stderr: String(error?.message ?? error) };
+  }
+  if (!(r && typeof r === 'object' && r.status != null && r.status !== 0)) {
+    recordHeadActivity(wt, prUrl, head, 'labeled');
+    // The change the host shows a rating for (its diff key; the pipeline's base merges keep it): the only change a release
+    // may happen on (afterOpen).
+    const ratedDiff = localDiffKey(worktree, base);
+    save({ ratedHead: head, ratedDiff });
+    o.ratedHead = head;
+    o.ratedDiff = ratedDiff;
+    return null;
+  }
+  const all = [...holds];
+  if (!all.some((h) => !h.to && h.ok !== false)) all.push(holdOpenPr(wt, prUrl, "the review gate's rating could not be published", { io }));
+  const heldNow = all.some((h) => !h.to && h.ok !== false);
+  const reason = `the review gate's rating could not be published on ${prUrl} (${String(r.stderr ?? r.stdout ?? '').trim().split('\n').at(-1) || `exit ${r.status}`}); ${heldNow ? 'it stays on hold for a person, and `implement resume` publishes it again' : 'and it could not be put on hold: check its state before resuming'}`;
+  log(`${label}: ${reason}`);
+  save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, pr: prUrl, opened: null, preOpen: true, openedAt, readyAt, holds: all, bug: true });
+  return { ...(o.result ?? {}), outcome: heldNow ? 'gate-assessment-failed' : 'hold-failed', reason, findings: [{ id: 'GATE-PUBLISH-FAILED', severity: 'major', title: 'Review gate rating not published on the open PR', detail: reason }], pr: prUrl, holds: all, phase: 'pre-open', greenAt, provenHead, bug: true };
+}
+
+// A resume whose branch moved runs the stages again; its known PR (on hold, or closed by a close-reopen hold) stays the
+// ticket's PR: routed as a reopened PR, held and confirmed before any agent, updated by the delivery, never a second one.
+export const carryHeldPr = (opts, saved) => (saved?.pr ? { ...opts, pr: true, reopenedPr: saved.pr, fromRemote: true } : opts);
+
+// A recorded hold confirmed again on the host before agents work on its PR: { ok, holds, reason }.
+export function confirmRecordedHold(wt, rec, { io = deliveryIo(wt) } = {}) {
+  const open = (rec.holds ?? []).filter((h) => !h.to && h.ok !== false);
+  const last = open.at(-1);
+  if (!last) return { ok: false, holds: rec.holds ?? [], reason: `${rec.pr} has no recorded hold to confirm` };
+  let ok;
+  try {
+    ok = io.confirmHold ? io.confirmHold(rec.pr, { mode: last.mode, label: last.label }) !== false : false;
+  } catch {
+    ok = false;
+  }
+  return ok ? { ok, holds: rec.holds } : { ok, holds: rec.holds, reason: `the recorded hold of ${rec.pr} (${last.mode}) is not confirmed on the host (a person may have released it); no agent ran` };
 }
 
 // An open PR that agents are about to work on again (a re-delivered or joined epic group, a resumed run that must do agent
@@ -1471,6 +1788,18 @@ export function deliveryIo(wt) {
     confirmHold: (pr, { mode = po().afterOpen, label = po().wipLabel } = {}) => confirmPrState(host(), pr, { mode, label, held: true }),
     release: (pr, { mode, label }) => releasePr(host(), pr, { mode, label }),
     ownsPr: (pr) => host().ownsPr?.(pr) !== false,
+    // The PR's own change as the host has it now (its diff key), or null when it cannot be read.
+    prDiffKey: (pr) => {
+      try {
+        const h = host();
+        const v = h.pr.get(pr);
+        return liveDiffKey({ cwd: wt.root, base: v?.base, head: v?.headSha, host: h, pr });
+      } catch {
+        return null;
+      }
+    },
+    // Whether the branch has an open PR (true, false, or null when the host could not be asked).
+    prOpen: (branch) => prOpenState(wt, branch),
     findOpenPr: (branch) => {
       try {
         const [p] = host().pr.list({ head: branch, state: 'open', limit: 1 }) ?? [];
@@ -1508,10 +1837,18 @@ export async function afterOpen(config, wt, o) {
   let readyAt = o.readyAt ?? null;
   const repo = io.repo();
   const common = { config: wt, ciOptions: { ciSettings: settings.reviewGate?.ci ?? {}, activities: (h) => headActivities(wt, prUrl, h) }, repo, pr: prUrl, branch, cwd: worktree, prCheckCli: PR_CHECK_CLI, targetArgs, base, env: o.env ?? fixEnv(worktree, base, keys[0]), seedFile: path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-ci-fix.json`), log: (m) => log(`${label}: ${m}`), ...(settings.ciWaitSec ? { timeoutSec: settings.ciWaitSec } : {}), ...(settings.ciPollSec != null ? { pollSec: settings.ciPollSec } : {}), ...(settings.ciSettleSec != null ? { settleSec: settings.ciSettleSec } : {}) };
-  const saveWait = (extra = {}) => save({ phase: 'ci-wait', pr: prUrl, preOpen: true, readyAt, holds, ...extra });
+  // `deliveredHead`: what the run itself pushed last (a resume compares the remote's head with it).
+  const saveWait = (extra = {}) => save({ phase: 'ci-wait', pr: prUrl, preOpen: true, readyAt, holds, deliveredHead: headSha(worktree), ...extra });
   // Held for a fixing round only when the last hold was confirmed and its release was not attempted: a hold whose release
   // is unconfirmed may already be ready on the host, so it is held (and confirmed) again first.
   const held = () => holds.length > 0 && !holds.at(-1).to && holds.at(-1).ok !== false && holds.at(-1).releaseConfirmed !== false;
+  const confirmedNow = (h) => {
+    try {
+      return Boolean(io.confirmHold) && io.confirmHold(prUrl, { mode: h.mode, label: h.label }) !== false;
+    } catch {
+      return false;
+    }
+  };
   let holdFailed = null;
   let releaseFailed = null;
   const release = (h) => {
@@ -1547,15 +1884,28 @@ export async function afterOpen(config, wt, o) {
   const waitOnly = () => (repo && settings.ciWait !== false && io.ownsPr(prUrl) ? io.gate({ ...common, fixRounds: 0 }) : Promise.resolve({ state: 'success', failing: [], pending: [] }));
   let ci = await waitOnly();
   let cycles = holds.filter((h) => h.cycle && h.ok !== false).length;
+  // The change whose rating the host shows (publishRatingOrHold's diff key): a bug PR is released only while the PR's own
+  // change, as the host has it now (not this checkout's head), is still that change.
+  const ratedDiff = o.ratedDiff ?? load()?.ratedDiff ?? null;
   for (;;) {
     if (ci.state === 'success' && holds.some((h) => !h.to)) {
+      // A fixing round (or a person's push) gave the PR a head that was not rated: its rating, or the explicit "needs a
+      // person" result, is published and shown on the host while it is still held; a failure keeps it held and stops.
+      const current = isBug ? (io.prDiffKey ? io.prDiffKey(prUrl) : localDiffKey(worktree, base)) : null;
+      if (isBug && (!current || current !== ratedDiff)) {
+        log(`${label}: ${prUrl} is rated again before its release: its change is not the one rated (a fixing commit or a person's push)`);
+        const failed = publishRatingOrHold(config, wt, { ...o, io, save, result }, { prUrl, holds, openedAt: o.openedAt ?? null, readyAt, greenAt: o.greenAt ?? null, provenHead: o.provenHead ?? null, firstPushAt: o.firstPushAt ?? null });
+        if (failed) return failed;
+      }
       releaseAll();
       saveWait();
       break;
     }
     if (!['failure', 'flaky'].includes(ci.state) || cycles >= po.draftCycles || ciFixRounds(settings) < 1) break;
     cycles += 1;
-    // Agents work on an open PR only while it is confirmed on hold.
+    // Agents work on an open PR only while it is confirmed on hold: a recorded hold is confirmed on the host again first
+    // (a person may have released it while the run was stopped); one that is not is closed and the PR held again.
+    if (held() && !confirmedNow(holds.at(-1))) Object.assign(holds.at(-1), { to: nowIso(), unconfirmed: true });
     if (!held()) {
       const why = `the PR's CI is not green: ${ciLine(ci)}`;
       let h;
@@ -1932,6 +2282,8 @@ export async function pushStoryBranch(config, { worktree, branch, base }, deps =
 export function assessedLine(assessment) {
   const level = (v) => (typeof v === 'string' ? v : v?.level) ?? '?';
   const tickets = (assessment.tickets ?? []).map((t) => `${t.key}: impact ${level(t.impact ?? t.rating?.impact)}, fix risk ${level(t.fixRisk ?? t.rating?.fixRisk)}, confidence ${t.confidence?.score ?? t.confidence ?? '?'}`);
+  // Why a person must review it (a person's earlier rejection) is a section the gate rebuilds from its live read
+  // (review-gate gate.mjs rejectionSection), not this line.
   return `- Review gate, assessed before this PR opened: severity ${level(assessment.severity)} (${tickets.join('; ')})`;
 }
 
@@ -1940,7 +2292,7 @@ export function assessedLine(assessment) {
 export async function openStoryPr(config, { worktree, branch, base, title, body, draft = false, records = true }, deps = {}) {
   if (records) (deps.commitRecords ?? commitRecords)(worktree, 'Pipeline records (PR check, run conditions, usage) before the PR');
   const publisher = deps.publisher ?? (await prPublisher(config));
-  const opened = await openPullRequest(publisher, { cwd: worktree, branch, base, title, body, draft }, { run: deps.run, ...(records ? {} : { mergeBase: () => null }) });
+  const opened = await openPullRequest(publisher, { cwd: worktree, branch, base, title, body, draft }, { run: deps.run, onOpened: deps.onOpened, ...(records ? {} : { mergeBase: () => null }) });
   if (!opened.pushed || opened.url) return opened;
   const url = (deps.openPrFor ?? openPrFor)(config, branch, publisher.env, publisher);
   return url ? { ...opened, url, reason: undefined } : opened;

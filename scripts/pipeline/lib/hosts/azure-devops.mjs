@@ -47,7 +47,7 @@ export function statusState(s) {
 
 // What Azure Repos can do for the harness (providers/contracts.mjs CAPABILITIES.host). No CODEOWNERS: required
 // reviewers per path are a branch policy a person adds; no labels on the gate's terms (PR tags, partial).
-export const CAPABILITIES = { requiredChecks: true, codeOwners: 'partial', autoMerge: true, mergeHeadGuard: true, cancelAutoMerge: true, drafts: true, labels: 'partial', checkAnnotations: false, commitStatus: true, attachments: true, botIdentity: true, diff: false, reviewCommentThreads: true };
+export const CAPABILITIES = { requiredChecks: true, codeOwners: 'partial', autoMerge: true, mergeHeadGuard: true, cancelAutoMerge: true, drafts: true, labels: 'partial', checkAnnotations: false, commitStatus: true, attachments: true, botIdentity: true, diff: false, reviewCommentThreads: true, stateEvents: false };
 
 export function createAzureDevopsHost(settings, deps = {}) {
   const url = String(settings.url ?? DEFAULT_URL).replace(/\/+$/, '');
@@ -181,8 +181,10 @@ export function createAzureDevopsHost(settings, deps = {}) {
       },
       // Votes carry no time or commit: a vote Azure still shows counts for the current head (the branch
       // policy "reset votes on new pushes" clears stale ones), so `commit` is the head.
-      async reviews(pr) {
+      // `strict` (the review gate's rejection check): a pull request without its reviewers list throws (unknown: review).
+      async reviews(pr, { strict = false } = {}) {
         const p = await rawPr(pr);
+        if (strict && (!Array.isArray(p?.reviewers) || p.reviewers.some((r) => typeof r?.vote !== 'number'))) throw new HostError('Azure Repos: the reviewers of the pull request could not be read');
         return (p?.reviewers ?? [])
           .filter((r) => voteState(r.vote) && !r.isContainer)
           .map((r) => ({ id: `${r.id}:${r.vote}`, author: r.uniqueName ?? r.displayName ?? null, bot: false, state: voteState(r.vote), submittedAt: null, commit: p.lastMergeSourceCommit?.commitId ?? null, body: '' }));

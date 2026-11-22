@@ -78,7 +78,7 @@ const countDiff = (diff) => {
 // What GitLab can do for the harness (providers/contracts.mjs CAPABILITIES.host). Required checks: "Pipelines must
 // succeed" covers the whole merge request pipeline (and external status checks on Ultimate); code owner approval
 // needs Premium (doctor says when the tier refuses it).
-export const CAPABILITIES = { requiredChecks: true, codeOwners: 'partial', autoMerge: true, mergeHeadGuard: true, cancelAutoMerge: true, drafts: true, labels: true, checkAnnotations: 'partial', commitStatus: true, attachments: true, botIdentity: true, diff: true, reviewCommentThreads: true };
+export const CAPABILITIES = { requiredChecks: true, codeOwners: 'partial', autoMerge: true, mergeHeadGuard: true, cancelAutoMerge: true, drafts: true, labels: true, checkAnnotations: 'partial', commitStatus: true, attachments: true, botIdentity: true, diff: true, reviewCommentThreads: true, stateEvents: true };
 
 export function createGitlabHost(settings, deps = {}) {
   const url = String(settings.url ?? DEFAULT_URL).replace(/\/+$/, '');
@@ -95,15 +95,18 @@ export function createGitlabHost(settings, deps = {}) {
   const api = (method, p, opts) => http.json(method, p, opts);
 
   // Every page (per_page 100, the x-next-page header).
-  async function all(p, query = {}) {
+  // `strict`: a page that is not a list, or more pages than the limit, throws (a history read in full, or not at all).
+  async function all(p, query = {}, { strict = false } = {}) {
     const out = [];
     let page = 1;
     for (let guard = 0; page && guard < 200; guard++) {
       const r = await http.request('GET', p, { query: { ...query, per_page: 100, page } });
+      if (strict && !Array.isArray(r.json)) throw new HostError(`GitLab: ${p} did not answer with a list`);
       out.push(...(Array.isArray(r.json) ? r.json : []));
       const next = r.headers.get('x-next-page');
       page = next ? Number(next) : 0;
     }
+    if (strict && page) throw new HostError(`GitLab: ${p} has more pages than the factory reads`);
     return out;
   }
 
@@ -145,9 +148,9 @@ export function createGitlabHost(settings, deps = {}) {
         if (open.length) return open[0];
         return (await host.pr.list({ state: 'all', head: String(numberOrBranch) }))[0] ?? null;
       },
-      async list({ state = 'open', head, base, label, limit = 200 } = {}) {
+      async list({ state = 'open', head, base, label, search, limit = 200 } = {}) {
         const glState = { open: 'opened', merged: 'merged', all: 'all', closed: 'all' }[state] ?? 'opened';
-        const list = await all(`${P()}/merge_requests`, { state: glState, source_branch: head, target_branch: base, labels: label, order_by: 'created_at', sort: 'desc' });
+        const list = await all(`${P()}/merge_requests`, { state: glState, source_branch: head, target_branch: base, labels: label, ...(search ? { search, in: 'title' } : {}), order_by: 'created_at', sort: 'desc' });
         return list
           .map(normalizeMr)
           .filter((p) => state !== 'closed' || p.state !== 'open')
@@ -183,16 +186,31 @@ export function createGitlabHost(settings, deps = {}) {
       // Approvals (approved), and the reviewers API's "requested changes" / "reviewed" states.
       // GitLab gives no commit per approval: approvals it still lists count for the current head (the
       // project's "reset approvals on push" setting removes stale ones), so `commit` is the head sha.
-      async reviews(pr) {
+      // Every page, strictly: a page that is not a list or a history longer than the page limit throws (never a short list).
+      async stateEvents(pr) {
+        return (await all(`${MR(pr)}/resource_state_events`, {}, { strict: true })).filter((e) => ['closed', 'reopened', 'merged'].includes(e.state)).map((e) => ({ id: e.id ?? null, type: e.state, at: e.created_at ?? null, actor: e.user?.username ?? null }));
+      },
+      // `strict`: a denied or missing approvals or reviewers endpoint throws instead of reading as no reviews (the review
+      // gate's rejection check: unknown is review).
+      async reviews(pr, { strict = false } = {}) {
         const mr = await api('GET', MR(pr));
         const out = [];
-        const approvals = await http.request('GET', `${MR(pr)}/approvals`, { allow: [404, 403] });
+        const allow = strict ? [] : [404, 403];
+        const approvals = await http.request('GET', `${MR(pr)}/approvals`, { allow });
+        if (strict && !Array.isArray(approvals.json?.approved_by)) throw new HostError('GitLab: the approvals of the merge request could not be read');
         for (const a of approvals.json?.approved_by ?? []) out.push({ id: `approved:${a.user?.username}`, author: a.user?.username ?? null, bot: Boolean(a.user?.bot), state: 'approved', submittedAt: a.approved_at ?? null, commit: mr?.sha ?? null, body: '' });
-        const reviewers = await http.request('GET', `${MR(pr)}/reviewers`, { allow: [404, 403] });
-        for (const r of Array.isArray(reviewers.json) ? reviewers.json : []) {
+        // Strict: every page, and every reviewer with its login and state (anything else is unknown, so review).
+        const list = strict ? await all(`${MR(pr)}/reviewers`, {}, { strict: true }) : (await http.request('GET', `${MR(pr)}/reviewers`, { allow })).json;
+        if (strict && list.some((r) => !r?.user?.username || typeof r.state !== 'string')) throw new HostError('GitLab: a reviewer of the merge request has no login or state');
+        // A reviewer's "requested changes" is kept beside their approval (the gate reads both by time); one whose time is
+        // not given wins over the approval (unknown is review). A "reviewed" adds nothing to an approval.
+        for (const r of Array.isArray(list) ? list : []) {
           const state = { requested_changes: 'changes_requested', reviewed: 'commented' }[r.state];
-          if (!state || out.some((o) => o.author === r.user?.username && o.state === 'approved')) continue;
-          out.push({ id: `${r.state}:${r.user?.username}`, author: r.user?.username ?? null, bot: Boolean(r.user?.bot), state, submittedAt: r.updated_at ?? r.created_at ?? null, commit: mr?.sha ?? null, body: '' });
+          const approved = out.findIndex((o) => o.author === r.user?.username && o.state === 'approved');
+          if (!state || (state === 'commented' && approved >= 0)) continue;
+          const at = r.updated_at ?? r.created_at ?? null;
+          if (state === 'changes_requested' && approved >= 0 && (!at || !out[approved].submittedAt)) out.splice(approved, 1);
+          out.push({ id: `${r.state}:${r.user?.username}`, author: r.user?.username ?? null, bot: Boolean(r.user?.bot), state, submittedAt: at, commit: mr?.sha ?? null, body: '' });
         }
         return out;
       },

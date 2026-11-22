@@ -371,7 +371,8 @@ test('epic shapes: explicit grouping first, then a strict bug majority, then --p
   assert.equal(story.facts.bugUnit, false, 'feature groups are feature PRs: no rating');
   assert.equal(ev({ entry: 'feature-epic', grouping: 'ticket', pr: true }).nodes.epicPlan.state, 'skipped', 'grouping ticket: no planner');
   assert.equal(ev({ entry: 'bug-epic', pr: true }).facts.bugUnit, true, 'bug groups are rated');
-  assert.equal(ev({ entry: 'feature-epic', pr: true }).nodes.parity.state, 'skipped', 'the feature epic unit has no parity run before the push');
+  // As the code runs it (epic.mjs runParity) and ci-parity.md says: a feature epic delivered as one PR runs parity first.
+  assert.ok(pathOf(ev({ entry: 'feature-epic', prSplit: 'epic', pr: true })).includes('parity'), 'the feature epic\'s one PR runs parity before it opens (other-34)');
   const perStory = ev({ entry: 'feature-epic', delivery: 'story', pr: true });
   assert.equal(perStory.facts.epicRun, false);
   assert.ok(pathOf(perStory).includes('prCheck'));

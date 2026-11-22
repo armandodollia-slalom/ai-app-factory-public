@@ -59,12 +59,14 @@ export function fakeGh(repo = 'acme/shop') {
       }
       if (a === 'api' && args[1] === `repos/${repo}` && args.includes('.allow_auto_merge')) return ok(String(state.allowAuto ?? true));
       // The repository reads of the code host contract (the adapter conformance suite).
-      if (a === 'api' && b === 'user') return ok({ login: 'pipeline-bot', id: 1 });
+      // Who the gate's gh acts as (`whoami`; `whoamiFail` breaks the read).
+      if (a === 'api' && b === 'user') return state.whoamiFail ? fail('HTTP 403') : ok({ login: state.whoami ?? 'pipeline-bot', id: 1 });
       if (a === 'api' && args[1] === `repos/${repo}` && args.includes('.default_branch')) return ok('main\n');
       if (a === 'api' && args[1] === `repos/${repo}` && args.includes('.permissions')) return ok({ push: true, admin: false, maintain: false, triage: true });
       if (a === 'api' && args[1] === `repos/${repo}` && !args.includes('--jq')) return ok({ default_branch: 'main', private: false, visibility: 'public' });
       if (a === 'api' && args[1] === `repos/${repo}/rulesets`) return ok([]);
-      if (a === 'pr' && b === 'diff') return ok('diff --git a/src/a.ts b/src/a.ts\n');
+      // The PR's diff as the host gives it (`pr.diff`; a test sets it to the repository's own diff when it matters).
+      if (a === 'pr' && b === 'diff') return ok(state.prs.get(num(args[2]))?.diff ?? 'diff --git a/src/a.ts b/src/a.ts\n');
       if (a === 'issue' && b === 'list') return ok([]);
       // The CI evidence the gate reads for a head (expected-ci.mjs). By default the repository has one pull-request
       // workflow, and its run for the head follows the PR's checks; a test sets state.workflows and pr.runs to say more.
@@ -93,18 +95,35 @@ export function fakeGh(repo = 'acme/shop') {
         }
       }
       if (a === 'api') {
+        // (`gh pr view --json comments` gives the first 100 comments only, as GitHub's does.)
+        // A list answered as `gh api --paginate` does: one page per `pageSize` rows with `--slurp` (a list of pages),
+        // else one row per line (`--jq '.[]'`).
+        const serve = (list) => {
+          if (!args.includes('--slurp')) return ok(list.map((x) => JSON.stringify(x)).join('\n'));
+          const size = state.pageSize ?? 100;
+          const pages = [];
+          for (let i = 0; i < list.length; i += size) pages.push(list.slice(i, i + size));
+          return ok(pages.length ? pages : [[]]);
+        };
+        // A PR's close, reopen and merge events (the issues events API); `pr.events` lists them, `eventsFail` breaks the read.
+        const ev = /issues\/(\d+)\/(events|comments|timeline)$/.exec(args.find((x) => x.startsWith('repos/')) ?? '');
+        if (ev) {
+          const pr = state.prs.get(Number(ev[1]));
+          if (!pr || (ev[2] === 'events' && pr.eventsFail)) return fail('HTTP 502');
+          if (ev[2] === 'comments') return serve(pr.comments.map((c) => ({ id: c.id, body: c.body, user: { login: c.author ?? null }, created_at: c.createdAt ?? null, html_url: `${pr.url}#issuecomment-${c.id}` })));
+          return serve(ev[2] === 'events' ? pr.events ?? [] : pr.timeline ?? []);
+        }
         const m = /pulls\/(\d+)\/(reviews|comments|commits)/.exec(args.find((x) => x.startsWith('repos/')) ?? '');
         if (m) {
           const pr = state.prs.get(Number(m[1]));
-          const list = { reviews: pr.reviews, comments: pr.reviewComments, commits: pr.commits }[m[2]];
-          return ok(list.map((x) => JSON.stringify(x)).join('\n'));
+          return serve({ reviews: pr.reviews, comments: pr.reviewComments, commits: pr.commits }[m[2]]);
         }
       }
       if (a === 'pr' && b === 'view') {
         const pr = state.prs.get(num(args[2]));
         if (!pr) return fail('no pull request found');
         const fields = flag(args, '--json').split(',');
-        const all = { ...pr, author: { login: pr.author }, labels: pr.labels.map((name) => ({ name })), files: pr.files.map((path) => ({ path })), comments: pr.comments.map((c) => ({ body: c.body, url: `${pr.url}#issuecomment-${c.id}` })) };
+        const all = { ...pr, author: { login: pr.author }, labels: pr.labels.map((name) => ({ name })), files: pr.files.map((path) => ({ path })), comments: pr.comments.slice(0, 100).map((c) => ({ body: c.body, url: `${pr.url}#issuecomment-${c.id}`, author: { login: c.author ?? null } })), autoMergeRequest: pr.autoMergeRequest ?? (pr.autoMerge ? { enabledAt: '2026-11-01T10:30:00Z' } : null) };
         // `-q .field` prints the field itself, as gh does.
         const q = flag(args, '-q');
         if (q && /^\.[A-Za-z]+$/.test(q)) return ok(String(all[q.slice(1)] ?? ''));
@@ -117,13 +136,17 @@ export function fakeGh(repo = 'acme/shop') {
       if (a === 'pr' && b === 'list') {
         const want = flag(args, '--label');
         const st = flag(args, '--state') ?? 'open';
-        const list = [...state.prs.values()].filter((p) => (!want || p.labels.includes(want)) && (st === 'all' || (st === 'closed' ? ['closed', 'merged'].includes(p.state.toLowerCase()) : p.state.toLowerCase() === st)));
-        return ok(list.map((p) => ({ number: p.number, url: p.url, state: p.state, labels: p.labels.map((name) => ({ name })), headRefName: p.headRefName })));
+        const head = flag(args, '--head');
+        const words = (flag(args, '--search') ?? '').replace(/\s*in:title$/, '').replace(/^"(.*)"$/, '$1').toLowerCase();
+        const limit = Number(flag(args, '--limit') ?? 30);
+        const list = [...state.prs.values()].filter((p) => (!want || p.labels.includes(want)) && (!head || p.headRefName === head) && (!words || String(p.title).toLowerCase().includes(words)) && (st === 'all' || (st === 'closed' ? ['closed', 'merged'].includes(p.state.toLowerCase()) : p.state.toLowerCase() === st))).slice(0, limit);
+        return ok(list.map((p) => ({ number: p.number, url: p.url, title: p.title, state: p.state, labels: p.labels.map((name) => ({ name })), headRefName: p.headRefName })));
       }
       if (a === 'pr' && b === 'edit') {
         const pr = state.prs.get(num(args[2]));
         for (const l of (flag(args, '--add-label') ?? '').split(',').filter(Boolean)) if (!pr.labels.includes(l)) pr.labels.push(l);
         for (const l of (flag(args, '--remove-label') ?? '').split(',').filter(Boolean)) pr.labels = pr.labels.filter((x) => x !== l);
+        if (args.includes('--body-file')) pr.body = input;
         const reviewer = flag(args, '--add-reviewer');
         if (reviewer) {
           if (state.refuseReviewers?.includes(reviewer)) return fail(`could not request ${reviewer}`);
@@ -134,7 +157,7 @@ export function fakeGh(repo = 'acme/shop') {
       if (a === 'pr' && b === 'comment') {
         const pr = state.prs.get(num(args[2]));
         const id = ++state.nextComment;
-        pr.comments.push({ id, body: input });
+        pr.comments.push({ id, body: input, author: state.whoami ?? 'pipeline-bot' });
         return ok(`${pr.url}#issuecomment-${id}\n`);
       }
       if (a === 'pr' && b === 'merge') {
