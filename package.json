@@ -1,6 +1,6 @@
 {
   "name": "ai-app-factory",
-  "version": "0.2.98",
+  "version": "0.2.99",
   "description": "An AI development pipeline generator: point it at a codebase in any language and it sets up implementation, review, feature verification and PR-check agents, code intelligence, a scenario-seeded test stack and a retro that improves the factory itself.",
   "type": "module",
   "license": "ISC",

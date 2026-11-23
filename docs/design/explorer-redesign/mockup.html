@@ -1,0 +1,287 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline explorer redesign: preliminary mockup</title>
+<style>
+:root{--background:#ffffff;--foreground:#17181c;--muted-foreground:#666b76;--card:#ffffff;--border:#dcdfe5;--primary:#2452d8;--primary-foreground:#ffffff;--secondary:#f1f3f6;--destructive:#e0293b;--warning:#d98a00;--success:#12a37a;--info:#2f7bf0;--chart-1:#2452d8;--chart-2:#0f9488;--chart-4:#8a3fe0;--chart-5:#e0245e;--radius:10px;--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media (prefers-color-scheme: dark){:root{--background:#0f1013;--foreground:#eceef2;--muted-foreground:#9aa0ab;--card:#16181d;--border:#2a2d35;--primary:#4f7dff;--primary-foreground:#ffffff;--secondary:#1e2128;--destructive:#ff4d5e;--warning:#f0a020;--success:#2fc79a;--info:#4f8dff;--chart-1:#4f7dff;--chart-2:#2fc7b8;--chart-4:#b07cff;--chart-5:#ff6b93}}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--font-sans)}
+.page{max-width:760px;margin:0 auto;padding:16px}
+.prelim{border:1px solid var(--warning);background:color-mix(in srgb,var(--warning) 12%,transparent);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.45}
+.prelim b{display:block;margin-bottom:2px}
+</style>
+
+<style>
+:root{--ip:var(--chart-1);--te:var(--chart-2);--pr:var(--chart-4);--dn:var(--success);--person:var(--chart-5);--stop:var(--destructive);--agent:var(--info)}
+*{box-sizing:border-box}
+.wrap{font-family:var(--font-sans);color:var(--foreground);font-size:12px;line-height:1.4}
+.screen{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);overflow:hidden}
+.bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.brand{font-weight:650;font-size:13px;margin-right:4px}
+.sel,.btn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:6px;padding:3px 8px;background:var(--background);white-space:nowrap;font-size:11.5px}
+.sel::after{content:"▾";color:var(--muted-foreground);font-size:9px}
+.search{flex:1;min-width:100px;border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--muted-foreground);background:var(--background);font-size:11.5px}
+.body{padding:10px}
+.muted{color:var(--muted-foreground)}
+.mono{font-family:var(--font-mono);font-size:10.5px}
+.cap{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);font-weight:600}
+.ins{border:1px solid color-mix(in srgb,var(--person) 50%,transparent);background:color-mix(in srgb,var(--person) 6%,transparent);border-radius:10px;padding:7px 12px;display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px}
+.chip{display:inline-flex;border:1px solid var(--border);background:var(--card);border-radius:999px;padding:1px 8px;font-size:11px;white-space:nowrap}
+.panel{border:1.6px solid var(--primary);border-radius:10px;background:var(--background);margin-top:-1px;overflow:hidden}
+.pgrid{display:grid;grid-template-columns:1fr 250px}
+.side{border-left:1px solid var(--border);display:flex;flex-direction:column;height:430px}
+.shead{padding:12px 12px 8px;border-bottom:1px solid var(--border)}
+.shead p{margin:2px 0 0}
+.slabel{display:flex;justify-content:space-between;padding:8px 12px 4px}
+.scroll{flex:1;overflow-y:scroll;padding:0 8px 0 12px;min-height:0;scrollbar-width:thin;scrollbar-color:var(--muted-foreground) transparent}
+.scroll::-webkit-scrollbar{width:7px}
+.scroll::-webkit-scrollbar-thumb{background:var(--muted-foreground);border-radius:4px}
+.fade{height:14px;margin-top:-14px;background:linear-gradient(transparent,var(--background));pointer-events:none;position:relative}
+.sfoot{padding:8px 12px 12px;border-top:1px solid var(--border)}
+.set{padding:8px 0;border-top:1px solid var(--border)}
+.set:first-child{border-top:0;padding-top:4px}
+.set.dis{opacity:.45}
+.set.sub{margin-left:10px;padding-left:8px;border-left:2px solid var(--border)}
+.set .h{display:flex;justify-content:space-between;gap:6px 8px;align-items:center;font-weight:600;flex-wrap:wrap}
+.set .e{color:var(--muted-foreground);font-size:11px;margin-top:2px}
+.set .k{display:flex;justify-content:space-between;margin-top:2px;color:var(--muted-foreground)}
+.chg{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--warning);margin-left:5px;vertical-align:middle}
+.tog{width:26px;height:14px;border-radius:999px;background:var(--primary);position:relative;flex:none;display:inline-block;cursor:pointer}
+.tog::after{content:"";position:absolute;right:2px;top:2px;width:10px;height:10px;border-radius:50%;background:var(--primary-foreground)}
+.tog.off{background:var(--border)}.tog.off::after{right:auto;left:2px;background:var(--card)}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:10.5px}
+.seg span{padding:1px 6px;border-right:1px solid var(--border);color:var(--muted-foreground);cursor:pointer;font-weight:400}
+.seg span:last-child{border:0}
+.seg .on{background:var(--primary);color:var(--primary-foreground)}
+.num{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:11px;font-weight:400}
+.num span{padding:0 7px;cursor:pointer;color:var(--muted-foreground)}
+.num b{padding:0 8px;border-left:1px solid var(--border);border-right:1px solid var(--border);font-weight:600}
+.you{border:1px solid color-mix(in srgb,var(--person) 55%,transparent);background:color-mix(in srgb,var(--person) 9%,transparent);border-radius:8px;padding:7px 10px}
+.you b{display:block}
+svg{display:block}
+svg text{font-family:var(--font-sans);fill:var(--foreground)}
+svg .m{fill:var(--muted-foreground)}
+svg .cp{fill:var(--muted-foreground);font-size:9px;letter-spacing:.06em;font-weight:600}
+svg .hit{cursor:pointer}
+
+.insfull{display:block;padding:12px 14px}
+.insfull h3{margin:0;font-size:14px}
+.insfull .lead{margin:2px 0 10px;color:var(--muted-foreground)}
+.igrid{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
+.todo{display:grid;grid-template-columns:20px 1fr auto;gap:8px;padding:7px 0;border-top:1px solid color-mix(in srgb,var(--person) 25%,transparent);align-items:start}
+.todo:first-of-type{border-top:0;padding-top:2px}
+.todo .n{width:18px;height:18px;border-radius:50%;background:var(--person);color:var(--card);font-weight:700;font-size:10.5px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+.todo .w{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);font-weight:600}
+.todo b{display:block;font-size:12.5px}
+.chip{cursor:pointer;margin:1px 0 1px 3px}
+.chip:hover,.btn.back:hover{border-color:var(--primary)}
+.btn.back{cursor:pointer}
+.chips{text-align:right}
+.know{padding:5px 0;border-top:1px solid color-mix(in srgb,var(--person) 25%,transparent);display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:baseline}
+.know:first-of-type{border-top:0;padding-top:2px}
+.know .v{font-size:16px;font-weight:650;min-width:26px}
+.stage{min-height:596px}
+.legend{display:flex;gap:12px;padding:7px 12px;border-top:1px solid var(--border);color:var(--muted-foreground);font-size:11px;flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%}
+svg .hit:hover rect.hd{stroke:var(--primary)}
+[hidden]{display:none!important}
+</style>
+<div class="page"><div class="prelim"><b>Preliminary mockup, not the product</b>A design sketch for the pipeline explorer redesign. The phase grouping, the stop counts per phase and the "what you do" wording are placeholders, and only the Verify phase has its real settings. Click a phase to zoom in; "All phases" goes back.</div>
+<div class="wrap">
+<div class="screen">
+  <div class="bar"><span class="btn back" id="back" hidden>← All phases</span><span class="brand" id="title">Pipeline explorer</span><span class="search">Jump to a step or setting…</span><span class="sel">UI bug fix</span><span class="btn">All settings · 44</span></div>
+  <div class="body stage">
+    <div id="vdefault">
+      <div class="ins insfull">
+      <h3>What needs you</h3>
+      <p class="lead">For this setup a clean run needs you twice. 16 places can stop it, and 9 of them are in Publish and Pull request.</p>
+      <div class="igrid">
+        <div>
+          <div class="cap" style="margin-bottom:4px">Your to-do, in order</div>
+          <div class="todo"><span class="n">1</span><span><span class="w">Before you start</span><b>Answer the ticket's open questions</b><span class="muted">One that changes the API, auth or data model ends the run blocked.</span></span><span class="chips"><span class="chip" data-go="0">Start</span></span></div>
+          <div class="todo"><span class="n">2</span><span><span class="w">When the PR opens</span><b>Review it</b><span class="muted">Skipped only when the fix is rated Low with high confidence.</span></span><span class="chips"><span class="chip" data-go="7">Gate</span></span></div>
+          <div class="todo"><span class="n">3</span><span><span class="w">If a card lands in Failed</span><b>Answer its questions, or fix what broke outside</b><span class="muted">Up to three questions per card. Then it runs again with your answers.</span></span><span class="chips"><span class="chip" data-go="4">Publish · 5</span><br><span class="chip" data-go="6">Pull request · 4</span></span></div>
+        </div>
+        <div>
+          <div class="cap" style="margin-bottom:4px">Worth knowing</div>
+          <div class="know"><span class="v">7</span><span>stops ask you a question. <span class="muted">Answer on the ticket, tick Resolved.</span></span></div>
+          <div class="know"><span class="v">7</span><span>stops are outside failures: CI, a push, the code host. <span class="muted">Fix it there, then resume.</span></span></div>
+          <div class="know"><span class="v">1</span><span>stop leaves an open PR on hold for you to decide.</span></div>
+          <div class="know"><span class="v">On</span><span>Auto-merge: a Low-rated fix merges without you.</span></div>
+        </div>
+      </div>
+    </div>
+      <svg id="map" viewBox="0 0 700 304" width="100%" style="margin-top:10px"></svg>
+    </div>
+    <div id="vzoom" hidden>
+      <div class="ins"><span><b>What needs you:</b> <span id="zline"></span></span><span class="chip" id="showall">Show all 3 ▾</span></div>
+      <svg id="strip" viewBox="0 0 700 100" width="100%"></svg>
+      <div class="panel"><div class="pgrid">
+        <svg id="g" viewBox="0 0 480 430" width="100%"></svg>
+        <div class="side">
+          <div class="shead" id="shead"></div>
+          <div class="slabel"><span class="cap" id="slab">Settings for this step</span><span class="muted" id="scount"></span></div>
+          <div class="scroll" id="slist"></div>
+          <div class="fade"></div>
+          <div class="sfoot"><div class="you" id="you"></div></div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+  <div class="legend"><span><i style="background:var(--agent)"></i>Agent step</span><span><i style="border:1.6px solid var(--muted-foreground)"></i>Harness step</span><span><i style="background:var(--stop)"></i>Stops in this phase</span><span><i style="background:var(--person)"></i>A person acts</span></div>
+</div>
+</div>
+</div>
+<script>
+const LC={ip:"var(--ip)",te:"var(--te)",pr:"var(--pr)",dn:"var(--dn)"}, M="var(--muted-foreground)";
+const ACT={answer:"Answer on the ticket, tick Resolved",fix:"Fix it outside, then implement resume",decide:"Fix it, close it, or send it back",none:"Nothing to do",review:"Approve, or request changes"};
+const PH=[
+ {t:"Start",ln:"ip",d:"Refuses a second run, syncs the board, claims the card and plans the batch.",s:[[1,"Start the run","h"],[2,"Sync the board, claim the card","h"],[3,"One ticket or an epic?","h"]],stops:[[1,"Skipped","none"]],set:[["--pr","on"],["Entry","one ticket"]],line:"write the ticket and answer its open questions before this phase."},
+ {t:"Implement",ln:"ip",d:"An orchestrator plans subtasks; implementer and verifier pairs build them.",s:[[4,"Orchestrator plans","a"],[5,"Implementer","a"],[6,"Harness checks","h"],[7,"Pair verifier (council)","a"],[8,"Policy engine","h"]],arcs:[[3,1,"changes requested","at most 3 rounds","L"],[2,1,"not clean","","R"]],stops:[[3,"Escalation: implementation","answer"]],set:[["council.pairVerify","on"],["maxPairRounds","3"]],line:"nothing here unless the rounds run out."},
+ {t:"Review",ln:"ip",d:"A fresh architecture reviewer, or a council, approves the code on disk.",s:[[9,"Architecture review (council)","a"]],stops:[[0,"Review escalated","answer"]],set:[["council.review","on"],["review.maxRounds","5"]],line:"nothing here unless the review rounds run out."},
+ {t:"Verify",ln:"te",d:"A test plan, automated tests for it, then the PR check against the ticket.",s:[[10,"Test plan (council)","a"],[11,"Test automation (council)","a"],[12,"PR check (council)","a"]],stops:[[1,"Feature verification failed","answer"],[2,"Unresolved after returns","answer"]],set:[["council.prCheck","on"],["maxBugFixCycles","default"]],line:"nothing here unless tests or findings stay unresolved."},
+ {t:"Publish",ln:"te",d:"Proves the branch in CI before any PR exists, then pushes it.",s:[[13,"Publish, CI parity, re-verify","h"],[14,"Pre-push analysis gate","h"],[15,"Push the branch","h"],[16,"Owner question?","h"],[17,"CI proven on the branch head","h"]],sides:[[1,"Analysis fixing round"],[4,"CI fixing round"]],stops:[[0,"Not delivered","fix"],[1,"Blocked before the push","fix"],[3,"needs-decision","answer"],[3,"PR check incomplete","answer",1],[4,"CI not green: no PR","fix"]],set:[["Static analysis","on"],["ciFixRounds","default"]],line:"most stops are here. An owner question is the one only you can answer."},
+ {t:"Evidence",ln:"te",d:"Rates the bug and records the proof the PR will carry.",s:[[18,"A bug fix?","h"],[19,"Bug triage","a"],[20,"Static analysis of the head","h"],[21,"Demo video","h"],[22,"UI bug: before / after videos","h"],[24,"API changes section","h"]],stops:[[1,"gate-assessment-failed","fix"],[4,"demo-video-blocked","answer"]],set:[["Demo video","on"],["requireBefore","on"]],line:"nothing here unless the bug cannot be shown before the fix."},
+ {t:"Pull request",ln:"pr",d:"Opens the PR, publishes the rating and waits for the PR's own checks.",s:[[25,"Open the PR","h"],[26,"Gate publishes the rating","h"],[27,"Wait for the PR's checks","h"],[28,"Run ends: outcome done","r"]],sides:[[2,"CI fixing round on hold"]],stops:[[0,"pr-refused","fix"],[1,"hold-failed","fix"],[2,"On hold: a person decides","decide"],[2,"release-unconfirmed","fix",1]],set:[["preOpen.draftCycles","default"],["ciWait","on"]],line:"a held PR is yours to decide; the other stops are code host failures."},
+ {t:"Gate",ln:"pr",d:"Decides from the rating whether the PR may merge by itself.",s:[[29,"Review gate decides","h"],[30,"Auto-merge","h"]],stops:[[0,"You review the PR","review"]],you:1,set:[["autoMerge.enabled","on"],["approvals.Low","1"]],line:"review the PR, unless it is Low with high confidence."},
+ {t:"Merged",ln:"dn",d:"The PR merges and the card moves to Done.",s:[[31,"Merged: card to Done","h"]],stops:[],set:[],line:"nothing. A fix you later send back always waits for your review."}
+];
+
+const defs=`<defs>
+<marker id="am" viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--muted-foreground)"/></marker>
+<marker id="as" viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--stop)"/></marker>
+<marker id="ap" viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--person)"/></marker>
+<marker id="aa" viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--agent)"/></marker></defs>`;
+const T=(x,y,s,o="")=>`<text x="${x}" y="${y}" ${o}>${s}</text>`;
+const tint=(c,p)=>`color-mix(in srgb,${c} ${p}%,var(--card))`;
+const map=document.getElementById("map"),strip=document.getElementById("strip"),graph=document.getElementById("g");
+let cur=-1; const back=document.getElementById("back"),title=document.getElementById("title");
+const init={"council.testPlan":true,"council.testAutomation":true,"council.prCheck":true,"council.intercom.enabled":true,"council.intercom.onSplit":"orchestrator","council.intercom.maxTurnsPerMember":2,maxBugFixCycles:2,returnEnabled:true,maxReturns:2,minSeverity:"major"};
+const DEF={"council.testPlan":false,"council.testAutomation":false,"council.prCheck":false,"council.intercom.enabled":false,"council.intercom.onSplit":"orchestrator","council.intercom.maxTurnsPerMember":2,maxBugFixCycles:2,returnEnabled:true,maxReturns:2,minSeverity:"major"};
+const st={...init}; let sel=12;
+const SET={
+ "council.testPlan":{l:"Council",h:"Seat a council instead of the single test-plan-verifier."},
+ "council.testAutomation":{l:"Council",h:"Seat a council instead of the single test-automation-verifier."},
+ "council.prCheck":{l:"Council",h:"Seat council members instead of the PR check critics."},
+ "council.intercom.enabled":{l:"Council discussion",h:"After the independent first round, members discuss in a chat room before the merge.",need:1},
+ "council.intercom.onSplit":{l:"Who settles a split",h:"The stage's judging model, or always the owner.",opts:["orchestrator","owner"],sub:1},
+ "council.intercom.maxTurnsPerMember":{l:"Turns per member",h:"Posts per member in a discussion.",min:1,max:20,sub:1},
+ maxBugFixCycles:{l:"Bug-fix cycles",h:"Times a product bug found by the tests goes back to implementation.",min:0,max:10},
+ returnEnabled:{l:"Return findings to implementation",h:"Off: every PR check finding stays with pr-check-fixer."},
+ maxReturns:{l:"Returns per ticket",k:"returnToImplementation.maxReturns",h:"Returns from the PR check to implementation or test automation.",min:0,max:10,dep:"returnEnabled"},
+ minSeverity:{l:"Least severity that returns",k:"returnToImplementation.minSeverity",h:"Below it, pr-check-fixer handles the finding.",opts:["blocking","major","minor"],dep:"returnEnabled"}
+};
+const STEPS={10:{t:"Test plan",k:"a",c:"council.testPlan",d:"Writes the test plan for the ticket; a verifier or a council checks it.",s:["council.testPlan","council.intercom.enabled","council.intercom.onSplit","council.intercom.maxTurnsPerMember"]},
+ 11:{t:"Test automation",k:"a",c:"council.testAutomation",d:"Automated tests for every case; a test that finds a product bug sends the change back.",s:["council.testAutomation","maxBugFixCycles","council.intercom.enabled","council.intercom.onSplit","council.intercom.maxTurnsPerMember"]},
+ 12:{t:"PR check",k:"a",c:"council.prCheck",d:"Critics, a defender and a judge debate the change against its ticket. Each upheld finding is routed by what would resolve it.",s:["council.prCheck","council.intercom.enabled","council.intercom.onSplit","council.intercom.maxTurnsPerMember","returnEnabled","maxReturns","minSeverity"]}};
+
+const nstops=p=>p.you?0:p.stops.length;
+const youAt=i=>i==0||i==7;
+const W=68,G=9,X0=8;
+const bands=(h)=>{const b=(a,z,t,c)=>{const x=X0+a*(W+G)-4,w=(z-a+1)*(W+G)-G+8;return `<rect x="${x}" y="4" width="${w}" height="${h}" rx="9" fill="${tint(c,8)}" stroke="${tint(c,28)}"/>`+T(x+8,19,t,`class="cp" style="fill:${c}"`)};return b(0,2,"IN PROGRESS",LC.ip)+b(3,5,"TESTING",LC.te)+b(6,7,"PENDING REVIEW",LC.pr)+b(8,8,"DONE",LC.dn)};
+const head=(p,i,on,sub)=>{const x=X0+i*(W+G);let s="";
+  if(i<8)s+=`<line x1="${x+W}" y1="46" x2="${x+W+G-1}" y2="46" stroke="${M}" stroke-width="1.5" marker-end="url(#am)"/>`;
+  s+=`<rect class="hd" x="${x}" y="28" width="${W}" height="36" rx="8" fill="var(--card)" stroke="${on?"var(--primary)":LC[p.ln]}" stroke-width="${on?2.4:1.3}"/>`+T(x+W/2,sub?44:50,p.t,'font-size="10" font-weight="600" text-anchor="middle"')+(sub?T(x+W/2,56,p.s.length+(p.s.length>1?" steps":" step"),'font-size="8.5" text-anchor="middle" class="m"'):"");
+  if(youAt(i))s+=`<circle cx="${x+W-2}" cy="28" r="7" fill="var(--card)" stroke="var(--person)" stroke-width="2.4"/><circle cx="${x+W-2}" cy="28" r="3" fill="var(--person)"/>`;
+  return s;};
+const badge=(x,y,n)=>`<circle cx="${x}" cy="${y}" r="8" fill="var(--stop)"/>`+T(x,y+3.5,n,'font-size="9.5" text-anchor="middle" font-weight="700" style="fill:var(--card)"');
+
+function drawMap(sel){
+  let s=defs+bands(232);
+  s+=`<rect x="4" y="250" width="692" height="46" rx="9" fill="${tint("var(--stop)",10)}" stroke="${tint("var(--stop)",45)}"/>`+T(16,269,"FAILED",'class="cp" style="fill:var(--stop)"')+T(16,285,"the card waits here with up to three questions for a person",'font-size="10" class="m"');
+  PH.forEach((p,i)=>{const x=X0+i*(W+G),cx=x+W/2,n=p.s.length,yb=80+(n-1)*24,st=nstops(p);
+    s+=`<g class="hit" data-i="${i}"><rect x="${x-4}" y="24" width="${W+8}" height="212" fill="transparent"/>`+head(p,i,i==sel,false);
+    s+=`<line x1="${cx}" y1="64" x2="${cx}" y2="${yb}" stroke="${M}" stroke-width="1.6"/>`;
+    p.s.forEach(([,,k],j)=>{s+=`<circle cx="${cx}" cy="${80+j*24}" r="5.5" fill="${k=="a"?"var(--agent)":"var(--card)"}" stroke="${k=="a"?"var(--agent)":k=="r"?"var(--dn)":M}" stroke-width="1.6"/>`;});
+    if(st)s+=`<line x1="${cx}" y1="${yb+6}" x2="${cx}" y2="249" stroke="var(--stop)" stroke-dasharray="3 3" marker-end="url(#as)"/>`+badge(cx,Math.min(yb+30,232),st);
+    s+=`</g>`;});
+  map.innerHTML=s;
+  map.querySelectorAll(".hit").forEach(g=>g.onclick=()=>go(+g.dataset.i));
+}
+
+function drawStrip(sel){
+  let s=defs+bands(84);
+  PH.forEach((p,i)=>{const x=X0+i*(W+G),st=nstops(p);
+    s+=`<g class="hit" data-i="${i}">`+head(p,i,i==sel,true)+(st?badge(x+8,64,st):"")+`</g>`;
+    if(i==sel){const cx=x+W/2;s+=`<path d="M${cx-9} 100 L${cx} 88 L${cx+9} 100" fill="var(--background)" stroke="var(--primary)" stroke-width="1.6"/>`;}});
+  strip.innerHTML=s;
+  strip.querySelectorAll(".hit").forEach(g=>g.onclick=()=>go(+g.dataset.i));
+}
+
+function drawGraph(i){
+  const p=PH[i],x=150,w=170,cx=235,sp=58,y0=38;let s=defs;
+  const y=j=>y0+j*sp;
+  s+=T(cx,14,i?("from "+PH[i-1].t):"a ticket in Ready",'font-size="9.5" class="m" text-anchor="middle"')+`<line x1="${cx}" y1="19" x2="${cx}" y2="${y0-1}" stroke="${M}" stroke-width="1.6" marker-end="url(#am)"/>`;
+  p.s.forEach(([n,t,k],j)=>{
+    s+=`<rect x="${x}" y="${y(j)}" width="${w}" height="30" rx="7" fill="var(--card)" stroke="var(--border)"/><circle cx="${x+13}" cy="${y(j)+15}" r="4" fill="${k=="a"?"var(--agent)":k=="r"?"var(--dn)":M}"/>`+T(x+24,y(j)+19,`<tspan class="m" font-size="9.5">${n}</tspan> ${t}`,`font-size="${t.length>26?9.5:10.5}"`);
+    const last=j==p.s.length-1;
+    if(!(last&&i==8))s+=`<line x1="${cx}" y1="${y(j)+30}" x2="${cx}" y2="${y(j)+sp-1}" stroke="${M}" stroke-width="1.6" marker-end="url(#am)"/>`;
+    if(last&&i<8)s+=T(cx,y(j)+sp+13,"continues to "+PH[i+1].t,'font-size="9.5" class="m" text-anchor="middle"');
+  });
+  (p.arcs||[]).forEach(([a,b,l1,l2,side])=>{
+    if(side=="L"){const ya=y(a)+13,yb2=y(b)+15;s+=`<path d="M${x} ${ya} C${x-70} ${ya},${x-70} ${yb2},${x-1} ${yb2}" fill="none" stroke="${M}" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#am)"/>`+T(54,(ya+yb2)/2-4,l1,'font-size="9.5" class="m" text-anchor="middle"')+T(54,(ya+yb2)/2+9,l2,'font-size="9.5" font-weight="600" text-anchor="middle"');}
+    else{const ya=y(a)+9,yb2=y(b)+21;s+=`<path d="M${x+w} ${ya} C${x+w+30} ${ya},${x+w+30} ${yb2},${x+w+1} ${yb2}" fill="none" stroke="${M}" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#am)"/>`+T(x+w+28,(ya+yb2)/2+3,l1,'font-size="9.5" class="m"');}
+  });
+  (p.sides||[]).forEach(([j,l])=>{const yy=y(j)+2;
+    s+=`<rect x="4" y="${yy}" width="124" height="26" rx="7" fill="${tint("var(--agent)",12)}" stroke="var(--agent)"/><circle cx="15" cy="${yy+13}" r="3.5" fill="var(--agent)"/>`+T(24,yy+17,l,`font-size="${l.length>21?8.6:9.5}"`)
+     +`<line x1="${x}" y1="${yy+8}" x2="129" y2="${yy+8}" stroke="var(--agent)" stroke-width="1.4" marker-end="url(#aa)"/><line x1="128" y1="${yy+19}" x2="${x-1}" y2="${yy+19}" stroke="var(--agent)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#aa)"/>`;});
+  p.stops.forEach(([j,l,act,second])=>{const yy=y(j)+(second?30:3)-(p.stops.filter(z=>z[0]==j).length>1&&!second?12:0),c=act=="review"?"var(--person)":"var(--stop)",mk=act=="review"?"ap":"as";
+    s+=`<line x1="${x+w}" y1="${y(j)+15}" x2="${x+w+27}" y2="${yy+12}" stroke="${c}" stroke-dasharray="3 3" marker-end="url(#${mk})"/><rect x="${x+w+28}" y="${yy}" width="128" height="24" rx="12" fill="${tint(c,12)}" stroke="${c}"/>`+T(x+w+92,yy+16,l,`font-size="${l.length>24?8.8:9.8}" text-anchor="middle"`);});
+  graph.innerHTML=s;
+}
+
+function verifyGraph(){
+  const x=118,w=176,cx=x+w/2,ys={10:44,11:124,12:234}; let s=defs;
+  s+=T(cx,14,"from Review",'font-size="9.5" class="m" text-anchor="middle"')+`<line x1="${cx}" y1="19" x2="${cx}" y2="43" stroke="${M}" stroke-width="1.6" marker-end="url(#am)"/>`;
+  const node=(n)=>{const p=STEPS[n],y=ys[n],on=n==sel,t=p.t+(st[p.c]?" (council)":"");return `<g class="hit" data-n="${n}"><rect x="${x}" y="${y}" width="${w}" height="32" rx="7" fill="${on?tint("var(--primary)",14):"var(--card)"}" stroke="${on?"var(--primary)":"var(--border)"}" stroke-width="${on?1.8:1}"/><circle cx="${x+13}" cy="${y+16}" r="4" fill="var(--agent)"/>`+T(x+24,y+20,`<tspan class="m" font-size="9.5">${n}</tspan> ${t}`,'font-size="10.5"')+`</g>`};
+  s+=node(10)+node(11)+node(12);
+  s+=`<line x1="${cx}" y1="76" x2="${cx}" y2="123" stroke="${M}" stroke-width="1.6" marker-end="url(#am)"/><line x1="${cx}" y1="156" x2="${cx}" y2="233" stroke="${M}" stroke-width="1.6" marker-end="url(#am)"/><line x1="${cx}" y1="266" x2="${cx}" y2="388" stroke="${M}" stroke-width="1.6" marker-end="url(#am)"/>`+T(cx,404,"continues to Publish",'font-size="9.5" class="m" text-anchor="middle"')+T(cx+8,330,"no upheld finding",'font-size="9.5" class="m"');
+  // 11: bug loop + stop
+  s+=T(x+w+10,116,`product bug: back to Implement, at most ${st.maxBugFixCycles}`,'font-size="9" class="m" text-anchor="end"');
+  const stop=(y,l)=>`<line x1="${x+w}" y1="${y+12}" x2="${x+w+15}" y2="${y+12}" stroke="var(--stop)" stroke-dasharray="3 3" marker-end="url(#as)"/><rect x="${x+w+16}" y="${y}" width="116" height="24" rx="12" fill="${tint("var(--stop)",12)}" stroke="var(--stop)"/>`+T(x+w+74,y+16,l,'font-size="9.2" text-anchor="middle"');
+  s+=stop(128,"Verification failed");
+  // 12: fixer, returns, stop
+  s+=`<rect x="4" y="284" width="100" height="26" rx="7" fill="${tint("var(--agent)",12)}" stroke="var(--agent)"/><circle cx="15" cy="297" r="3.5" fill="var(--agent)"/>`+T(24,301,"pr-check-fixer",'font-size="9.5"')+`<path d="M${x+20} 266 C${x+20} 297,${x} 297,105 297" fill="none" stroke="var(--agent)" stroke-width="1.4" marker-end="url(#aa)"/>`+T(54,324,st.returnEnabled?`below ${st.minSeverity}`:"every finding",'font-size="9" class="m" text-anchor="middle"');
+  if(st.returnEnabled){
+    s+=`<path d="M${x} 244 C${x-50} 244,${x-50} 140,${x-1} 140" fill="none" stroke="${M}" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#am)"/><path d="M${x} 252 C${x-84} 252,${x-84} 30,${x-40} 22" fill="none" stroke="${M}" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#am)"/>`
+      +T(38,196,"findings return",'font-size="9.5" class="m" text-anchor="middle"')+T(38,209,`at most ${st.maxReturns}`,'font-size="9.5" font-weight="600" text-anchor="middle"')+T(x-44,14,"to Implement",'font-size="9" class="m" text-anchor="middle"');
+    s+=stop(238,"Unresolved after returns");
+  }
+  if(st[STEPS[12].c]&&st["council.intercom.enabled"])s+=`<rect x="${x+w+16}" y="276" width="116" height="24" rx="7" fill="${tint("var(--agent)",10)}" stroke="var(--agent)" stroke-dasharray="3 3"/>`+T(x+w+74,292,"council discussion",'font-size="9.2" text-anchor="middle"')+`<line x1="${x+w-20}" y1="266" x2="${x+w+15}" y2="286" stroke="var(--agent)" stroke-width="1.2" stroke-dasharray="2 3"/>`;
+  const g=document.getElementById("g"); g.innerHTML=s;
+  g.querySelectorAll("[data-n]").forEach(e=>e.onclick=()=>{sel=+e.dataset.n;render();document.getElementById("slist").scrollTop=0;});
+}
+
+const fmt=v=>v===true?"on":v===false?"off":v;
+const ps={};
+function side(i){
+  const p=PH[i];
+  if(i==3){
+    const q=STEPS[sel], council=st[q.c];
+    shead.innerHTML=`<div class="cap">Step ${sel} · agent</div><p><b>${q.t}${council?" (council)":""}</b></p><p class="muted">${q.d}</p>`;
+    slab.textContent="Settings for this step";
+    const shown=q.s.filter(k=>!SET[k].sub||(council&&st["council.intercom.enabled"]));
+    scount.textContent=shown.length+" · "+shown.filter(k=>st[k]!==DEF[k]).length+" changed";
+    slist.innerHTML=shown.map(k=>{const m=SET[k], dis=(m.need&&!council)||(m.dep&&!st[m.dep]);
+      const c=m.opts?`<span class="seg">${m.opts.map(o=>`<span class="${st[k]==o?"on":""}" data-k="${k}" data-v="${o}">${o}</span>`).join("")}</span>`:m.min!==undefined?`<span class="num"><span data-k="${k}" data-d="-1">−</span><b>${st[k]}</b><span data-k="${k}" data-d="1">+</span></span>`:`<span class="tog ${st[k]?"":"off"}" data-k="${k}"></span>`;
+      return `<div class="set ${dis?"dis":""} ${m.sub?"sub":""}"><div class="h"><span>${m.l}${st[k]!==DEF[k]?'<i class="chg"></i>':""}</span>${c}</div><div class="e">${m.h}</div><div class="k"><span class="mono">${m.k||k}</span><span>default ${fmt(DEF[k])}</span></div></div>`}).join("");
+    you.innerHTML=`<b>What you do here</b><span class="muted">${sel==12?(st.returnEnabled?"If findings stay unresolved after the returns, answer on the ticket and tick Resolved.":"Nothing: every finding stays with pr-check-fixer."):sel==11?"If the tests do not verify, answer on the ticket and tick Resolved.":"Nothing unless the plan cannot be verified."}</span>`;
+    slist.querySelectorAll("[data-k]").forEach(e=>e.onclick=()=>{const k=e.dataset.k,m=SET[k]; if(e.dataset.v)st[k]=e.dataset.v; else if(e.dataset.d)st[k]=Math.max(m.min,Math.min(m.max,st[k]+ +e.dataset.d)); else st[k]=!st[k]; const y=slist.scrollTop; zoom(3); slist.scrollTop=y;});
+    return;
+  }
+  shead.innerHTML=`<div class="cap">${p.t} · ${p.s.length} step${p.s.length>1?"s":""}</div><p class="muted">${p.d}</p>`;
+  slab.textContent="Settings for this phase"; scount.textContent=p.set.length||"none";
+  slist.innerHTML=p.set.length?p.set.map(([k,v],j)=>{const key=i+":"+j, val=ps[key]??v, tog=v=="on"||v=="off";return `<div class="set"><div class="h"><span class="mono">${k}</span>${tog?`<span class="tog ${val=="on"?"":"off"}" data-p="${key}"></span>`:`<span class="sel">${val}</span>`}</div></div>`}).join(""):`<p class="muted">This phase has no settings.</p>`;
+  slist.querySelectorAll("[data-p]").forEach(e=>e.onclick=()=>{const k=e.dataset.p,[a,b]=k.split(":");ps[k]=(ps[k]??PH[a].set[b][1])=="on"?"off":"on";side(i);});
+  you.innerHTML=`<b>${p.stops.length?"What you do here":"Nothing needs you here"}</b>`+p.stops.slice(0,3).map(([,l,a])=>`<div><span>${l}</span><br><span class="muted">${ACT[a]}</span></div>`).join("")+(p.stops.length>3?`<div class="muted">+${p.stops.length-3} more</div>`:"");
+}
+function zoom(i){cur=i;map.innerHTML="";vdefault.hidden=true;vzoom.hidden=false;back.hidden=false;title.textContent=PH[i].t;zline.textContent=PH[i].line;drawStrip(i);
+  if(i==3){graph.setAttribute("viewBox","0 0 430 430");verifyGraph();}else{graph.setAttribute("viewBox","0 0 480 430");drawGraph(i);}
+  side(i);}
+function home(){cur=-1;strip.innerHTML="";graph.innerHTML="";vdefault.hidden=false;vzoom.hidden=true;back.hidden=true;title.textContent="Pipeline explorer";drawMap(-1);}
+const go=zoom; const render=()=>zoom(3);
+back.onclick=home; showall.onclick=home;
+document.querySelectorAll("[data-go]").forEach(c=>c.onclick=()=>zoom(+c.dataset.go));
+home();
+</script>
