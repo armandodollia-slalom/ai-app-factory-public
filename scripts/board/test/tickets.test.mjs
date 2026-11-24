@@ -55,8 +55,8 @@ function checkout({ legacy = null } = {}) {
   const config = {
     root,
     stateDir: '.factory/state',
-    plansDir: '.factory/plans',
-    scenariosDir: '.factory/stack/scenarios',
+    featureVerification: { plansDir: '.factory/plans' },
+    teststack: { scenariosDir: '.factory/stack/scenarios' },
     abs: (rel) => path.join(root, rel),
     tickets: { dir: '.factory/state/board', repo: REPO, assetsBranch: 'board-assets', legacyDir: 'legacy', spikeEpic: { key: 'epic-targeted-advertising', title: 'Targeted Advertising' } },
     board: { storyLabel: 'story', epicLabel: 'epic', spikeLabel: 'spike', columns: { ready: 'Ready', backlog: 'Backlog' } },

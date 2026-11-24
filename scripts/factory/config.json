@@ -1,0 +1,31 @@
+{
+  "prune": {
+    "enabled": true,
+    "minFreeGb": 20,
+    "buildDirs": [
+      ".factory/state/teststack",
+      "artifacts",
+      "test-results",
+      "playwright-report"
+    ],
+    "buildDirNames": [
+      "bin",
+      "obj"
+    ],
+    "slotMaxGb": 4,
+    "worktreeDays": 7,
+    "keepInstalls": 3,
+    "installRepos": [],
+    "analysisCacheDays": 30,
+    "analysisReports": 200,
+    "analysisBaseDays": 14,
+    "afterDelivery": false,
+    "keepLocal": false,
+    "idleSec": 3600,
+    "slotMaxAgeSec": 86400,
+    "imageMinAgeSec": 10800
+  },
+  "e2e": {
+    "dir": "e2e"
+  }
+}

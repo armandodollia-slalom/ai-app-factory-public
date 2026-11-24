@@ -7,6 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { download, videoLinks } from './github.mjs';
 import { log, run } from '../../pipeline/lib/util.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 const isUrl = (s) => /^https?:\/\//i.test(s);
 
@@ -69,7 +70,7 @@ function timestamps(duration, { maxFrames, minIntervalSec }) {
 // One frame per narrated step (the middle of each step), from the video's subtitles (`<name>.vtt`, a rendered demo
 // video) or the demo fixture's step log (`<name>.steps.json`, a raw recording): a slower video does not get more frames.
 // More steps than the cap: evenly chosen. null when the video has neither.
-export function stepTimes(file, { maxFrames, framesPerStep = 1 } = {}) {
+export function stepTimes(file, { maxFrames, framesPerStep = defaultSettings().prCheck.video.framesPerStep } = {}) {
   const base = file.replace(/\.(webm|mp4)$/i, '');
   let spans = null;
   if (fs.existsSync(`${base}.vtt`)) {
@@ -167,12 +168,12 @@ async function browserFrames(file, outDir, options) {
 
 // Returns frames.json content: every readable video with its frames (paths relative to `relativeTo`,
 // the agents' working directory) and every source that could not be read, with the reason.
-// Frames per video under a budget for all of a PR's videos (`maxTotalFrames`, default 60; at least `minFramesPerVideo`,
-// default 6): the video critic reads every frame, and 48 frames for each of six videos made it the most expensive
+// Frames per video under a budget for all of a PR's videos (`prCheck.video.maxTotalFrames`; at least
+// `minFramesPerVideo`): the video critic reads every frame, and 48 frames for each of six videos made it the most expensive
 // step of a PR check (council C3, cost: $2.80-3.70 a round).
 export function framesPerVideo(options, count) {
-  const total = options.maxTotalFrames ?? 60;
-  return Math.max(options.minFramesPerVideo ?? 6, Math.min(options.maxFrames, Math.floor(total / Math.max(1, count))));
+  const total = options.maxTotalFrames;
+  return Math.max(options.minFramesPerVideo, Math.min(options.maxFrames, Math.floor(total / Math.max(1, count))));
 }
 
 export async function extractVideoFrames(config, runDir, { sources, missing }, relativeTo = config.root) {
@@ -195,7 +196,7 @@ export async function extractVideoFrames(config, runDir, { sources, missing }, r
         const vtt = source.url.replace(/\.(webm|mp4)(\?|$)/i, '.vtt$2');
         if (vtt !== source.url) await download(vtt, file.replace(/\.(webm|mp4)$/i, '.vtt'), config).catch(() => {});
       }
-      const times = stepTimes(file, { maxFrames: options.maxFrames, framesPerStep: options.framesPerStep ?? 1 });
+      const times = stepTimes(file, { maxFrames: options.maxFrames, framesPerStep: options.framesPerStep });
       const opts = times ? { ...options, times } : options;
       const { duration, frames } = useFfmpeg ? ffmpegFrames(file, dir, opts) : await browserFrames(file, dir, opts);
       videos.push({

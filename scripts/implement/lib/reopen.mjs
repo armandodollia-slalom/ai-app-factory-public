@@ -7,8 +7,9 @@
 //     its new PR goes through the same gate (the ticket's reopens keep it from auto-merging).
 import { git, revExists } from '../../pipeline/lib/git.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
-export const reopenedLabel = (config) => config.implement?.reviewGate?.labels?.reopened ?? 'reopened';
+export const reopenedLabel = (config) => setting(config, 'implement.reviewGate.labels.reopened');
 // A planned story carries its issue's labels as `labels`; a loaded ticket as `issue.labels`.
 export const isReopened = (config, s) => Boolean((s.labels ?? s.issue?.labels)?.includes(reopenedLabel(config)));
 

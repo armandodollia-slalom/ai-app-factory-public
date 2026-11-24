@@ -60,6 +60,216 @@ Three sections of the overlay (`lsp`, `stack`, `teststack`) belong to tools with
 
 After changing the pin or the overlay, run `factory render`. Every file it writes outside `.factory/` is listed in `.factory/manifest.json`; `factory uninstall` removes exactly those.
 
+### Upgrading from 0.2.99
+
+- Settings were combined and renamed to one pattern (`max<X>Rounds`, `max<X>Returns`, `max<X>Runs`, `maxRetries` with
+  `retryDelaySec`, `<x>MinSeverity`, `<x>MinLevel`, durations in seconds with `Sec`, `enabled` for every switch). Where a
+  rename combined settings that behaved differently, the new setting behaves as follows:
+  - `implement.ci.maxFixRounds` (2) counts every CI fixing round of a ticket, before and after its PR opens (it replaces
+    `implement.ciFixRounds` and `implement.preOpen.draftCycles`); 0 sends a red CI straight to a person.
+  - `implement.worker.retryDelaySec` doubles after each retry, like `recovery.retryDelaySec`.
+  - `implement.maxParallel` and `lsp.maxLanguageServers` are upper limits on the numbers worked out from free memory;
+    `--parallel N` still forces N.
+  - `featureVerification.slots.enabled` (on) lets every test run borrow its own copy of the app, not only parallel runs;
+    `FV_USE_SLOTS` overrides it. `featureVerification.enabled` turns test planning and writing off; `FV_SKIP` overrides it.
+  - `prCheck.mode` (`fix`, `report` or `off`) is one mode for single tickets and epics (epics fell back to `report`).
+  - `prCheck.returnToImplementation.maxReturns` (2) also bounds the automatic PR check's failing runs (it replaces
+    `prCheck.hook.maxRuns`).
+  - `project.frontendPaths`, `project.testRoots` and `teststack.scenariosDir` are the only lists of their kind; the
+    PR check, the feature verification stage and the implement stage read them.
+  - `prCheck.video.maxFrames` and `prCheck.video.framesPerStep` are the PR check's only frame settings
+    (`video.critic.*` was never read).
+- Every verifier stage is a council, of one member unless more are seated ([council](ai-pipeline/council.md)). Each
+  stage section has its own round limit and pass score, for any council size: `implement` (pair verifiers, 3 rounds,
+  9.5), `architectureReview` (the `review` section's new name; 5, 9.5), `testPlan` (5, 9.0), `testAutomation` (5, 9.0)
+  and `prCheck` (3, 9.5), as `maxCouncilRounds` and `councilPassScore`; scores may have one decimal place. The PR check
+  reads `prCheck.maxCouncilRounds` in every caller; `--max-rounds` overrides it for a run by hand.
+- Models are listed once, in the pool `models.pool` (name, CLI, the CLI's own model id, effort, optional `env`, `cmd`,
+  `timeoutSec`), and every model setting names a pool entry: `models.agents.<agent>` for each agent (by agent name, such
+  as `pr-check-judge`), `implement.subtaskModels` for the planner's choice per subtask (it names an entry per subtask in
+  place of a size class). A council's size is `council.members` (default 1) or a stage section's `councilMembers`; the
+  harness seats one entry per model family first. `agent.allowedModels`, `agent.modelIds`, `agent.strictModels`,
+  `agent.models.*`, `agent.cli`, `modelClasses`, `implement.roles`, `implement.maxLargeSubtasks`, `prCheck.models`,
+  `PR_CHECK_MODEL_<ROLE>`, `video.script.model`, the member list `council.members[]` and `council.stages` are gone:
+  translate each model you used into a pool entry, then name it. `PIPELINE_AGENT_CLI` now moves every run onto the pool's
+  entries of that CLI.
+- Every stage is led by an orchestrator that decides whether to do the stage's producing work itself or delegate it,
+  with a written reason in the decision log, and never verifies its own work ([orchestrators](ai-pipeline/orchestrators.md)).
+  Its pool entry and effort are `orchestrator.model` and `orchestrator.effort`, with `<section>.orchestrator.*`
+  overrides; the implement stage's orchestrator is the implementer. `implement.orchestrate` and `IMPLEMENT_ORCHESTRATE`
+  are gone (the orchestrator decides).
+- Every setting is checked when the settings load, against its description beside its defaults
+  (`scripts/<dir>/settings.json`): a name no setting has fails the load, naming the closest setting, and a value outside
+  a setting's allowed values fails it, listing them ([settings reference](#settings-reference)). No agent starts.
+- A setting that was renamed or removed fails the load with "`<old>` was renamed: use `<new>`" (or why it was removed).
+  Every old name and what replaced it:
+
+<!-- generated:renamed-settings -->
+| Old name | Now |
+| --- | --- |
+| `implement.preOpen.enabled` | removed: every pipeline PR now opens finished (all agent work done, CI proven on its head), and an open PR that agents work on again is held (implement.preOpen.afterOpen); remove the setting |
+| `implement.preOpen.failedStory` | removed: a story whose PR check or CI never passes now always escalates on its ticket, with its branch pushed, the findings on the ticket and no PR; remove the setting |
+| `analysis.reports.keep` | `prune.analysisReports` (factory prune keeps the newest analysis reports; the pipeline never pruned them itself) |
+| `implement.ciFixRounds` | `implement.ci.maxFixRounds` (counts every CI fixing round, before and after the PR opens) |
+| `implement.preOpen.draftCycles` | `implement.ci.maxFixRounds` (one count of every CI fixing round, before and after the PR opens) |
+| `prCheck.hook.maxRuns` | `prCheck.returnToImplementation.maxReturns` |
+| `implement.prCheck.returnToImplementation.maxReturns` | `prCheck.returnToImplementation.maxReturns` |
+| `recovery.maxAttempts` | `recovery.maxRetries` |
+| `recovery.backoffSec` | `recovery.retryDelaySec` |
+| `implement.maxWorkerRetries` | `implement.worker.maxRetries` |
+| `implement.retryDelaySec` | `implement.worker.retryDelaySec` (the wait now doubles each retry) |
+| `implement.maxImplementerRuns` | `implement.maxOrchestratorRuns` |
+| `implement.maxBugFixCycles` | `implement.maxBugFixReturns` |
+| `analysis.fixLoop.bounces` | `analysis.maxFixRounds` |
+| `prCheck.debateTurns` | `prCheck.maxDebateTurns` |
+| `implement.maxBugsPerGroup` | `implement.epic.maxTicketsPerGroup` |
+| `implement.epic.maxStoriesPerGroup` | `implement.epic.maxTicketsPerGroup` |
+| `implement.parallel` | `implement.maxParallel` (an upper limit on the number worked out from free memory; `--parallel N` still forces N) |
+| `resources.maxParallel` | `implement.maxParallel` (an upper limit on the number worked out from free memory; `--parallel N` still forces N) |
+| `implement.prCheck.fixUntil` | `prCheck.fixMinSeverity` |
+| `implement.prCheck.bugFixUntil` | `prCheck.bugFixMinSeverity` |
+| `implement.prCheck.returnToImplementation.minSeverity` | `prCheck.returnToImplementation.minSeverity` |
+| `implement.prCheck.returnToImplementation.implementationLenses` | `prCheck.returnToImplementation.implementationLenses` |
+| `implement.prCheck.returnToImplementation.lightLenses` | `prCheck.returnToImplementation.lightLenses` |
+| `implement.prCheck.returnToImplementation.lightPaths` | `prCheck.returnToImplementation.lightPaths` |
+| `implement.reviewGate.confidence.maxPairRounds` | `implement.reviewGate.confidence.implementRoundsAtMost` |
+| `implement.reviewGate.confidence.maxPrCheckRounds` | `implement.reviewGate.confidence.prCheckRoundsAtMost` |
+| `implement.reviewGate.confidence.highMin` | `implement.reviewGate.confidence.highMinScore` |
+| `implement.reviewGate.floor.level` | `implement.reviewGate.floor.minLevel` |
+| `implement.reviewGate.sharedFloor` | `implement.reviewGate.floor.sharedMinLevel` |
+| `implement.prCheckWaitSec` | `implement.waitSec.prCheck` |
+| `implement.epic.prCheckTimeoutSec` | `implement.waitSec.prCheck` |
+| `implement.prCheck.fixTimeoutSec` | `implement.waitSec.prCheck` |
+| `implement.prCheckStartGraceSec` | `implement.waitSec.prCheckStart` |
+| `implement.fvTimeoutSec` | `implement.waitSec.featureVerification` |
+| `implement.fvPollSec` | `implement.pollSec.featureVerification` |
+| `implement.ciWaitSec` | `implement.ci.wait.timeoutSec` |
+| `implement.ciPollSec` | `implement.ci.wait.pollSec` |
+| `implement.ciSettleSec` | `implement.ci.wait.settleSec` |
+| `implement.timeouts.plannerSec` | `implement.timeoutsSec.planner` |
+| `implement.timeouts.orchestratorSec` | `implement.timeoutsSec.orchestrator` |
+| `implement.timeouts.pairImplementerSec` | `implement.timeoutsSec.pairImplementer` |
+| `implement.timeouts.codeVerifierSec` | `implement.timeoutsSec.pairVerifier` |
+| `implement.timeouts.uiVerifierSec` | `implement.timeoutsSec.pairUiVerifier` |
+| `implement.timeouts.checkSec` | `implement.timeoutsSec.checks` |
+| `implement.implementerTimeoutSec` | `implement.timeoutsSec.orchestratorFix` |
+| `implement.epic.planTimeoutSec` | `implement.timeoutsSec.epicPlanner` |
+| `timeoutsSec.plan` | `featureVerification.timeoutsSec.plan` |
+| `timeoutsSec.automation` | `featureVerification.timeoutsSec.automation` |
+| `timeoutsSec.verifier` | `featureVerification.timeoutsSec.verifier` |
+| `timeoutsSec.lessons` | `featureVerification.timeoutsSec.lessons` |
+| `timeoutsSec.tests` | `featureVerification.timeoutsSec.tests` |
+| `prCheck.hook.waitForTestsMin` | `prCheck.hook.waitForTestsSec` |
+| `teststack.timeoutSeconds` | `teststack.timeoutSec` |
+| `teststack.healAfterSeconds` | `teststack.healAfterSec` |
+| `stack.leaseTtlMinutes` | `stack.leaseTtlSec` |
+| `analysis.ci.jobs[].timeoutMin` | `analysis.ci.jobs[].timeoutSec` |
+| `analysis.commercial.timeoutMin` | `analysis.commercial.timeoutSec` |
+| `analysis.commercial[].timeoutMin` | `analysis.commercial.timeoutSec` |
+| `implement.requeue.outageCooldownMin` | `implement.requeue.outageCooldownSec` |
+| `models.cacheTtlHours` | `models.cacheTtlSec` |
+| `agent.claude.promptCacheTtl` | `agent.claude.promptCacheTtlSec` (in seconds: 300 (was 5m) or 3600 (was 1h)) |
+| `prune.idleMinutes` | `prune.idleSec` |
+| `prune.slotMaxAgeHours` | `prune.slotMaxAgeSec` |
+| `prune.imageMinAgeHours` | `prune.imageMinAgeSec` |
+| `video.pacing.stepDelayMs` | `video.pacing.stepDelaySec` |
+| `video.pacing.holdMs` | `video.pacing.holdSec` |
+| `video.pacing.typeDelayMs` | `video.pacing.typeDelaySec` |
+| `video.pacing.cursorMs` | `video.pacing.cursorSec` |
+| `video.pacing.pauseMs` | `video.pacing.pauseSec` |
+| `implement.prCheck.mode` | `prCheck.mode` (one mode for single tickets and epics) |
+| `implement.epic.prCheck` | `prCheck.mode` (one mode for single tickets and epics) |
+| `useSlots` | `featureVerification.slots.enabled` |
+| `implement.ciWait` | `implement.ci.wait.enabled` |
+| `implement.ciParity` | `implement.ci.parity.enabled` |
+| `implement.prCheck.returnToImplementation.enabled` | `prCheck.returnToImplementation.enabled` |
+| `implement.autoMerge.native` | `implement.autoMerge.hostAutoMerge.enabled` |
+| `lessons.retro.enabled` | `retro.enabled` |
+| `prCheck.frontendPaths` | `project.frontendPaths` |
+| `implement.uiStory.filePatterns` | `project.frontendPaths` |
+| `testRoots` | `project.testRoots` |
+| `scenariosDir` | `teststack.scenariosDir` |
+| `review.codeAgents` | `hooks.codeAgents` |
+| `prCheck.hook.codeAgents` | `hooks.codeAgents` |
+| `lessons.retro.allowedPaths` | `retro.allowedPaths` |
+| `lessons.retro.windowDays` | `retro.windowDays` |
+| `lessons.intervalDays` | `retro.intervalDays` |
+| `video.critic.maxFrames` | `prCheck.video.maxFrames` |
+| `video.critic.framesPerStep` | `prCheck.video.framesPerStep` |
+| `plansDir` | `featureVerification.plansDir` |
+| `precheck` | `featureVerification.precheck` |
+| `categories` | `featureVerification.categories` |
+| `evidence` | `featureVerification.evidence` |
+| `testExtensions` | `featureVerification.testExtensions` |
+| `slotWaitSec` | `featureVerification.slotWaitSec` |
+| `lessons.storyThreshold` | `retro.lessons.storyThreshold` |
+| `lessons.maxRules` | `retro.lessons.maxRules` |
+| `lessons.retireAfterStories` | `retro.lessons.retireAfterStories` |
+| `lessons.revertMinRounds` | `retro.lessons.revertMinRounds` |
+| `lessons.examplesPerCategory` | `retro.lessons.examplesPerCategory` |
+| `implement.prCheck.fixLenses` | `prCheck.fixLenses` |
+| `implement.lsp.enabled` | `lsp.client.enabled` |
+| `implement.lsp.setupCmd` | `lsp.client.setupCmd` |
+| `implement.lsp.lspdCmd` | `lsp.client.lspdCmd` |
+| `implement.lsp.timeoutSec` | `lsp.client.timeoutSec` |
+| `implement.lsp.leaseWaitSec` | `lsp.client.leaseWaitSec` |
+| `implement.lsp.signaturePattern` | `lsp.client.signaturePattern` |
+| `resources.roslynGb` | removed: it was the old name of resources.lspServerGb; use resources.lspServerGb |
+| environment variable `FACTORY_EXTERNAL_RETRIES` | environment variable `FACTORY_EXTERNAL_MAX_RETRIES` |
+| environment variable `FACTORY_EXTERNAL_PAUSE_MS` | environment variable `FACTORY_EXTERNAL_RETRY_DELAY_SEC` (in seconds) |
+| `implement.maxPairRounds` | `implement.maxCouncilRounds` |
+| `implement.prCheck.fixRounds` | `prCheck.maxCouncilRounds` |
+| `prCheck.maxRounds` | `prCheck.maxCouncilRounds` |
+| `review` | `architectureReview` (the section is named after its stage) |
+| `review.maxRounds` | `architectureReview.maxCouncilRounds` |
+| `loops.planMaxRounds` | `testPlan.maxCouncilRounds` |
+| `loops.automationMaxRounds` | `testAutomation.maxCouncilRounds` |
+| `loops.requiredScore` | `testPlan.councilPassScore` (and testAutomation.councilPassScore) |
+| `loops.consecutivePasses` | removed: a test stage is verified once its council passes; nothing asks for a repeated pass on unchanged work |
+| environment variable `FV_REQUIRED_SCORE` | removed: set testPlan.councilPassScore and testAutomation.councilPassScore |
+| `council.rounds` | removed: every stage has its own round limit: implement.maxCouncilRounds, architectureReview.maxCouncilRounds, testPlan.maxCouncilRounds, testAutomation.maxCouncilRounds, prCheck.maxCouncilRounds |
+| `council.passScore` | removed: every stage has its own pass score: implement.councilPassScore, architectureReview.councilPassScore, testPlan.councilPassScore, testAutomation.councilPassScore, prCheck.councilPassScore |
+| `council.stages.<stage>.rounds` | removed: use the stage section's maxCouncilRounds (implement, architectureReview, testPlan, testAutomation or prCheck) |
+| `council.stages.<stage>.intercom` | removed: use the stage section's councilIntercom (implement, architectureReview, testPlan, testAutomation or prCheck) |
+| `council.blockOn` | `council.blockQuorum` |
+| `council.stages.review` | removed: council members come from models.pool; seat several with council.members or architectureReview.councilMembers |
+| `agent.cli` | removed: each models.pool entry names its CLI; models.agents.default is the entry an agent with none of its own runs on |
+| `agent.allowedModels` | `models.pool` (list each model once as a pool entry: name, cli, the CLI's model id and effort) |
+| `agent.modelIds` | `models.pool` (a pool entry holds the CLI's own model id) |
+| `agent.strictModels` | removed: every agent runs on a models.pool entry, so nothing outside the pool can run |
+| `agent.models.default` | `models.agents.default` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.implementer` | `implement.orchestrator.model` (the implementer is the implement stage's orchestrator; the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.plan` | `models.agents.test-planner` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.automation` | `models.agents.test-automation` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.verifier` | `models.agents.test-plan-verifier` (and models.agents.test-automation-verifier; each names a models.pool entry) |
+| `agent.models.reviewer` | `models.agents.architecture-reviewer` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.bugTriage` | `models.agents.bug-triage` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.escalationQuestions` | `models.agents.escalation-questions` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.narrator` | `models.agents.demo-narrator` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `agent.models.audit` | removed: the retro's audit re-check runs on the verifier's own models.agents entry |
+| `agent.models.<agent>` | `models.agents.<agent>` (keyed by agent name (as in agents/); the value names a models.pool entry) |
+| `agent.available.models` | removed: factory init writes the models you have as models.pool entries |
+| `modelClasses` | removed: there are no size classes: the planner names a models.pool entry per subtask, from implement.subtaskModels |
+| `implement.maxLargeSubtasks` | removed: there are no size classes: the planner names a models.pool entry per subtask, from implement.subtaskModels |
+| `implement.roles` | removed: each implement agent names its models.pool entry in models.agents (implementer, pair-verifier, pair-ui-verifier); a subtask's pair implementer runs on the entry the planner picks from implement.subtaskModels; a role's env goes on the pool entry |
+| environment variable `PIPELINE_VERIFIER_CLI` | removed: the pair verifiers run on their models.agents entries (pair-verifier, pair-ui-verifier) from models.pool |
+| `prCheck.models` | removed: each PR check agent (pr-check-judge, -acceptance, -flow, -design, -style, -video, -defender, -fixer) names its models.pool entry in models.agents |
+| `video.script.model` | `models.agents.demo-narrator` (the value names a models.pool entry: its name, cli, the CLI's model id and effort) |
+| `council.stages` | removed: council members come from models.pool: council.members (or a stage section's councilMembers) says how many sit; lenses are no longer settings |
+| environment variable `PR_CHECK_MODEL_JUDGE` | removed: name the models.pool entry in models.agents.pr-check-judge |
+| environment variable `PR_CHECK_MODEL_ACCEPTANCE` | removed: name the models.pool entry in models.agents.pr-check-acceptance |
+| environment variable `PR_CHECK_MODEL_FLOW` | removed: name the models.pool entry in models.agents.pr-check-flow |
+| environment variable `PR_CHECK_MODEL_DESIGN` | removed: name the models.pool entry in models.agents.pr-check-design |
+| environment variable `PR_CHECK_MODEL_STYLE` | removed: name the models.pool entry in models.agents.pr-check-style |
+| environment variable `PR_CHECK_MODEL_VIDEO` | removed: name the models.pool entry in models.agents.pr-check-video |
+| environment variable `PR_CHECK_MODEL_DEFENDER` | removed: name the models.pool entry in models.agents.pr-check-defender |
+| environment variable `PR_CHECK_MODEL_FIXER` | removed: name the models.pool entry in models.agents.pr-check-fixer |
+| `implement.orchestrate` | removed: the implement stage's orchestrator decides: it implements the ticket itself or plans subtasks for pairs (implement.orchestrator.model sets its pool entry) |
+| `implement.orchestrator.enabled` | removed: the implement stage's orchestrator decides: it implements the ticket itself or plans subtasks for pairs |
+| environment variable `IMPLEMENT_ORCHESTRATE` | removed: the implement stage's orchestrator decides whether it implements the ticket itself |
+| `models.agents.implementer` | `implement.orchestrator.model` (the implementer is the implement stage's orchestrator) |
+<!-- /generated:renamed-settings -->
+
 ### Upgrading from 0.2.96
 
 - Payment request and response bodies are no longer published in a backend bug's request evidence: an exchange with any
@@ -155,27 +365,7 @@ What the codebase is, in terms every stage shares.
 
 ## Stage sections
 
-Each stage page under [ai-pipeline/](ai-pipeline/README.md) documents its own settings. The ones a new repository usually sets:
-
-| Section | Keys to look at first |
-| --- | --- |
-| `implement` | `prepareCmd` (run once in each new story or subtask worktree), `checks` (build and lint commands a subtask must pass), `unitTests.cmd` (`{project}` is a service's `unitTests` path), `uiStory` (how a UI story is recognised), `ui.teststackCmd` (how to start the app for UI verifiers), `roles.<role>.cli` and `roles.<role>.env` (a role's own CLI and its process variables, such as a second login's `CODEX_HOME`; never secrets, see [council.md](ai-pipeline/council.md)) |
-| `precheck` | `lint` and `fix` by file extension (`{files}`), `testRunners` (how written tests are run and discovered) |
-| `testRoots`, `testExtensions`, `implExclude` | what is a test file, and what is not implementation |
-| `implement.prCheck` | `mode` (`fix` or `report`), `fixUntil` (`major`), `bugFixUntil` (`minor`), `fixLenses`, `fixRounds` (3), and `returnToImplementation`: `enabled` (true), `maxReturns` (2), `minSeverity` (`major`), `implementationLenses`, `lightLenses`, `lightPaths` (governance; [pr-check.md](ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation)) |
-| `implement.preOpen` | how the PR opens finished (governance): `branches` (branch patterns whose pushes run CI before the PR; default from the branch prefixes), `afterOpen` (`draft`, `label` or `close-reopen`: how an open PR is held while agents work on it again; `close-reopen` becomes `draft` on a host that cannot reopen, such as Bitbucket, with a warning when `implement`, the review gate or `factory doctor` load the config, and a WARN row in `factory doctor`), `wipLabel` (`work-in-progress`), `draftCycles` (1). An unknown or removed key, or a value not listed, stops the config from loading, whichever command reads it first. The order itself is not a setting ([implement.md](ai-pipeline/implement.md#the-pr-opens-finished)) |
-| `implement.ciFixRounds`, `implement.ciWait` | `ciFixRounds` (1): `0` means no CI fixing round, any positive number one round per CI wait (`PIPELINE_CI_FIX_ROUNDS` for one run); `ciWait` (true): `false` skips both the CI proof before the open and the wait after it ([implement-reference.md](ai-pipeline/implement-reference.md#config)) |
-| `implement.delivery`, `implement.epic` | `delivery` (`epic` or `story`), and for epics `prSplit` (`epic`, `story` or `groups`; `story` and `groups` proven by fixture tests only), `maxStoriesPerGroup`, `grouping` (`auto`, `epic`, `ticket`), `branchPrefix`, `bugfixPrefix`, `featureVerification`, `prCheck` (`fix`, `report`, `off`) ([implement.md](ai-pipeline/implement.md#delivery-modes)) |
-| `implement.reviewGate`, `implement.autoMerge` | the review gate's severity floor, confidence and approvals per severity; auto-merge on or off, merge identity and method ([review-gate.md](ai-pipeline/review-gate.md)) |
-| `review` | `maxRounds`, `policy` (the architecture policy step) |
-| `prCheck` | `frontendPaths`, `conventions` (documents the style critic checks against) |
-| `prVideo` | `specPatterns` (which e2e specs record a demo), `videosDir`, `storageBranch`, `recordCmd`, `slotWaitSec`, `localTimeoutSec`, `testTimeoutSec`, `backendPaths`, `neutralPaths`, `api` |
-| `video` | narration (`enabled`, `voice`, `speed`, `lang`, `model`), `pacing`, `size`, `ffmpeg`, `licenceReview`, `critic`; `script` (narration by the `demo-narrator` agent: `scope` `headline`, `all` or `none`, checked when the config loads, `model`, `timeoutSec`, the length limits, `speakEvidence`); `bugPair` (`enabled`, `requireBefore`: a bug whose reproduction cannot be shown before the fix opens no PR); `apiEvidence` (a backend bug's requests before and after the fix: `enabled`, `headers`, `maxBodyBytes`, `maxPairs`, `paymentBodies`: `withhold` (default) or `mask`, checked when the config loads) ([pr-demo-video.md](ai-pipeline/pr-demo-video.md#turning-it-on)) |
-| `tickets`, `board` | the GitHub tracker: `repo`, `owner`, `projectNumber`. `repo` and `owner` default to the GitHub `origin`. Other trackers: [`tracker`](#code-host-tracker-and-ci) |
-| `agent` | `cli` (`claude`, `copilot`, `codex`), `models` per agent, `modelIds`, `claude.promptCacheTtl` (`5m` by default: a headless agent run is one short session, and the 1-hour cache Claude Code picks on a subscription is written at 1.6x the price), `claude.toolSearch` (`false` by default: MCP tools such as the language servers are listed to the agent directly, not deferred behind ToolSearch) |
-| `bot` | the PR bot ([setup](ai-pipeline/setup.md#the-pipelines-pr-bot)) |
-| `council` | opt-in council verifiers (governance): `members` (each with `name`, `cli` (`claude`, `codex`, `copilot`, `custom` with `cmd`), `model`, `effort`, `lens`, `blocking`, `env`), `stages` (`pairVerify`, `pairUiVerify`, `review`, `testPlan`, `testAutomation`, `prCheck`, each with its `members` and optional `rounds`), `rounds` (3), `passScore` (9), `blockOn` (`any`, `majority`, `all`), `onUnavailable` (`fail` or `report`). Scope objections to sealed fixes are settled by an adjudication sitting of the blocking members. Without it every stage runs its single verifier ([council.md](ai-pipeline/council.md)) |
-| `council.intercom` | off by default: the council's members discuss round 1 with each other in a chat room before the merge (`enabled`, `host`, `port`, `advertiseHost`, `allowInsecureRemote`, `maxTurnsPerMember`, `maxEscalations`, `onSplit`; also per stage) ([council-intercom.md](ai-pipeline/council-intercom.md)) |
+Each stage page under [ai-pipeline/](ai-pipeline/README.md) explains its own settings in context. The ones a new repository usually sets: `implement.prepareCmd`, `implement.checks`, `implement.unitTests.cmd`, `implement.uiStory`, `implement.ui.teststackCmd`, `precheck.lint` and `precheck.fix`, `precheck.testRunners`, `testRoots`, `testExtensions`, `implExclude`, and the `tickets` and `board` sections (or [`tracker`](#code-host-tracker-and-ci)). Every setting, with what it does, its allowed values, its default and the environment variable that overrides it, is in the [settings reference](#settings-reference).
 
 ## Tool sections
 
@@ -198,24 +388,11 @@ GitHub's mergeability ignores merge drivers, so two open pipeline PRs that both 
 
 ## Retro: `retro.factory`
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `true` | let the retro propose changes to the factory itself, as a branch pushed to `source`; a person opens its pull request |
-| `source` | the pin's `source`, else the install's `origin` | the repository the proposal branch is pushed to |
-| `allowedPaths` | `agents/`, `docs/`, `templates/`, `skills/` | what such a proposal may touch |
-| `evidence` | `summary` | how much of this repository's run data the proposal quotes |
-
-See [ai-pipeline/retro.md](ai-pipeline/retro.md).
+Whether the retro may propose changes to the factory itself, where its branch goes, what it may touch and how much run data it quotes: the `retro.factory` rows of the [settings reference](#settings-reference). See [ai-pipeline/retro.md](ai-pipeline/retro.md).
 
 ## Factory guard: `factoryGuard`
 
-Agents the pipeline starts may not edit the factory's files in the repository; only the retro may.
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `true` | |
-| `protected` | the settings, pin, manifest, launcher, hooks, addenda, lessons and policy under `.factory/` | paths no pipeline agent may write. Every file in the manifest is added |
-| `writers` | `["retro"]` | agents exempt from the guard |
+Agents the pipeline starts may not edit the factory's files in the repository; only the retro may. Its settings (`enabled`, `protected`, `writers`) are in the [settings reference](#settings-reference).
 
 The guard checks file edit tools and shell commands that write a protected path (redirections, `tee`, `sed -i`, `cp`/`mv`/`rm`/..., `git checkout`/`restore`/`apply`, interpreters handed a protected path). Because a shell can still hide a write, the engine also snapshots the protected files around every pipeline agent run: a run that changed them by any means is reverted and fails. CODEOWNERS on `.factory/` and `factory check` in CI remain the last line for generated files.
 
@@ -242,18 +419,17 @@ Opt-in: without this section nothing below runs and nothing the factory renders 
 | --- | --- | --- |
 | `tools.<id>` | the packs' tools | a tool, as data (below). For a pack's tool, only the keys you name change (`{ "enabled": true }` turns an optional one on); `null` turns it off |
 | `stages.<slot>` | the repository's linters (`precheck`) plus the packs' | the tools each slot runs: `pair`, `story`, `prCheck`, `featureVerification`, `ci` |
-| `fixLoop.bounces` | `2` | harness fix bounces per pair round (and at story level); not pair or council rounds |
-| `ci.jobs` | the packs' jobs | `[{ id, name, tools, required, toolchain, timeoutMin }]`, rendered for the CI system; `ci.enabled: false` renders none |
+| `maxFixRounds` | `2` | harness fix rounds per pair round (and at ticket level); not pair or council rounds |
+| `ci.jobs` | the packs' jobs | `[{ id, name, tools, required, toolchain, timeoutSec }]`, rendered for the CI system; `ci.enabled: false` renders none |
 | `suppressions.inline` | the packs' patterns | `[{ id, pattern }]` (regular expressions on added lines), listed for the members as suppressions to justify |
 | `protect` | the packs' and tools' lists | more paths the factory guard protects while analysis is on |
 | `coverage` | none | `{ run, format: "lcov" \| "cobertura", output }`: coverage of the added production lines, evidence for the `test-value` lens, never a gate |
 | `vars` | from the packs | values for a pack's placeholders, such as `{ "solution": "eShop.Web.slnf" }` (else the single root file matching the pack's candidates; with two or more candidates nothing is picked, and `factory analysis check` and `factory doctor` fail naming them) |
 | `secrets` | none | `{ "allow": { "stopwords": [...], "regexes": [...] } }`: values a person declares are not secrets (the seeded demo users' password every e2e spec signs in with). The secret scanner keeps its default rules and ignores exactly these, locally and in CI |
-| `commercial` | none | a client's licensed scanner, or a list of them: `{ scanner, mode: local \| server, token: "${NAME}", env, replaces, severity, check, url, project, timeoutMin, stages }` ([providers/commercial-scanners.md](providers/commercial-scanners.md)). Off until a person accepts its licence |
+| `commercial` | none | a client's licensed scanner, or a list of them: `{ scanner, mode: local \| server, token: "${NAME}", env, replaces, severity, check, url, project, timeoutSec, stages }` ([providers/commercial-scanners.md](providers/commercial-scanners.md)). Off until a person accepts its licence |
 | `acceptLicence` | `[]` | `[{ tool \| source: "<tool>:<rule source>", licence, by, rejected? }]`: a person's acceptance of a licence outside the allowlist |
 | `licenceReview` | `"default"` | `"strict"` turns off every item marked `licenceReview: "pending"` (enabled pending legal review) |
 | `maxConcurrent` | `2` | tools running at once on the machine |
-| `reports.keep` | `200` | commits whose reports are kept (see also `prune.analysisReports`) |
 
 A tool:
 
@@ -303,17 +479,747 @@ An agent's prompt is built from three files:
 
 ## Environment and git switches
 
+An environment variable that overrides a setting is listed on that setting's row of the [settings reference](#settings-reference), not here. These are the other switches:
+
 | Setting | Effect |
 | --- | --- |
 | `FACTORY_HOME` | where the engine is installed |
-| `PIPELINE_AGENT_CLI`, `PIPELINE_AGENT_CMD` | which agent CLI runs the agents |
-| `PIPELINE_BASE_REF` | base branch for diffs and new stories (default `origin/main`) |
+| `PIPELINE_AGENT_CMD` | a command that runs every agent instead of an agent CLI (it reads the prompt on stdin) |
+| `PIPELINE_AGENT_CLI` | `claude`, `copilot` or `codex`: every agent runs on a `models.pool` entry of that CLI (the entry of the same model when the pool has one, else the CLI's first); a CI job that installs one CLI sets it |
 | `PIPELINE_DISABLE=1` | turn off every hook |
 | `PIPELINE_BOARD=0`, `PIPELINE_TICKETS_OFFLINE=1` | work without the board |
 | `GITLAB_TOKEN`, `AZURE_DEVOPS_TOKEN`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, ... | the tokens the `host` and `tracker` sections name with `${NAME}` (the names are yours to choose) |
-| `PIPELINE_BOT=0` | open PRs with your own `gh` login |
-| `FV_SKIP=1`, `PR_CHECK_SKIP=1` | skip one stage's gate |
-| `ARCH_POLICY_DIR` | a policy folder other than `.factory/policy` |
+| `FACTORY_EXTERNAL_MAX_RETRIES`, `FACTORY_EXTERNAL_RETRY_DELAY_SEC` | how many times a read-only call to the code host or another service is repeated after a network failure (2), and the first pause between tries in seconds (2, doubling) |
 | `ARCH_MSBUILD_EVAL` | `0` stops the engine asking MSBuild (`dotnet msbuild -getProperty:`) to confirm a new project's facts; the parse alone still sends anything it cannot be sure of to a person |
 | `git config fv.autoPlan true` | write test plans in the background when stories change |
 | `git config retro.auto true` | run the retro after merges |
+
+## Settings reference
+
+Every setting, generated from the descriptions beside the defaults (`scripts/<dir>/settings.json`, with the defaults in
+`scripts/<dir>/config.json`; `node scripts/pipeline/lib/settings.mjs --write`). The settings test fails when this table
+differs from them, when the code reads a setting no description has, when a described setting is read nowhere, or when a
+default is not one of its setting's allowed values. Only a plain read counts on its own: `config.a.b`, `config['a'].b`,
+joined literals, or `setting(<anything>, 'a.b')` with a literal name, whatever its first argument (or a read of a key
+under it). A setting read any other way (a local name or destructured part of the settings, a part passed to a function
+or carried in a context, a computed name) names the file that reads it in its description's `readBy`, and that file must
+read the key (a property read, a destructuring or its `setting()` name; a word in a string or comment, or an object key,
+is not one; a key it only copies into another object must be read on from there); words elsewhere never count. A
+`setting()` call with a computed name may stand only for settings whose `readBy` is that call's file: each described
+setting its name could be (a template's `${...}` as any text) must name the file, and at least one must. Undescribed
+names found through local names, destructuring or one call level are still reported. Code never writes a default again:
+not as `?? <literal>` after a read, a parameter's default or a module constant under the setting's own name. A name with
+`<...>` is any key of a map (such as an agent's name); `[]` is every item of a list. The loader refuses a value outside
+the allowed values, and a name not listed here.
+
+<!-- generated:settings -->
+### `agent`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `agent.supervisor.idleSec` | How long an agent may produce no output before the supervisor stops it as stalled. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `agent.supervisor.ceilingFactor` | How many times its normal time an agent that still makes progress may run before it is stopped. | number | number of 1 or more | `10` | `PIPELINE_CEILING_FACTOR` |
+| `agent.resultParseRetries` | How many times an agent whose answer has no readable result is asked again for it. | whole number | whole number of 0 or more | `1` | none |
+| `agent.claude.promptCacheTtlSec` | The prompt cache lifetime of a headless Claude Code run (an agent run is one short session): 300 or 3600, the two Claude Code offers. | choice | `300`, `3600` | `300` | none |
+| `agent.claude.toolSearch` | Defers MCP tools behind Claude Code's ToolSearch instead of listing them to the agent directly. | on/off | `true`, `false` | `false` | none |
+| `agent.available.local` | The agent CLIs this machine's developers have (recorded by `factory init`). | list | list of `claude`, `copilot`, `codex` | none | none |
+| `agent.available.ci` | The agent CLIs that may run in CI (recorded by `factory init`). | list | list of `claude`, `copilot`, `codex` | none | none |
+
+### `agentOverlayDir`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `agentOverlayDir` | The repository folder of the agent addenda (`<name>.md`) and replaced definitions (`<name>.agent.md`). | text | a folder relative to the repository | `.factory/agents` | none |
+
+### `agentsDir`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `agentsDir` | The folder of the base agent definitions inside the factory install. | text | a folder relative to the factory install | `agents` | none |
+
+### `analysis`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `analysis` | Static analysis, opt-in: `{}` turns on the security pack and the packs of `project.languages` ([analysis](ai-pipeline/analysis.md)); its own validator checks every key. | object | see the linked page, or `null` | off | none |
+| `analysis.tools` | The analysis tools, as data; `null` turns a pack's tool off. | map | names to object | none | none |
+| `analysis.stages` | The tools each slot runs (`pair`, `story`, `prCheck`, `featureVerification`, `ci`). | map | names to values | none | none |
+| `analysis.suppressions` | Inline suppression patterns listed for the members as suppressions to justify. | object | see the linked page | none | none |
+| `analysis.protect` | More paths the factory guard protects while analysis is on. | list | list of path | none | none |
+| `analysis.coverage` | Coverage of the added production lines, evidence for the `test-value` lens, never a gate. | object | see the linked page | none | none |
+| `analysis.ci` | The analysis CI jobs rendered for the CI system (`enabled`, `jobs`). | object | see the linked page | none | none |
+| `analysis.ci.jobs[].timeoutSec` | How long one static analysis CI job may run. | whole number | whole number of 1 or more seconds | the pack job's, else `1800` | none |
+| `analysis.coverageTimeoutSec` | How long the coverage run (`analysis.coverage`) may take when it names no `timeoutSec` of its own. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `analysis.maxConcurrent` | How many analysis tools run at once on the machine. | whole number | whole number of 1 or more | `2` | none |
+| `analysis.acceptLicence` | A person's acceptance of a tool licence outside the allowlist. | list | list of object | none | none |
+| `analysis.licenceReview` | `strict` turns off every tool enabled pending legal review. | choice | `default`, `strict` | `default` | none |
+| `analysis.vars` | Values for a pack's placeholders. | map | names to values | none | none |
+| `analysis.secrets` | Values a person declares are not secrets (`allow.stopwords`, `allow.regexes`). | object | see the linked page | none | none |
+| `analysis.commercial` | A licensed scanner, or a list of them ([commercial scanners](providers/commercial-scanners.md)). | any | an object or a list of objects | none | none |
+| `analysis.commercial.timeoutSec` | How long the gate waits for a licensed scanner's result on a head (each entry of a list has its own). | whole number | whole number of 1 or more seconds | `3600` | none |
+| `analysis.maxFixRounds` | How many times static analysis findings are handed back for fixing within one round of verification (and at ticket level). | whole number | whole number of 0 or more rounds | `2` | none |
+
+### `architectureReview`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `architectureReview.timeoutSec` | The normal time the architecture reviewer may take. | whole number | whole number of 1 or more seconds | `1200` | none |
+| `architectureReview.conventions` | Documents the reviewer checks the change against. | list | list of path | `["AGENTS.md","CONTRIBUTING.md"]` | none |
+| `architectureReview.policy.enabled` | Runs the architecture policy step before the reviewer. | on/off | `true`, `false` | `true` | none |
+| `architectureReview.policy.agent` | The policy engine's script, relative to the factory install. | text | text | `architecture-policy/agents/arch_review.py` | none |
+| `architectureReview.policy.dir` | The folder of the repository's architecture rules. | text | text | `.factory/policy` | `ARCH_POLICY_DIR` |
+| `architectureReview.policy.command` | The command that runs a policy review (`{agent}` is the engine's script). | command | a command line, or a list of arguments | `["python","{agent}","review","-"]` | none |
+| `architectureReview.policy.lessonsCommand` | The command that reads the policy's lessons (`{agent}` is the engine's script). | command | a command line, or a list of arguments | `["python","{agent}","get_lessons","-"]` | none |
+| `architectureReview.policy.categories` | The policy's finding categories mapped to the review's. | map | names to string | `{"security":"security","data":"data","resiliency":"resilience","observability":"resilience","error_handling":"correctness","api":"fit","architecture":"fit","testing":"maintainability"}` | none |
+| `architectureReview.policy.maxLessons` | The most policy lessons handed to the reviewer. | whole number | whole number of 0 or more | `5` | none |
+| `architectureReview.policy.requester` | The agent the policy review is requested for. | text | text | `implementer` | none |
+| `architectureReview.policy.semantic` | Whether pending semantic rules go to the reviewer (`auto`) or are left out (`off`). | choice | `auto`, `off` | `auto` | none |
+| `architectureReview.policy.timeoutSec` | How long the policy engine's command may take. | whole number | whole number of 1 or more seconds | `600` | none |
+| `architectureReview.maxCouncilRounds` | How many rounds the architecture review council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `5` | none |
+| `architectureReview.councilPassScore` | The score every blocking member of the architecture review council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9.5` | none |
+| `architectureReview.councilMembers` | How many members sit on the architecture review council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `architectureReview.orchestrator.model` | The `models.pool` entry the architecture review orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
+| `architectureReview.orchestrator.effort` | The architecture review orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
+| `architectureReview.councilIntercom` | The architecture review council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
+
+### `baseRef`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `baseRef` | The branch diffs are taken against and new tickets start from. | text | a git ref | `origin/main` | `PIPELINE_BASE_REF` |
+
+### `board`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `board.owner` | The GitHub user or organisation that owns the story board project. | text | text, or `null` | the owner of `tickets.repo` | none |
+| `board.ownerType` | Whether the board's owner is a user or an organisation. | choice | `user`, `organization` | `user` | none |
+| `board.repo` | The repository whose issues are the board's tickets. | text | `owner/name`, or `null` | `tickets.repo` | none |
+| `board.projectNumber` | The number of the GitHub project that is the story board. | whole number | whole number of 1 or more, or `null` | `null` | none |
+| `board.projectTitle` | The title of the story board project. | text | text, or `null` | `<project name> story board` | none |
+| `board.statusField` | The project's field that holds the lane. | text | text | `Status` | none |
+| `board.shared` | Whether the GitHub board is shared with other teams or repositories (setup then changes nothing that is not this repository's). | on/off | `true`, `false` | `false` | none |
+| `board.fields.<field>` | The project's field names for the pipeline's fields: `impact`, `complexity`, `fixRisk`, `severity`, `confidence`, `reopens`. | text | text | `Impact`, `Complexity`, `Fix risk`, `Severity`, `Confidence`, `Human reopens` | none |
+| `board.columns.<lane>` | The board's column for each pipeline lane: `backlog`, `ready`, `inProgress`, `testing`, `review`, `failed`, `done`. | text | text | `Backlog`, `Ready`, `In Progress`, `Testing`, `Pending Review`, `Failed`, `Done` | none |
+| `board.storyLabel` | The label of a story ticket. | text | text | `story` | none |
+| `board.epicLabel` | The label of an epic ticket. | text | text | `epic` | none |
+| `board.spikeLabel` | The label of a spike ticket. | text | text | `spike` | none |
+| `board.blockedLabel` | The label of a ticket a person must decide. | text | text | `needs-human` | none |
+| `board.resolvedLabel` | The label a person sets when an escalation is resolved. | text | text | `escalation-resolved` | none |
+| `board.questions.maxQuestions` | The most questions a failed run's escalation asks a person. | whole number | whole number from 1 to 3 | `3` | none |
+| `board.questions.timeoutSec` | The normal time the escalation questions agent may take. | whole number | whole number of 1 or more seconds | `300` | none |
+| `board.questions.logTailChars` | How much of a failed run's log the escalation questions agent reads. | whole number | whole number of 0 or more characters | `4000` | none |
+| `board.questions.noteChars` | How much of the escalation notes the escalation questions agent reads. | whole number | whole number of 0 or more characters | `6000` | none |
+| `board.questions.storyChars` | How much of the ticket the escalation questions agent reads. | whole number | whole number of 0 or more characters | `6000` | none |
+| `board.evidence.playwright` | The Playwright command board evidence is recorded with (`null`: the repository's). | command | a command line, or a list of arguments, or `null` | `null` | none |
+| `board.evidence.timeoutSec` | How long recording a ticket's evidence may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `board.evidence.maxExchanges` | The most request and response pairs a ticket's evidence comment shows. | whole number | whole number of 0 or more | `60` | none |
+| `board.evidence.maxBodyChars` | The most characters of one request or response body in the evidence. | whole number | whole number of 0 or more characters | `1500` | none |
+| `board.evidence.maxCommentChars` | The most characters of one evidence comment. | whole number | whole number of 1 or more characters | `60000` | none |
+| `board.evidence.extensions` | The file name endings of the test files board evidence looks through for a ticket's specs. | list | list of string | `[".ts",".js",".mjs"]` | none |
+
+### `bot`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `bot.enabled` | Opens and updates pull requests as the pipeline's PR bot instead of your own `gh` login. | on/off | `true`, `false` | `true` | `PIPELINE_BOT` |
+| `bot.namePattern` | The PR bot's name, with `{login}` replaced by the developer's login. | text | text with `{login}` | `dev-bot-{login}` | none |
+| `bot.credentialsDir` | The folder of the PR bot's credentials on this machine. | text | a folder (`~` allowed) | `~/.config/ai-app-factory` | `PIPELINE_BOT_CREDENTIALS_DIR` |
+
+### `ci`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `ci` | The CI system the factory renders jobs for and reads results from; [providers](providers/README.md) lists each one's keys. | object | see the linked page | the code host's own CI system | none |
+| `ci.provider` | Which CI system runs the factory's jobs. | choice | `github-actions`, `gitlab-ci`, `azure-pipelines`, `jenkins`, `circleci`, `bitbucket-pipelines`, `custom` | the code host's own | none |
+| `ci.url` | The CI system's API (Jenkins). | text | a URL | none | none |
+| `ci.job` | The Jenkins Multibranch job. | text | text | none | none |
+| `ci.project` | The CI project (CircleCI project slug). | text | text | none | none |
+| `ci.user` | The CI account (Jenkins), as a `${NAME}` reference. | text | text | none | none |
+| `ci.token` | The CI API token, as a `${NAME}` reference. | text | a `${NAME}` reference | none | none |
+| `ci.expected` | The pipelines a head must run, instead of the ones derived from the CI system. | list | list of pipeline name | none | none |
+| `ci.ignore` | Pipelines never waited for. | list | list of pipeline name | none | none |
+| `ci.command` | The command of a `custom` CI adapter. | text | text | none | none |
+| `ci.env` | Variables for a `custom` adapter's process (`${NAME}` references). | map | names to string | none | none |
+| `ci.timeoutSec` | How long one call of a `custom` adapter may take. | whole number | whole number of 1 or more seconds | `60` | none |
+| `ci.capabilities` | What a `custom` CI adapter can do. | object | see the linked page | none | none |
+
+### `council`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `council.blockQuorum` | How many blocking members must object to a finding for it to block (no effect on a council of one). | choice | `any`, `majority`, `all` | `any` | none |
+| `council.onUnavailable` | What a round does when a member cannot run: fail the round, or report it and go on without the member (a council of one always fails). | choice | `fail`, `report` | `fail` | none |
+| `council.lateGraceSec` | How long the PR check waits, after its last round, for a non-blocking member's late result. | whole number | whole number of 0 or more seconds | `120` | none |
+| `council.members` | How many members a council seats, from `models.pool`; 1 seats the stage's own verifier alone. Each stage section's `councilMembers` overrides it. | whole number | whole number from 1 to 10 | `1` | none |
+| `council.explorationSeat.enabled` | With two or more seats, reserves one seat for the eligible pool entry with the fewest seats in the stage (by the scorecard), so models it knows little about are still tried; the family rule still applies. | on/off | `true`, `false` | `true` | none |
+| `council.shadowSeat.enabled` | With one seat, adds a second, non-blocking member from another model family: its findings are feedback, its score never decides and the stage does not wait for it; beside the PR check's critic panel it is one more critic. It doubles the verifier runs of a one-seat council. | on/off | `true`, `false` | `false` | none |
+| `council.scorecard.minSeats` | The seats a model needs in a lens and stage before its scorecard row has numbers; a row with fewer is unknown, neither good nor bad for selection. | whole number | whole number of 1 or more | `10` | none |
+| `council.scorecard.weights.prCheckRuling` | The weight of a PR check judge ruling (an upheld finding) in a scorecard row's score. | number | number with at most 2 decimal places of 0 or more | `1` | none |
+| `council.scorecard.weights.miss` | The weight of a miss (a problem found after the council passed: a PR check upheld finding, a red CI check) in a scorecard row's score. | number | number with at most 2 decimal places of 0 or more | `1` | none |
+| `council.scorecard.weights.ledToChange` | The weight of a pair or verifier stage finding that led to a change in a scorecard row's score. | number | number with at most 2 decimal places of 0 or more | `0.5` | none |
+| `council.scorecard.weights.lowWeightMiss` | The weight of a lower-weight miss (a human "changes requested" review, a later bug ticket) in a scorecard row's score. | number | number with at most 2 decimal places of 0 or more | `0.25` | none |
+| `council.intercom.enabled` | Lets a council's members discuss their first round with each other before the merge. | on/off | `true`, `false` | `false` | none |
+| `council.intercom.host` | The address the discussion room listens on. | text | a host name or IP address | `127.0.0.1` | none |
+| `council.intercom.port` | The port the discussion room listens on (0 picks a free one). | whole number | whole number from 0 to 65535 | `0` | none |
+| `council.intercom.advertiseHost` | The address members on other machines reach the room at. | text | a host name or IP address, not a wildcard, or `null` | `null` | none |
+| `council.intercom.allowInsecureRemote` | Allows a room on a non-loopback address, with plain-HTTP bearer tokens on the network. | on/off | `true`, `false` | `false` | none |
+| `council.intercom.maxTurnsPerMember` | How many messages each member may post in a discussion. | whole number | whole number from 1 to 20 | `2` | none |
+| `council.intercom.maxEscalations` | How many split questions a discussion may escalate. | whole number | whole number from 0 to 20 | `3` | none |
+| `council.intercom.onSplit` | Who rules when the members' discussion splits. | choice | `orchestrator`, `owner` | `orchestrator` | none |
+
+### `e2e`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `e2e.dir` | The folder of the repository's e2e tests, where `factory render` keeps the shared e2e fixtures. | text | text | `e2e` | none |
+
+### `experiment`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `experiment.testCmd` | The command a delivery experiment runs a pooled e2e spec with (`{file}` is the spec). | text | a command line with `{file}` | `npx playwright test -c playwright.teststack.config.ts {file}` | none |
+| `experiment.testTimeoutSec` | How long one pooled e2e spec of an experiment may run. | whole number | whole number of 1 or more seconds | `1800` | none |
+
+### `factoryGuard`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `factoryGuard.enabled` | Stops pipeline agents from editing the factory's files in the repository. | on/off | `true`, `false` | `true` | none |
+| `factoryGuard.protected` | Paths no pipeline agent may write; every file in the manifest is added. | list | list of path | `[".factory/config.json",".factory/factory.json",".factory/manifest.json",".factory/bin",".factory/agents",".factory/lessons",".factory/policy",".factory/githooks"]` | none |
+| `factoryGuard.writers` | The agents exempt from the factory guard. | list | list of agent name | `["retro"]` | none |
+
+### `featureVerification`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `featureVerification.evidence.manifest` | Where a recorded test run writes its manifest of videos and steps. | text | a path relative to the repository | `artifacts/e2e-videos/manifest.json` | none |
+| `featureVerification.precheck.runTests` | Runs the written tests before the test automation verifier sees them. | on/off | `true`, `false` | `true` | none |
+| `featureVerification.precheck.fix` | Auto-fix commands by file extension (`{files}`), run on written files before the checks. | map | names to command | `{".md":["node_modules/.bin/markdownlint","--fix","{files}"]}` | none |
+| `featureVerification.precheck.lint` | Lint commands by file extension (`{files}`); a failure goes back to the writer before any verifier runs. | map | names to command | `{".md":["node_modules/.bin/markdownlint","{files}"]}` | none |
+| `featureVerification.precheck.scenarioFile` | The file name of a test data scenario. | text | text, or `null` | `scenario.yaml` | none |
+| `featureVerification.precheck.validateScenario` | A command that validates a written scenario. | command | a command line, or a list of arguments, or `null` | `null` | none |
+| `featureVerification.precheck.testRunners` | How written tests are run and discovered ([test runners](ai-pipeline/feature-verification.md)); `null`: the language packs' runners. | list | list of any (runner objects, or a pack's runner names such as `dotnet/xunit`), or `null` | `null` | none |
+| `featureVerification.precheck.automationNotes` | Extra lines for the test writer's task. | list | list of text | `[]` | none |
+| `featureVerification.precheck.lintExclude` | Files the lint and fix commands never read. | list | list of glob | `["**/node_modules/**","**/bin/**","**/obj/**","**/dist/**","**/wwwroot/lib/**","**/*.min.js","**/*.min.css","**/*.bundle.js",".factory/bin/**","**/graphify-out/**"]` | none |
+| `featureVerification.precheck.requireStack` | Fails a test run whose end-to-end runner found no running app stack. | on/off | `true`, `false` | `true` | none |
+| `featureVerification.precheck.requireUiEvidence` | Fails a passing UI test run that recorded no evidence of the screens it tested. | on/off | `true`, `false` | `true` | none |
+| `featureVerification.precheck.runFullProjects` | Runs a test project in full when none of the ticket's tests could be selected in it. | on/off | `true`, `false` | `true` | none |
+| `featureVerification.precheck.fullProjectsEveryRound` | Runs the touched test projects in full in every round, not only the last. | on/off | `true`, `false` | `false` | none |
+| `featureVerification.categories.plan` | The gap categories a test plan verifier may report. | list | list of category | `["ac-not-covered","missing-sad-path","untestable-expectation","invented-requirement","vague-steps","duplicate-case","stale-vs-story","other"]` | none |
+| `featureVerification.categories.automation` | The gap categories a test automation verifier may report. | list | list of category | `["case-not-covered","tests-different-path","wrong-assertion","missing-assertion","missing-setup","over-mocked","flaky-wait","wrong-layer","visual-mismatch","other"]` | none |
+| `featureVerification.categories.sadPathSubtypes` | The subtypes of a missing sad path. | list | list of subtype | `["validation","auth","ownership","not-found","boundary","concurrency","conflict","dependency-failure"]` | none |
+| `featureVerification.timeoutsSec.plan` | The normal time the test planner may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `featureVerification.timeoutsSec.automation` | The normal time the test writer may take. | whole number | whole number of 1 or more seconds | `3600` | none |
+| `featureVerification.timeoutsSec.verifier` | The normal time a test plan or test automation verifier may take. | whole number | whole number of 1 or more seconds | `900` | none |
+| `featureVerification.timeoutsSec.lessons` | The normal time the lessons writer may take. | whole number | whole number of 1 or more seconds | `1200` | none |
+| `featureVerification.timeoutsSec.tests` | The normal time a test run may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `featureVerification.slots.enabled` | Lets a test run borrow its own copy of the app instead of sharing the main one. | on/off | `true`, `false` | `true` | `FV_USE_SLOTS` |
+| `featureVerification.plansDir` | The folder where test plans are written, one folder per ticket. | text | a folder relative to the repository | `.factory/plans` | none |
+| `featureVerification.testExtensions` | File extensions of test files. | list | list of extension | `[]` | none |
+| `featureVerification.slotWaitSec` | How long a test run waits for a free copy of the app. | whole number | whole number of 0 or more seconds | `21600` | none |
+| `featureVerification.enabled` | Runs the automatic test planning and test writing for each ticket. | on/off | `true`, `false` | `true` | `FV_SKIP` |
+
+### `hooks`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `hooks.codeAgents` | Which agents, when they finish, start the architecture review and the automatic PR check. | list | list of agent name | `["implementer"]` | none |
+
+### `host`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `host` | The code host the factory acts on; [providers](providers/README.md) lists each one's keys. | object | see the linked page | detected from the `origin` remote | none |
+| `host.type` | Which code host the repository is on. | choice | `github`, `gitlab`, `azure-devops`, `bitbucket`, `custom` | detected from the `origin` remote; `github` without one | none |
+| `host.url` | The code host's base URL (set it for a self-hosted server). | text | a URL | the hosted service's | none |
+| `host.repo` | The repository on the code host (GitHub `owner/name`, GitLab the project path, Azure DevOps `organization/project/repository`, Bitbucket `workspace/repository`). | text | text | from the remote | none |
+| `host.user` | Bitbucket only: the `${NAME}` of the account for an API token or app password. | text | a `${NAME}` reference | none | none |
+| `host.token` | The environment variable holding the code host's token, never the token (GitHub uses the `gh` login). | text | a `${NAME}` reference | none | none |
+| `host.command` | The command of a `custom` code host adapter. | text | text | none | none |
+| `host.env` | Variables for a `custom` adapter's process (`${NAME}` references). | map | names to string | none | none |
+| `host.timeoutSec` | How long one call of a `custom` adapter may take. | whole number | whole number of 1 or more seconds | `60` | none |
+| `host.capabilities` | What a `custom` code host adapter can do. | object | see the linked page | none | none |
+
+### `implement`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `implement.worktreeDir` | Where ticket and subtask worktrees go, relative to the repository root (`{repo}` is the checkout's folder name). | text | a folder, with `{repo}` | `../{repo}-worktrees` | `IMPLEMENT_WORKTREE_DIR` |
+| `implement.branchPrefix` | The prefix of a ticket's branch name (subtasks: `<prefix><key>--<id>`). | text | text | `feat/` | `IMPLEMENT_BRANCH_PREFIX` |
+| `implement.delivery` | How an epic run delivers: one PR for the epic, or one per ticket. | choice | `epic`, `story` | `epic` | none |
+| `implement.epic.branchPrefix` | The prefix of an epic's branch name. | text | text | `epic/` | `IMPLEMENT_EPIC_BRANCH_PREFIX` |
+| `implement.epic.bugfixPrefix` | The prefix of a bug group's branch name. | text | text | `bugfix/` | `IMPLEMENT_BUGFIX_BRANCH_PREFIX` |
+| `implement.epic.grouping` | How an epic's tickets are grouped into pull requests. | choice | `auto`, `epic`, `ticket` | `auto` | none |
+| `implement.epic.featureVerification` | Runs test planning and test writing for an epic's tickets. | on/off | `true`, `false` | `true` | none |
+| `implement.epic.prSplit` | How a feature epic is split into pull requests. | choice | `epic`, `story`, `groups` | `epic` | none |
+| `implement.maxSubtasks` | The most subtasks a plan may have. | whole number | whole number of 1 or more | `4` | none |
+| `implement.selfModeMaxFiles` | Guidance for the planner: implement the ticket itself up to about this many files. | whole number | whole number of 1 or more | `6` | none |
+| `implement.maxConcurrentPairs` | The most verifier pairs of one ticket running at once. | whole number | whole number of 1 or more | `2` | `IMPLEMENT_MAX_PAIRS` |
+| `implement.maxConcurrentAgents` | The most agents running at once on the machine. | whole number | whole number of 1 or more | `6` | `IMPLEMENT_MAX_AGENTS` |
+| `implement.maxTakeovers` | How many times the orchestrator may take over a subtask its pair could not finish. | whole number | whole number of 0 or more | `1` | none |
+| `implement.maxAgentRunsPerStory` | The most agent runs one ticket may use. | whole number | whole number of 1 or more | `20` | none |
+| `implement.storyWallClockSec` | The longest one ticket's implementation may take. | whole number | whole number of 1 or more seconds | `10800` | none |
+| `implement.prepareCmd` | A shell command run in each new ticket and subtask worktree (a failure is logged, not fatal). | text | text, or `null` | `null` | none |
+| `implement.checks` | Shell commands (`{ name, cmd }`) run in the worktree after every pair round; a failure fails the round. | list | list of object | `[]` | none |
+| `implement.checks[].name` | A check's name in the verifiers' report. | text | text | none | none |
+| `implement.checks[].cmd` | A check's shell command. | text | text | none | none |
+| `implement.unitTests.cmd` | The unit test command, with `{project}` (a service's `unitTests` path) and `{service}` (its name). | text | text, or `null` | `null` | none |
+| `implement.uiStory.titleTags` | Title tags that make a ticket a UI ticket. | list | list of tag | `["FE"]` | none |
+| `implement.uiStory.components` | Ticket components that make a ticket a UI ticket (`null`: the project model's frontend services). | list | list of component, or `null` | `null` | none |
+| `implement.pathHints.roots` | More top-level folders the harness recognises as repository paths in an implementer's blocked reason. | list | list of folder | `[]` | none |
+| `implement.pathHints.extensions` | More file extensions the harness recognises as repository paths in an implementer's blocked reason. | list | list of extension | `[]` | none |
+| `implement.requeue.envKeys` | Extra environment variables `factory requeue-schedule install` copies into the timer. | list | list of variable name | `[]` | none |
+| `implement.ui.slotsCmd` | The command of the stack slot registry UI verifiers lease a slot from. | command | a command line, or a list of arguments | `["node","scripts/stack/slots.mjs"]` | none |
+| `implement.ui.teststackCmd` | How a UI verifier starts the app on its slot. | command | a command line, or a list of arguments, or `null` | `null` | none |
+| `implement.ui.leaseWaitSec` | How long a UI verifier waits for a free stack slot. | whole number | whole number of 0 or more seconds | `300` | none |
+| `implement.ui.leaseRetrySec` | How often a UI verifier asks again for a slot. | whole number | whole number of 1 or more seconds | `30` | none |
+| `implement.ui.stackTimeoutSec` | How long starting the app on a slot may take. | whole number | whole number of 1 or more seconds | `2400` | none |
+| `implement.ui.screenshotsDir` | Where UI verifiers save their screenshots. | text | text | `artifacts/pairs` | none |
+| `implement.ui.renewEverySec` | How often a held stack slot lease is renewed. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `implement.ui.artifactDirs` | The folders a UI verifier may write into (screenshots, recordings, test reports). | list | list of folder | `["artifacts","test-results","playwright-report","blob-report"]` | none |
+| `implement.decisions.smallDiffLoc` | A subtask approved in round 1 at or under this many lines is labelled over-provisioned in the decision report. | whole number | whole number of 0 or more lines | `60` | none |
+| `implement.decisions.tinySubtaskLoc` | A subtask at or under this many lines counts as tiny for the should-have-been-self label. | whole number | whole number of 0 or more lines | `40` | none |
+| `implement.decisions.tinySubtaskFiles` | A subtask at or under this many files counts as tiny for the should-have-been-self label. | whole number | whole number of 0 or more files | `3` | none |
+| `implement.decisions.selfMaxTotalLoc` | A plan of tiny subtasks at or under this many lines in total should have been done by the orchestrator itself. | whole number | whole number of 0 or more lines | `150` | none |
+| `implement.decisions.selfOverheadRunsPerSubtask` | More agent runs than this per tiny subtask mark the plan should-have-been-self. | whole number | whole number of 0 or more | `2` | none |
+| `implement.reviewGate.enabled` | Runs the review gate that rates bug-fix PRs and decides approvals and auto-merge. | on/off | `true`, `false` | `true` | `REVIEW_GATE` |
+| `implement.reviewGate.timeoutSec` | The normal time the bug-triage agent may take. | whole number | whole number of 1 or more seconds | `900` | none |
+| `implement.reviewGate.maxDiffChars` | The most characters of a PR's diff the bug-triage agent reads. | whole number | whole number of 1 or more characters | `120000` | none |
+| `implement.reviewGate.systems` | The systems a PR can touch, by path (`name`, `paths`, `shared`, `contract`), for the review gate's ratings (`null`: the project model's services). | list | list of object, or `null` | `null` | none |
+| `implement.reviewGate.sharedPaths` | Shared systems by name (build files, linked shared sources) added to the project model's services. | map | names to lists of globs | none | none |
+| `implement.reviewGate.contractPaths` | Contract systems by name (integration events, API contracts) added to the project model's services. | map | names to lists of globs | none | none |
+| `implement.reviewGate.ignore` | Files the review gate leaves out of a PR's change. | list | list of glob | `[".factory/metrics/**",".factory/lessons/**",".factory/state/**",".factory/plans/**",".factory/stack/scenarios/**","**/graphify-out/**","**/*.md"]` | none |
+| `implement.reviewGate.ci` | How the review gate reads CI on a PR's head (expected and ignored pipelines). | object | see the linked page | none | none |
+| `implement.reviewGate.enforced` | Whether a repository admin lets `factory review-gate enforce` require review quorum and the CI checks (doctor warns until it is done). | on/off | `true`, `false` | `true` | none |
+| `implement.reviewGate.requiredChecks` | The checks `factory review-gate enforce` requires on the default branch (`null`: the factory's CI jobs). | list | list of check name, or `null` | `null` | none |
+| `implement.reviewGate.floor.paths` | Sensitive paths (CI files, CODEOWNERS, the factory's settings) that put a PR at the floor level. | list | list of glob | `[".github/workflows/**",".github/CODEOWNERS","CODEOWNERS","docs/CODEOWNERS",".factory/config.json",".factory/factory.json",".factory/app.json",".factory/policy/**",".factory/agents/**",".factory/lessons/**",".factory/githooks/**",".factory/bin/**",".factory/stack/docker-compose.yaml"]` | none |
+| `implement.reviewGate.floor.categories` | Sensitive categories (auth, payments, ...) that put a PR at the floor level. | list | list of category | `["auth","payments","migration","security"]` | none |
+| `implement.reviewGate.manySystems` | A PR that touches at least this many systems is rated one level higher. | whole number | whole number of 1 or more | `3` | none |
+| `implement.reviewGate.confidence.agentWeight` | How much the triage agent's own confidence weighs in the confidence score. | number | number from 0 to 1 | `0.2` | none |
+| `implement.reviewGate.approvals.<level>` | How many human approvals a PR at each risk level (`Low` to `Severe`, or `default`) needs. | whole number | whole number of 0 or more | `1` for every level | none |
+| `implement.reviewGate.labels.approvals` | The label that tells reviewers how many approvals a PR needs (`{n}`). | text | text with `{n}` | `approvals:{n}` | none |
+| `implement.reviewGate.labels.needsHuman` | The label of a PR a person must decide. | text | text | `needs-human` | none |
+| `implement.reviewGate.labels.autoMerged` | The label of a PR the gate merged by itself. | text | text | `auto-merged` | none |
+| `implement.reviewGate.labels.mergeFailed` | The label of a PR whose automatic merge failed. | text | text | `merge-failed` | none |
+| `implement.reviewGate.labels.reopened` | The label of a ticket reopened after its PR merged. | text | text | `reopened` | none |
+| `implement.reviewGate.substantiveCommentChars` | A review comment at least this long counts as substantive for the gate's records. | whole number | whole number of 0 or more characters | `20` | none |
+| `implement.reviewGate.retro.minSample` | The fewest PRs the review gate's retro needs before it proposes a change to a level. | whole number | whole number of 1 or more | `5` | none |
+| `implement.reviewGate.retro.raiseFindRate` | A level whose reviews find problems at this rate or more is proposed for raising. | number | number from 0 to 1 | `0.3` | none |
+| `implement.reviewGate.retro.raiseEscapeRate` | A level whose merged PRs let bugs escape at this rate or more is proposed for raising. | number | number from 0 to 1 | `0.2` | none |
+| `implement.reviewGate.retro.lowerFindRate` | A level whose reviews find problems at this rate or less is proposed for lowering. | number | number from 0 to 1 | `0.05` | none |
+| `implement.autoMerge.enabled` | Lets the review gate merge a Low-risk, high-confidence bug fix by itself once its CI is green. | on/off | `true`, `false` | `true` | none |
+| `implement.autoMerge.identity` | Who merges: the developer's login, the pipeline's PR bot, or an app or token with a rule bypass. | choice | `gh-user`, `bot`, `app` | `gh-user` | none |
+| `implement.autoMerge.method` | How an auto-merged PR is merged. | choice | `squash`, `merge`, `rebase` | `squash` | none |
+| `implement.autoMerge.appTokenEnv` | The environment variable holding the token of the `app` merge identity. | text | a variable name | `REVIEW_GATE_APP_TOKEN` | none |
+| `implement.preOpen.branches` | Branch patterns whose pushes run CI before a PR exists (`null`: from the branch prefixes). | list | list of branch pattern, or `null` | `null` | none |
+| `implement.preOpen.afterOpen` | How an open PR is held while agents work on it again. | choice | `draft`, `label`, `close-reopen` | `draft` | none |
+| `implement.preOpen.wipLabel` | The blocking label of a held PR (`label` mode). | text | text | `work-in-progress` | none |
+| `implement.ci.maxFixRounds` | How many times agents try to fix CI failures on a ticket (or an epic group), counting every round: CI's checks run here before the push and before the PR, the branch's CI before the PR, and the PR's CI after it opens; a round counts in the run record when it starts, so a resumed run never gets more. Then a person decides (`0`: a person decides at once). | whole number | whole number of 0 or more rounds | `2` | `PIPELINE_CI_FIX_ROUNDS` |
+| `implement.worker.maxRetries` | How many times a ticket whose run failed is started again. | whole number | whole number of 0 or more | `2` | none |
+| `implement.worker.retryDelaySec` | How long to wait before a failed ticket's first retry; the wait doubles each time. | whole number | whole number of 0 or more seconds | `30` | none |
+| `implement.maxOrchestratorRuns` | The most times the orchestrator may run on one ticket after the subtasks are done (integration, review fixes, bug fixes, PR check fixes); when reached, the ticket stops unresolved. | whole number | whole number of 1 or more | `8` | none |
+| `implement.maxBugFixReturns` | How many times bugs found by the automated tests are sent back to the implementer before the ticket escalates. | whole number | whole number of 0 or more | `2` | none |
+| `implement.epic.maxTicketsPerGroup` | The most tickets in one pull request when an epic is split into several PRs (`null`: no limit). | whole number | whole number of 1 or more, or `null` | `null` | none |
+| `implement.maxParallel` | The most tickets worked on at the same time: an upper limit on the number worked out from free memory (`null`: no limit; `--parallel N` forces N). | whole number | whole number of 1 or more, or `null` | `null` | none |
+| `implement.reviewGate.confidence.implementRoundsAtMost` | A bug fix counts toward high confidence only if its implementation checks passed within this many rounds. | whole number | whole number of 1 or more rounds | `2` | none |
+| `implement.reviewGate.confidence.prCheckRoundsAtMost` | A bug fix counts toward high confidence only if the PR check passed within this many rounds. | whole number | whole number of 1 or more rounds | `2` | none |
+| `implement.reviewGate.confidence.highMinScore` | The confidence score out of 100 a bug fix needs to count as high confidence. | whole number | whole number from 0 to 100 | `85` | none |
+| `implement.reviewGate.floor.minLevel` | The lowest risk level a PR gets when it touches the floor's paths or categories. | choice | `Low`, `Medium`, `High`, `Severe` | `High` | none |
+| `implement.reviewGate.floor.sharedMinLevel` | The lowest risk level a PR gets when it changes shared infrastructure or a contract between services. | choice | `Low`, `Medium`, `High`, `Severe` | `High` | none |
+| `implement.waitSec.prCheck` | How long a ticket or epic run waits for a PR check to finish before the ticket ends with an incomplete PR check. | whole number | whole number of 1 or more seconds | `14400` | none |
+| `implement.waitSec.prCheckStart` | How long a run waits for the automatic PR check to start at all before treating it as not done. | whole number | whole number of 1 or more seconds | `300` | none |
+| `implement.waitSec.featureVerification` | How long a run waits for test planning and test writing to finish. | whole number | whole number of 1 or more seconds | `14400` | none |
+| `implement.pollSec.featureVerification` | How often a run checks whether test planning and test writing have finished. | whole number | whole number of 1 or more seconds | `5` | none |
+| `implement.ci.wait.timeoutSec` | How long a run waits for CI results on a PR. | whole number | whole number of 1 or more seconds | `10800` | none |
+| `implement.ci.wait.pollSec` | How often a run checks CI results. | whole number | whole number of 1 or more seconds | `30` | none |
+| `implement.ci.wait.settleSec` | How long CI must stay quiet before its result counts as final. | whole number | whole number of 0 or more seconds | `60` | none |
+| `implement.timeoutsSec.planner` | The normal time the planner may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `implement.timeoutsSec.orchestrator` | The normal time the orchestrator may take. | whole number | whole number of 1 or more seconds | `3600` | none |
+| `implement.timeoutsSec.pairImplementer` | The normal time a subtask implementer may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `implement.timeoutsSec.pairVerifier` | The normal time a pair verifier may take. | whole number | whole number of 1 or more seconds | `600` | none |
+| `implement.timeoutsSec.pairUiVerifier` | The normal time a pair UI verifier may take. | whole number | whole number of 1 or more seconds | `1200` | none |
+| `implement.timeoutsSec.checks` | The normal time the build checks after a pair round may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `implement.timeoutsSec.orchestratorFix` | The normal time one run of the main implementer may take after the subtasks. | whole number | whole number of 1 or more seconds | `5400` | none |
+| `implement.timeoutsSec.epicPlanner` | The normal time the agent that plans an epic may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `implement.requeue.outageCooldownSec` | How long tickets stay paused after the AI provider was unavailable before they are queued again. | whole number | whole number of 0 or more seconds | `3600` | none |
+| `implement.ci.wait.enabled` | Waits for CI before and after a PR opens (off: the PR says CI was not proven). | on/off | `true`, `false` | `true` | none |
+| `implement.ci.parity.enabled` | Runs CI's own checks locally before pushing. | on/off | `true`, `false` | `true` | none |
+| `implement.autoMerge.hostAutoMerge.enabled` | Lets the code host's own auto-merge finish an approved PR; off means the pipeline merges it after re-checking the final commit. | on/off | `true`, `false` | `false` | none |
+| `implement.maxCouncilRounds` | How many rounds the pair verifier (and pair UI verifier) council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `3` | none |
+| `implement.councilPassScore` | The score every blocking member of the pair verifier (and pair UI verifier) council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9.5` | none |
+| `implement.councilMembers` | How many members sit on the pair verifier and pair UI verifier councils (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `implement.orchestrator.model` | The `models.pool` entry the implement stage (the implementer agent: it implements the ticket itself or plans subtasks for pairs) orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
+| `implement.orchestrator.effort` | The implement stage orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
+| `implement.subtaskModels` | The `models.pool` entries the planner may give a subtask's pair implementer; it names one per subtask (`null`: every entry). | list | list of pool entry name (names of `models.pool` entries), or `null` | `null` | none |
+| `implement.councilIntercom` | The pair verifiers' council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
+
+### `implExclude`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `implExclude` | Paths that are never implementation (records, generated graphs): left out of diffs the verifiers and the PR check read. | list | list of path | `[".factory","graphify-out"]` | none |
+
+### `lessonsDir`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `lessonsDir` | The folder of the learned rules the retro writes for each agent. | text | a folder relative to the repository | `.factory/lessons` | none |
+
+### `lsp`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `lsp.maxLanguageServers` | The most heavy (leased) code-intelligence servers running at once on the machine. | whole number | whole number of 0 or more | `6` | `LSP_MAX_SERVERS` |
+| `lsp.idleSec` | How long the language server daemon may sit unused before it stops. | whole number | whole number of 1 or more seconds | `900` | `LSP_IDLE_SEC` |
+| `lsp.callTimeoutSec` | How long one language server call may take. | whole number | whole number of 1 or more seconds | `60` | none |
+| `lsp.diagnosticsTimeoutSec` | How long the diagnostics of one file may take. | whole number | whole number of 1 or more seconds | `20` | none |
+| `lsp.loadTimeoutSec` | How long a server that reports its own state may stay loading before calls go through anyway. | whole number | whole number of 1 or more seconds | `900` | none |
+| `lsp.prepareTimeoutSec` | How long a leased server's `prepare` command may take. | whole number | whole number of 1 or more seconds | `900` | none |
+| `lsp.check` | Probes `factory lsp check` runs: `[server, file, line, column]`. | list | list of any (`[server, file, line?, column?]` lists) | `[]` | none |
+| `lsp.servers` | The language servers, merged with the engine's and the packs' by `id` ([code intelligence](code-intelligence.md)). | list | list of object | `[{"id":"bash","extensions":[".sh",".bash"],"languageIds":["shellscript"],"command":"bash-language-server","args":["start"]},{"id":"json","extensions":[".json",".jsonc"],"languageIds":["json","jsonc"],"command":"vscode-json-language-server","args":["--stdio"],"hook":false},{"id":"yaml","extensions":[".yml",".yaml"],"languageIds":["yaml"],"command":"yaml-language-server","args":["--stdio"],"hook":false}]` | none |
+| `lsp.client.enabled` | Starts code-intelligence servers for implementation runs. | on/off | `true`, `false` | `true` | none |
+| `lsp.client.setupCmd` | The command that prepares the language servers. | command | a command line, or a list of arguments | `["node","scripts/lsp/setup.mjs"]` | none |
+| `lsp.client.lspdCmd` | The command of the language server daemon. | command | a command line, or a list of arguments | `["node","scripts/lsp/lspd.mjs"]` | none |
+| `lsp.client.timeoutSec` | How long preparing the language servers may take. | whole number | whole number of 1 or more seconds | `300` | none |
+| `lsp.client.leaseWaitSec` | How long a run waits for a free language server slot. | whole number | whole number of 0 or more seconds | `300` | none |
+| `lsp.client.leaseWaitPollSec` | How often a run waiting for a language server slot asks again. | whole number | whole number of 1 or more seconds | `15` | none |
+| `lsp.client.signaturePattern` | A pattern of the lines a signature change is recognised by, for the references check. | text | text | the common declaration styles | none |
+
+### `metrics`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `metrics.sink.type` | Where agent run records go besides the local files. | choice | `none`, `directory`, `http`, `command`, `otlp` | `none` | `FACTORY_SINK` |
+| `metrics.sink.path` | The shared folder a `directory` sink writes to. | text | text | none | none |
+| `metrics.sink.url` | The collector a `http` sink posts to. | text | a URL | none | none |
+| `metrics.sink.endpoint` | The OpenTelemetry logs endpoint an `otlp` sink posts to. | text | a URL | none | none |
+| `metrics.sink.headers` | HTTP headers of an `http` or `otlp` sink (`${NAME}` references for secrets). | map | names to string | none | none |
+| `metrics.sink.push` | The command a `command` sink pushes records with. | text | text | none | none |
+| `metrics.sink.pull` | The command a `command` sink reads records back with. | text | text, or `null` | none | none |
+| `metrics.sink.streams` | More metrics streams to ship besides the pipeline's own. | list | list of stream name | none | none |
+| `metrics.sink.scope` | On a readable sink, `all` lets the retro read every project in the store. | choice | `project`, `all` | none | none |
+
+### `metricsDir`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `metricsDir` | The folder of the agents' committed records, one file per branch and stream. | text | a folder relative to the repository | `.factory/metrics` | none |
+
+### `models`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `models.cacheTtlSec` | How long the list of models each provider offers is remembered before it is fetched again. | whole number | whole number of 0 or more seconds | `86400` | none |
+| `models.pool` | The models the pipeline may run, listed once: every agent and council member runs on one of these entries. At least one. | list | list of object | `[{"name":"opus","cli":"claude","model":"claude-opus-5-5","effort":"high"},{"name":"sonnet","cli":"claude","model":"claude-sonnet-5-5","effort":"medium"},{"name":"sol","cli":"codex","model":"gpt-6.1-sol","effort":"high"}]` | none |
+| `models.pool[].name` | An entry's short unique name; settings name the entry by it. | text | letters, digits, `.`, `-` or `_`, up to 40 | `opus` | none |
+| `models.pool[].cli` | The agent CLI the entry runs on (`custom` runs its `cmd`). | choice | `claude`, `codex`, `copilot`, `custom` | `claude` | none |
+| `models.pool[].model` | The CLI's own model id (`claude-opus-5-5` on Claude Code, `claude-opus-5.5` on Copilot, `gpt-6.1-sol` on Codex); its family (Anthropic, OpenAI, Google) is derived from it. Optional for `custom`. | text | text | `claude-opus-5-5` | none |
+| `models.pool[].effort` | The entry's reasoning effort (Claude Code's `--effort`, Codex's `model_reasoning_effort`; Copilot runs at its model's default). | choice | `low`, `medium`, `high`, `xhigh`, `max` | `high` | none |
+| `models.pool[].env` | Variables for the entry's CLI process, such as a second login's home folder; never secrets (`${NAME}` references only). | map | names to string | none | none |
+| `models.pool[].cmd` | The command a `custom` entry runs (it reads the prompt on stdin). | text | text | none | none |
+| `models.pool[].timeoutSec` | The entry's normal run time as a council member (else the stage's verifier time limit). | whole number | whole number of 1 or more seconds | none | none |
+| `models.agents.<agent>` | The `models.pool` entry one agent (named as in `agents/`, such as `pr-check-judge`) runs on; `default` for every agent with none of its own. The environment variable names one entry every agent runs on, for experiments. | text | a `models.pool` entry name | none | `PIPELINE_MODEL_OVERRIDE` |
+
+### `orchestrator`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `orchestrator.model` | The `models.pool` entry every stage's orchestrator runs on: it decides whether to do the stage's producing work itself or delegate it, and it never verifies its own work. | text | a `models.pool` entry name | `opus` | none |
+| `orchestrator.effort` | The orchestrators' reasoning effort (`null`: the pool entry's own). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
+
+### `policy`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `policy` | New services for the architecture policy, declared in app.json only ([architecture policy](architecture-policy.md)); never merged into the settings. | object | see the linked page | none | none |
+
+### `prCheck`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `prCheck.timeoutSec` | The normal time a PR check critic, defender or judge may take. | whole number | whole number of 1 or more seconds | `1800` | none |
+| `prCheck.fixTimeoutSec` | The normal time one run of the PR check's fixer may take. | whole number | whole number of 1 or more seconds | `3600` | none |
+| `prCheck.maxDiffChars` | The most characters of a PR's diff the critics read. | whole number | whole number of 1 or more characters | `400000` | none |
+| `prCheck.hook.enabled` | Runs the automatic PR check when the implementer finishes. | on/off | `true`, `false` | `true` | `PR_CHECK_SKIP` |
+| `prCheck.hook.requireTests` | Makes the automatic PR check wait until the tests are verified. | on/off | `true`, `false` | `true` | none |
+| `prCheck.hook.pollSec` | How often the automatic PR check looks whether the tests are verified. | whole number | whole number of 1 or more seconds | `20` | none |
+| `prCheck.exclude` | Paths the PR check leaves out of the diff. | list | list of path | `[".factory/state",".factory/metrics","graphify-out"]` | none |
+| `prCheck.conventions` | Documents the style critic checks the PR against. | list | list of path | `["AGENTS.md","CONTRIBUTING.md",".editorconfig",".markdownlint.json",".factory/agents/implementer.md"]` | none |
+| `prCheck.infraPaths` | Changes to shared test setup, build and CI files the harness lists whatever the critics say (regular expressions). | list | list of regular expression | `["(^\|\\/)[^/]*(Fixture\|Collection\|TestBase\|TestSetup\|WebApplicationFactory)[^/]*\\.(cs\|ts\|js\|mjs\|py\|java\|kt)$","(^\|\\/)(xunit\\.runner\\.json\|[^/]*\\.runsettings\|conftest\\.py\|pytest\\.ini\|global-setup\\.[jt]s\|global-teardown\\.[jt]s)$","(^\|\\/)(playwright\|jest\|vitest\|karma\|cypress)[^/]*\\.config\\.[cm]?[jt]s$","(^\|\\/)[^/]*\\.(csproj\|fsproj\|sln\|slnx\|props\|targets)$","(^\|\\/)(Directory\\.Build\\.[^/]+\|Directory\\.Packages\\.props\|global\\.json\|nuget\\.config\|NuGet\\.Config\|package\\.json\|package-lock\\.json\|pnpm-lock\\.yaml\|yarn\\.lock\|requirements[^/]*\\.txt\|pyproject\\.toml\|go\\.mod\|pom\\.xml\|build\\.gradle(\\.kts)?)$","(^\|\\/)(Dockerfile[^/]*\|docker-compose[^/]*\\.ya?ml\|compose[^/]*\\.ya?ml)$","^\\.github\\/workflows\\/[^/]+\\.ya?ml$","(^\|\\/)(\\.gitlab-ci\\.yml\|azure-pipelines[^/]*\\.ya?ml\|Jenkinsfile)$"]` | none |
+| `prCheck.video.extensions` | File extensions the PR check reads as videos. | list | list of extension | `[".webm",".mp4",".mov",".mkv"]` | none |
+| `prCheck.video.defaultDirs` | Folders the PR check looks for videos in. | list | list of folder | `["artifacts/e2e-videos","test-results"]` | none |
+| `prCheck.video.maxFrames` | The most still frames the PR check looks at per video. | whole number | whole number of 1 or more | `48` | none |
+| `prCheck.video.maxTotalFrames` | The most frames across all of a PR's videos. | whole number | whole number of 1 or more | `60` | none |
+| `prCheck.video.minFramesPerVideo` | The fewest frames taken from each video, whatever the total. | whole number | whole number of 1 or more | `6` | none |
+| `prCheck.video.minIntervalSec` | The shortest time between two frames of a video without narrated steps. | number | number of 0 or more seconds | `1` | none |
+| `prCheck.video.width` | The width frames are scaled to. | whole number | whole number of 1 or more pixels | `1280` | none |
+| `prCheck.video.framesPerStep` | How many frames the PR check takes from each step of a narrated video. | whole number | whole number of 1 or more | `1` | none |
+| `prCheck.returnToImplementation.maxReturns` | How many times a PR check failure can send the code back to the implementer before a person decides. | whole number | whole number of 0 or more | `2` | none |
+| `prCheck.maxDebateTurns` | How many times the PR check's critics and defender answer each other in each round before the judge rules. | whole number | whole number of 0 or more | `2` | none |
+| `prCheck.fixMinSeverity` | The least serious PR check finding that is fixed before a feature's PR opens; less serious ones are only listed. | choice | `blocking`, `major`, `minor` | `major` | none |
+| `prCheck.bugFixMinSeverity` | The same, for bug-fix PRs. | choice | `blocking`, `major`, `minor` | `minor` | none |
+| `prCheck.returnToImplementation.minSeverity` | The least serious PR check finding about the production code that goes back to the implementer; less serious ones go to the PR check's own fixer. | choice | `blocking`, `major`, `minor` | `major` | none |
+| `prCheck.returnToImplementation.implementationLenses` | The PR check lenses whose findings are about the production code. | list | list of lens | `["acceptance","flow","design","correctness","security","ui","rewrite"]` | none |
+| `prCheck.returnToImplementation.lightLenses` | The PR check lenses whose findings stay with the light fixer when they name no production file. | list | list of lens | `["video","style","test-value"]` | none |
+| `prCheck.returnToImplementation.lightPaths` | Files that are only tests, docs or pipeline records: a finding about them alone stays with the light fixer. | list | list of glob | `["tests/**","test/**","e2e/**","**/*.spec.*","**/*.test.*","**/*Tests/**","**/*.Tests/**","**/*.md","docs/**",".factory/plans/**",".factory/stack/scenarios/**",".factory/metrics/**"]` | none |
+| `prCheck.hook.waitForTestsSec` | How long the automatic PR check waits for the tests to be verified before it gives up. | whole number | whole number of 0 or more seconds | `86400` | none |
+| `prCheck.mode` | What the PR check does before a ticket's or an epic's PR opens: fix what it finds, only report, or not run. | choice | `fix`, `report`, `off` | `fix` | none |
+| `prCheck.returnToImplementation.enabled` | Sends PR check findings about the production code back to the implementer. | on/off | `true`, `false` | `true` | none |
+| `prCheck.fixLenses` | Kinds of PR check findings that are always fixed, whatever their severity. | list | list of lens | `[]` | none |
+| `prCheck.maxCouncilRounds` | How many rounds the PR check gets, in delivery, in an epic, in a CI fix and by hand (`--max-rounds` overrides it for a run by hand), before it escalates. | whole number | whole number from 1 to 50 rounds | `3` | none |
+| `prCheck.councilPassScore` | The score every blocking member of the PR check council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9.5` | none |
+| `prCheck.councilMembers` | How many members sit on the PR check council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `prCheck.orchestrator.model` | The `models.pool` entry the PR check orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
+| `prCheck.orchestrator.effort` | The PR check orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
+| `prCheck.councilIntercom` | The PR check council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
+
+### `project`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `project.name` | Names machine-wide state (stack project, language server sockets), so two repositories on one machine never collide. | text | text | the main checkout's folder name | none |
+| `project.languages` | The language packs (`packs/<id>/`) in use. | list | list of pack id | `[]` | none |
+| `project.toolPaths` | Folders added to `PATH` for every command and agent the pipeline starts. | list | list of folder (`~` allowed) | `[]` | none |
+| `project.services` | The buildable units: their paths, unit tests and dependencies; drives subtask planning, unit tests, stack rebuilds and the review gate's systems. | list | list of object | `[]` | none |
+| `project.services[].name` | A service's name. | text | text | none | none |
+| `project.services[].kind` | What a service is. | choice | `backend`, `frontend`, `worker`, `library`, `host` | none | none |
+| `project.services[].paths` | The paths that belong to a service. | list | list of glob | none | none |
+| `project.services[].unitTests` | Where a service's unit tests are (`{project}` in `implement.unitTests.cmd`). | text | text, or `null` | none | none |
+| `project.services[].testProjects` | Other test projects that cover a service. | list | list of path | none | none |
+| `project.services[].dependsOn` | The services a service depends on. | list | list of service name | none | none |
+| `project.services[].partOf` | The one service a library belongs to. | text | text | none | none |
+| `project.services[].ui` | Marks a library that holds user interface components. | on/off | `true`, `false` | none | none |
+| `project.frontendPaths` | Which files count as user interface: screen checks, design review and demo videos apply only to changes here. | list | list of glob | `[]` | none |
+| `project.testRoots` | The folders where tests live; with `implExclude` it separates implementation from tests. | list | list of folder | `[]` | none |
+
+### `prune`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `prune.enabled` | Runs the automatic disk prune; the free-space check at the start of a run stays. | on/off | `true`, `false` | `true` | `FACTORY_PRUNE` |
+| `prune.minFreeGb` | The free disk space a run needs to start or go on (`null`: no check). | number | number of 0 or more GB, or `null` | `20` | `FACTORY_DISK_MIN_GB` |
+| `prune.buildDirs` | Build folders removed from idle pipeline worktrees. | list | list of folder | `[".factory/state/teststack","artifacts","test-results","playwright-report"]` | none |
+| `prune.buildDirNames` | Git-ignored folder names removed from idle pipeline worktrees. | list | list of folder name | `["bin","obj"]` | none |
+| `prune.slotMaxGb` | Leftovers of a stack copy larger than this may be cleaned up (`null`: no size cap). | number | number of 0 or more GB, or `null` | `4` | none |
+| `prune.worktreeDays` | A ticket's worktree is removed this long after its PR merged or closed (`null`: never). | whole number | whole number of 0 or more days, or `null` | `7` | none |
+| `prune.keepInstalls` | The newest engine installs that are always kept. | whole number | whole number of 0 or more | `3` | none |
+| `prune.installRepos` | Other repositories on this machine whose pinned engine installs are kept. | list | list of path | `[]` | none |
+| `prune.analysisCacheDays` | Analysis tools and rule sources unused this long are removed from the machine's cache. | whole number | whole number of 0 or more days | `30` | none |
+| `prune.analysisReports` | Analysis reports beyond the newest this many commits are removed. | whole number | whole number of 0 or more | `200` | none |
+| `prune.analysisBaseDays` | Analysis merge-base caches unused this long are removed. | whole number | whole number of 0 or more days | `14` | none |
+| `prune.afterDelivery` | Alpha: removes what a delivered run made on this machine once the delivery remote confirms it. | on/off | `true`, `false` | `false` | none |
+| `prune.keepLocal` | Keeps what a delivered run made, for debugging (with `afterDelivery` on). | on/off | `true`, `false` | `false` | `FACTORY_KEEP_LOCAL` |
+| `prune.idleSec` | Files a run touched more recently than this are never cleaned up. | whole number | whole number of 0 or more seconds | `3600` | none |
+| `prune.slotMaxAgeSec` | Leftovers of a stack copy older than this may be cleaned up. | whole number | whole number of 0 or more seconds | `86400` | none |
+| `prune.imageMinAgeSec` | Old app images younger than this are kept. | whole number | whole number of 0 or more seconds | `10800` | none |
+
+### `prVideo`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `prVideo.specPatterns` | The e2e specs whose recordings demo a PR (empty: no spec is ever picked). | list | list of glob | `[]` | none |
+| `prVideo.videosDir` | Where the Playwright reporter writes the raw videos, the step logs and the manifest. | text | text | `artifacts/e2e-videos` | none |
+| `prVideo.storageBranch` | The branch the published videos are stored on. | text | text | `pr-videos` | none |
+| `prVideo.backendPaths` | Globs of backend code (empty: the paths of every service whose kind is not `frontend`). | list | list of glob | `[]` | none |
+| `prVideo.neutralPaths` | Globs that count as neither frontend nor backend. | list | list of glob | `[]` | none |
+| `prVideo.api.extractor` | The built-in route extractor the API changes section reads endpoints with. | text | text, or `null` | `null` | none |
+| `prVideo.api.sources` | The source files the route extractor reads. | list | list of glob | `[]` | none |
+| `prVideo.api.exclude` | Source files the route extractor leaves out. | list | list of glob | `[]` | none |
+| `prVideo.api.openapi` | OpenAPI documents the API changes section compares instead of extracted routes. | list | list of path | `[]` | none |
+| `prVideo.recordCmd` | How the specs are run in demo mode (`{specs}`: the changed spec files). | text | a command line with `{specs}` | `npx playwright test -c playwright.teststack.config.ts --project scenarios --no-deps --timeout 900000 {specs}` | none |
+| `prVideo.slotWaitSec` | How long the demo video step waits for a free test-stack slot. | whole number | whole number of 0 or more seconds | `3600` | none |
+| `prVideo.localTimeoutSec` | How long the whole local demo video step may take. | whole number | whole number of 1 or more seconds | `5400` | none |
+| `prVideo.testTimeoutSec` | The shortest timeout a test gets in demo mode, so a spec's own timeout cannot cut a recording short. | whole number | whole number of 1 or more seconds | `900` | none |
+
+### `recovery`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `recovery.startingGraceSec` | How long a background run may take to start before it counts as dead. | whole number | whole number of 1 or more seconds | `120` | none |
+| `recovery.maxRetries` | How many times a background run that died (test writing, PR check, review) is restarted. | whole number | whole number of 0 or more | `3` | none |
+| `recovery.retryDelaySec` | How long to wait before the first restart of a dead background run; the wait doubles each time. | whole number | whole number of 0 or more seconds | `60` | none |
+
+### `resources`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `resources.reserveGb` | Memory kept free for the rest of the machine when sizing parallel runs. | number | number of 0 or more GB | `6` | none |
+| `resources.worktreeGb` | Memory one ticket's worktree is counted at. | number | number of 0 or more GB | `3` | none |
+| `resources.agentGb` | Memory one agent is counted at. | number | number of 0 or more GB | `0.5` | none |
+| `resources.lspServerGb` | Memory one language server is counted at. | number | number of 0 or more GB | `0.8` | none |
+| `resources.stackGb` | Memory one app stack copy is counted at. | number | number of 0 or more GB | `1.6` | none |
+| `resources.dockerOverheadGb` | Memory Docker itself is counted at. | number | number of 0 or more GB | `1` | none |
+| `resources.waitPollSec` | How often a run waiting for memory checks again. | whole number | whole number of 1 or more seconds | `15` | none |
+| `resources.maxWaitSec` | How long a run waits for memory before it starts anyway. | whole number | whole number of 0 or more seconds | `1800` | none |
+
+### `retro`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `retro.factory.enabled` | Lets the retro propose changes to the factory itself, as a branch pushed to `source`. | on/off | `true`, `false` | `true` | none |
+| `retro.factory.source` | The repository the retro's factory proposal branch is pushed to. | text | text, or `null` | the pin's `source`, else the install's `origin` | none |
+| `retro.factory.allowedPaths` | The factory folders a retro proposal may touch. | list | list of folder | `["agents/","docs/","templates/","skills/"]` | none |
+| `retro.factory.evidence` | How much of this repository's run data the factory proposal quotes. | choice | `summary`, `none` | `summary` | none |
+| `retro.enabled` | Runs the retro that reviews the agents' recorded decisions and proposes fixes. | on/off | `true`, `false` | `true` | none |
+| `retro.allowedPaths` | Which repository folders the retro may propose changes to. | list | list of folder | `[".factory/agents/",".factory/policy/"]` | none |
+| `retro.windowDays` | How far back the retro looks when it has never run before. | whole number | whole number of 1 or more days | `7` | none |
+| `retro.intervalDays` | How often the lessons and the retro run when started as "if due". | whole number | whole number of 1 or more days | `7` | none |
+| `retro.lessons.storyThreshold` | A rule is added when a denial category recurs in this many tickets and no rule covers it. | whole number | whole number of 1 or more | `3` | none |
+| `retro.lessons.maxRules` | The most rules a lessons file keeps. | whole number | whole number of 1 or more | `15` | none |
+| `retro.lessons.retireAfterStories` | A rule is retired when its category has not recurred for this many tickets. | whole number | whole number of 1 or more | `10` | none |
+| `retro.lessons.revertMinRounds` | A rule is reverted when, after this many verifier rounds, its category's denial rate did not drop. | whole number | whole number of 1 or more rounds | `6` | none |
+| `retro.lessons.examplesPerCategory` | Examples per category in the digest the retro agent reads. | whole number | whole number of 0 or more | `5` | none |
+
+### `stack`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `stack.poolSize` | How many copies of the app stack (slots) may run at once. | whole number | whole number of 1 or more | `2` | `TESTSTACK_SLOTS` |
+| `stack.maxSlot` | The highest slot number. | whole number | whole number of 1 or more | `8` | none |
+| `stack.slotStride` | How far apart two slots' host ports are. | whole number | whole number of 1 or more | `1000` | none |
+| `stack.stackMemoryMb` | Memory one app stack copy is counted at. | whole number | whole number of 1 or more MB | `2000` | none |
+| `stack.composeProject` | The compose project name of slot 0 (slot n appends `-n`). | text | text, or `null` | `<project name>-teststack` | none |
+| `stack.imageTag` | The tag given to images named through an environment variable (slot n appends `-n`). | text | text, or `null` | `<project name>-teststack` | none |
+| `stack.stateDir` | The stack's generated state (env file, build stamps, slots). | text | text | `.factory/state/teststack` | none |
+| `stack.composeFile` | The compose file, relative to the repository. | text | text | `.factory/stack/docker-compose.yaml` | none |
+| `stack.envTemplate` | An env file listing every variable the compose file needs. | text | text, or `null` | `null` | none |
+| `stack.env` | Fixed, test-only values written to the stack's env file. | map | names to string | `{}` | none |
+| `stack.ports` | Host ports per name: `base` on slot 0 and the `env` variable the compose file publishes it with. | map | names to object | `{}` | none |
+| `stack.urls` | URLs for people, tests and agents, with `{port:<name>}` placeholders. | map | names to string | `{}` | none |
+| `stack.baseUrl` | The URL tests start from (`null`: the first). | text | text, or `null` | `null` | none |
+| `stack.services` | Compose services whose images are built from the repository, with their inputs. | map | names to `{ inputs, image, project }`, or a list of inputs | `{}` | none |
+| `stack.resolver` | A module that computes more inputs per service. | text | text, or `null` | `null` | none |
+| `stack.rebuildAll` | Inputs that affect every image. | list | list of glob | `[]` | none |
+| `stack.build.all` | The shell command that builds every image (`null`: `docker compose build`). | text | text, or `null` | `null` | none |
+| `stack.build.service` | The shell command that builds one image (`{service}`). | text | text, or `null` | `null` | none |
+| `stack.build.serviceNext` | The command for the second and later services of one rebuild. | text | text, or `null` | `null` | none |
+| `stack.build.env` | The environment of the build and publish commands. | map | names to string | `{}` | none |
+| `stack.build.envFile` | The env file `build.all` writes with the image names (or a list of candidates). | any | a file name, or a list of them (`*` allowed) | `null` | none |
+| `stack.build.builtTag` | The tag the build gives its images before they are retagged per slot. | text | text | `latest` | none |
+| `stack.build.inputs` | What the build hashes to decide whether the images are current. | list | list of glob | `["."]` | none |
+| `stack.build.exclude` | What the build's hash leaves out. | list | list of glob | `[]` | none |
+| `stack.publish` | A shell command that generates the compose file into `{out}`. | text | text, or `null` | `null` | none |
+| `stack.publishCheck` | A shell command for `publish --check`. | text | text, or `null` | `null` | none |
+| `stack.publishAppHost` | The application host project the compose file is published from. | text | text | none | none |
+| `stack.publishOverrides` | The test-only overrides of a published stack. | object | see the linked page | none | none |
+| `stack.leaseTtlSec` | How long a borrowed copy of the app stack stays reserved without a renewal. | whole number | whole number of 1 or more seconds | `14400` | none |
+
+### `stateDir`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `stateDir` | The folder of the machine's own state: runs, logs, the ticket cache and the metrics spool (ignored by git). | text | a folder relative to the repository | `.factory/state` | none |
+
+### `storyGuard`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `storyGuard.enabled` | Keeps agents from reading ticket folders other than the ones handed to their run. | on/off | `true`, `false` | `true` | none |
+| `storyGuard.folders` | The folders of cached tickets the guard protects. | list | list of folder | `[".factory/state/board"]` | none |
+| `storyGuard.denyPaths` | More paths no pipeline agent may read. | list | list of glob | `[]` | none |
+| `storyGuard.denyHosts` | Network hosts no pipeline agent may reach (added to `FACTORY_GUARD_DENY_HOSTS`). | list | list of host name | `[]` | none |
+| `storyGuard.denyRepos` | Repositories whose tickets no pipeline agent may read (added to `FACTORY_GUARD_DENY_REPOS`). | list | list of `owner/name` | `[]` | none |
+| `storyGuard.installReadable` | Lets pipeline agents read the factory's own install. | on/off | `true`, `false` | `false` | none |
+| `storyGuard.networkOpen` | Lets pipeline agents reach any network host the deny lists do not name. | on/off | `true`, `false` | `false` | none |
+
+### `testAutomation`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `testAutomation.maxCouncilRounds` | How many rounds the test automation council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `5` | none |
+| `testAutomation.councilPassScore` | The score every blocking member of the test automation council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9` | none |
+| `testAutomation.councilMembers` | How many members sit on the test automation council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `testAutomation.orchestrator.model` | The `models.pool` entry the test automation stage orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
+| `testAutomation.orchestrator.effort` | The test automation stage orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
+| `testAutomation.councilIntercom` | The test automation council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
+
+### `testPlan`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `testPlan.maxCouncilRounds` | How many rounds the test plan council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `5` | none |
+| `testPlan.councilPassScore` | The score every blocking member of the test plan council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9` | none |
+| `testPlan.councilMembers` | How many members sit on the test plan council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `testPlan.orchestrator.model` | The `models.pool` entry the test plan stage orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
+| `testPlan.orchestrator.effort` | The test plan stage orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
+| `testPlan.councilIntercom` | The test plan council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
+
+### `teststack`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `teststack.scenariosDir` | The folder where test data scenarios are written and loaded from. | text | a folder relative to the repository | `.factory/stack/scenarios` | none |
+| `teststack.baseScenario` | The scenario loaded before every scenario (`null`: none). | text | text, or `null` | `_base` | none |
+| `teststack.defaultScenario` | The scenario `teststack up` loads. | text | text | `default` | none |
+| `teststack.stores` | The data stores and how a scenario loads into each ([test stack](test-stack.md)). | map | names to object | `{}` | none |
+| `teststack.infrastructureServices` | Compose services that must run but are not the application. | list | list of service name | `[]` | none |
+| `teststack.services` | The application's compose services, with the URL that proves each is ready. | list | list of object | `[]` | none |
+| `teststack.restartAfterLoad` | Services that cache state a scenario load invalidates. | list | list of any (service names, or `{ service, when, sequences }`) | `[]` | none |
+| `teststack.commands` | Extra test stack commands: name to module. | map | names to string | `{}` | none |
+| `teststack.timeoutSec` | How long a test stack command, such as loading a scenario, may take. | whole number | whole number of 1 or more seconds | `300` | none |
+| `teststack.healAfterSec` | How long a service may stay unready while its stores are healthy before it is restarted once (0: never). | whole number | whole number of 0 or more seconds | `60` | none |
+
+### `tickets`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `tickets.dir` | The folder, inside the repository, where the story board's tickets are cached for the run. | text | a folder relative to the repository | `.factory/state/board` | none |
+| `tickets.repo` | The GitHub repository (`owner/name`) that holds the tickets. | text | `owner/name`, or `null` | the GitHub `origin` of the checkout | none |
+| `tickets.assetsBranch` | The branch the board publishes ticket assets (mockups, screenshots) to. | text | text | `board-assets` | none |
+| `tickets.legacyDir` | A folder of tickets in the older file format that `board migrate` reads. | text | a folder relative to the repository, or `null` | none | none |
+| `tickets.spikeEpic` | The epic `board migrate` files legacy research spikes under (`key`, `title`). | object | see the linked page | `{"key":"epic-research-spikes","title":"Research spikes"}` | none |
+
+### `tracker`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `tracker` | The ticket tracker the factory acts on; [providers](providers/README.md) lists each one's keys. | object | see the linked page | the code host's own tracker | none |
+| `tracker.type` | Which ticket tracker holds the tickets. | choice | `github`, `jira`, `azure-boards`, `gitlab`, `linear`, `custom` | the code host's own (`github`, `azure-boards`, `gitlab`) | none |
+| `tracker.url` | The tracker's site or server. | text | a URL | none | none |
+| `tracker.project` | The tracker's project (Jira key, Azure DevOps project, GitLab path, Linear team key). | text | text | none | none |
+| `tracker.auth` | The tracker's credentials as `${NAME}` references (`user` and `token`, or `token`). | object | see the linked page | none | none |
+| `tracker.board` | The tracker's board the pipeline moves tickets on. | object | see the linked page | none | none |
+| `tracker.lanes` | The pipeline's lanes mapped to the tracker's statuses or columns. | map | names to string | none | none |
+| `tracker.types` | The pipeline's ticket types mapped to the tracker's types. | map | names to string | none | none |
+| `tracker.fields` | The pipeline's fields (severity, impact, ...) mapped to the tracker's field ids or names. | map | names to string | none | none |
+| `tracker.command` | The command of a `custom` tracker adapter. | text | text | none | none |
+| `tracker.env` | Variables for a `custom` adapter's process (`${NAME}` references). | map | names to string | none | none |
+| `tracker.timeoutSec` | How long one call of a `custom` adapter may take. | whole number | whole number of 1 or more seconds | `60` | none |
+| `tracker.capabilities` | What a `custom` tracker adapter can do. | object | see the linked page | none | none |
+
+### `video`
+
+| Setting | What it does | Type | Allowed values | Default | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| `video.narration.enabled` | Speaks each step of a demo video (`false`: silent videos with subtitles). | on/off | `true`, `false` | `true` | none |
+| `video.narration.voice` | The Kokoro voice of the narration. | text | text | `af_heart` | none |
+| `video.narration.speed` | The narration's speaking speed. | number | number from 0.5 to 2 | `1` | none |
+| `video.narration.lang` | The narration's language. | text | text | `en-us` | none |
+| `video.narration.model` | The narration model (only the quantized one is pinned). | choice | `int8` | `int8` | none |
+| `video.size.width` | The recording width and viewport in demo mode. | whole number | whole number of 1 or more pixels | `1280` | none |
+| `video.size.height` | The recording height and viewport in demo mode. | whole number | whole number of 1 or more pixels | `720` | none |
+| `video.ffmpeg` | A path to the team's own ffmpeg build (`null`: the pinned one). | text | text, or `null` | `null` | none |
+| `video.licenceReview` | `strict` turns narration off while any of its licence items is pending review. | choice | `default`, `strict` | `default` | none |
+| `video.script.scope` | Which videos the demo-narrator agent writes a script for. | choice | `headline`, `all`, `none` | `headline` | none |
+| `video.script.timeoutSec` | The normal time the narrator may take. | whole number | whole number of 1 or more seconds | `600` | none |
+| `video.script.maxSegmentChars` | The longest narrated line. | whole number | whole number of 1 or more characters | `280` | none |
+| `video.script.maxOpeningChars` | The longest opening line. | whole number | whole number of 1 or more characters | `240` | none |
+| `video.script.maxCloseChars` | The longest closing line. | whole number | whole number of 1 or more characters | `200` | none |
+| `video.script.maxTotalChars` | The longest whole script. | whole number | whole number of 1 or more characters | `2400` | none |
+| `video.script.maxSegments` | The most narrated lines in a script. | whole number | whole number of 1 or more | `16` | none |
+| `video.script.minWordsPerAction` | The words a line needs per user action it covers. | whole number | whole number of 0 or more | `5` | none |
+| `video.script.speakEvidence` | Narrates evidence videos aloud too (`false`: subtitled and silent). | on/off | `true`, `false` | `false` | none |
+| `video.bugPair.enabled` | Records a before-the-fix video for UI bugs. | on/off | `true`, `false` | `true` | none |
+| `video.bugPair.requireBefore` | A bug whose reproduction cannot be shown before the fix opens no PR (the delivery escalates). | on/off | `true`, `false` | `false` | none |
+| `video.apiEvidence.enabled` | Shows a backend bug's requests before and after the fix. | on/off | `true`, `false` | `true` | none |
+| `video.apiEvidence.headers` | The request and response headers shown (credentials are masked by name whatever this says). | list | list of header name | `["content-type","location","allow","retry-after","accept","x-requestid","x-request-id","idempotency-key","x-idempotency-key","x-correlation-id","if-match","if-none-match"]` | none |
+| `video.apiEvidence.maxBodyBytes` | A body is cut at this size. | whole number | whole number of 0 or more bytes | `1500` | none |
+| `video.apiEvidence.maxPairs` | Request pairs shown per bug in the PR; the rest are collapsed. | whole number | whole number of 0 or more | `3` | none |
+| `video.apiEvidence.paymentBodies` | A payment exchange shows only its method, path and status (`withhold`), or its headers and bodies with card data masked (`mask`). | choice | `withhold`, `mask` | `withhold` | none |
+| `video.pacing.stepDelaySec` | While recording: the pause before each step. | number | number with at most 3 decimal places of 0 or more seconds | `0.7` | none |
+| `video.pacing.holdSec` | While recording: the hold after each visible change. | number | number with at most 3 decimal places of 0 or more seconds | `1.5` | none |
+| `video.pacing.typeDelaySec` | While recording: the delay between typed characters. | number | number with at most 3 decimal places of 0 or more seconds | `0.09` | none |
+| `video.pacing.cursorSec` | While recording: the time a cursor move takes. | number | number with at most 3 decimal places of 0 or more seconds | `0.6` | none |
+| `video.pacing.pauseSec` | In the rendered video: the pause after each narrated line. | number | number with at most 3 decimal places of 0 or more seconds | `0.6` | none |
+<!-- /generated:settings -->

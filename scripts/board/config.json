@@ -1,9 +1,4 @@
 {
-  "agent": {
-    "models": {
-      "escalationQuestions": "sonnet"
-    }
-  },
   "board": {
     "owner": null,
     "ownerType": "user",
@@ -34,7 +29,9 @@
     "questions": {
       "maxQuestions": 3,
       "timeoutSec": 300,
-      "logTailChars": 4000
+      "logTailChars": 4000,
+      "noteChars": 6000,
+      "storyChars": 6000
     },
     "epicLabel": "epic",
     "spikeLabel": "spike",
@@ -43,7 +40,13 @@
       "timeoutSec": 1800,
       "maxExchanges": 60,
       "maxBodyChars": 1500,
-      "maxCommentChars": 60000
-    }
+      "maxCommentChars": 60000,
+      "extensions": [
+        ".ts",
+        ".js",
+        ".mjs"
+      ]
+    },
+    "shared": false
   }
 }

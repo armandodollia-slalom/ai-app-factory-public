@@ -11,13 +11,15 @@
 // interview({ detected, config, pin, ask?, answers?, probe? }) -> { config, pin, asked: [{ id, question, answer, source }] }
 import { CI_FOR_HOST, DEFAULT_URLS, TRACKER_FOR_HOST } from '../../pipeline/lib/products.mjs';
 import { packAnalysis } from '../../pipeline/lib/analysis/config.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
+import { familyOf } from '../../pipeline/lib/pool.mjs';
 
 export const HOSTS = ['github', 'gitlab', 'azure-devops', 'bitbucket', 'custom'];
 export const TRACKERS = ['github', 'jira', 'azure-boards', 'gitlab', 'linear', 'custom'];
 export const CI_SYSTEMS = ['github-actions', 'gitlab-ci', 'azure-pipelines', 'jenkins', 'circleci', 'bitbucket-pipelines', 'custom'];
 export const AGENT_CLIS = ['claude', 'codex', 'copilot', 'gemini', 'cursor'];
 export const LANES = ['backlog', 'ready', 'inProgress', 'testing', 'review', 'failed', 'done'];
-const LANE_DEFAULTS = { backlog: 'Backlog', ready: 'Ready', inProgress: 'In Progress', testing: 'Testing', review: 'Pending Review', failed: 'Failed', done: 'Done' };
+const LANE_DEFAULTS = defaultSettings().board.columns;
 export const SCANNERS = ['none', 'semgrep', 'codeql', 'snyk-code', 'snyk-open-source', 'sonarqube', 'checkmarx', 'veracode'];
 const TOKEN_DEFAULTS = { gitlab: 'GITLAB_TOKEN', 'azure-devops': 'AZURE_DEVOPS_TOKEN', bitbucket: 'BITBUCKET_TOKEN', jira: 'JIRA_API_TOKEN', 'azure-boards': 'AZURE_DEVOPS_TOKEN', linear: 'LINEAR_API_KEY', jenkins: 'JENKINS_API_TOKEN', circleci: 'CIRCLECI_TOKEN', 'bitbucket-pipelines': 'BITBUCKET_TOKEN' };
 // The commercial definitions (packs/commercial/analysis.json): the variable each vendor's CLI reads, its modes, licence.
@@ -56,6 +58,32 @@ const trackerType = (ctx) => ctx.answers['tracker.type'] ?? ctx.config.tracker?.
 const ciType = (ctx) => ctx.answers['ci.provider'] ?? ctx.config.ci?.provider ?? CI_FOR_HOST[hostType(ctx)] ?? (hostType(ctx) === 'bitbucket' ? 'bitbucket-pipelines' : 'github-actions');
 
 // Code host
+// Each CLI's own id for the model names people answer with (a CLI's own id is kept as it is).
+const KNOWN_IDS = {
+  claude: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' },
+  copilot: { opus: 'claude-opus-5.5', sonnet: 'claude-sonnet-5.5', sol: 'gpt-6.1-sol' },
+  codex: { sol: 'gpt-6.1-sol' },
+};
+const poolOfAnswers = (c, cli) => (c.config.models?.pool ?? []).filter((e) => e.cli === cli).map((e) => ({ ...e, alias: Object.entries(KNOWN_IDS[cli] ?? {}).find(([, id]) => id === e.model)?.[0] ?? e.model }));
+// The CLI's entries of the pool, replaced by the models answered; an entry is named after its model, with its CLI when
+// another CLI already has that name. The first entry is every agent's default when none is set yet.
+function setPool(c, cli, models) {
+  const others = (c.config.models?.pool ?? []).filter((e) => e.cli !== cli);
+  const taken = new Set(others.map((e) => e.name));
+  const mine = models.map((m) => {
+    const name = taken.has(m) ? `${cli}-${m}` : m;
+    taken.add(name);
+    return { name: name.replace(/[^\w.-]/g, '-'), cli, model: KNOWN_IDS[cli]?.[m] ?? m, effort: 'high' };
+  });
+  set(c.config, 'models.pool', [...others, ...mine]);
+  if (!c.config.models.agents?.default && mine.length) set(c.config, 'models.agents.default', mine[0].name);
+  // An agent whose default entry is not in this pool runs on the pool's default entry.
+  const names = new Set(c.config.models.pool.map((e) => e.name));
+  for (const [agent, name] of Object.entries(defaultSettings().models.agents)) {
+    if (agent !== 'default' && !names.has(c.config.models.agents?.[agent] ?? name)) set(c.config, `models.agents.${agent}`, c.config.models.agents.default);
+  }
+}
+
 q('host.type', 'Code host', 'Which code host holds this repository?', 'choice', hostType, (c, v) => set(c.config, 'host.type', v), { choices: HOSTS });
 q('host.url', 'Code host', 'Its base URL (a self-managed server, GitHub Enterprise, Azure DevOps Server)?', 'text', (c) => c.config.host?.url ?? (c.detected?.host?.type === hostType(c) ? c.detected.host.url : null) ?? DEFAULT_URLS[hostType(c)] ?? '', (c, v) => (v && v !== DEFAULT_URLS[hostType(c)] ? set(c.config, 'host.url', v) : null), { when: (c) => hostType(c) !== 'custom' });
 q('host.repo', 'Code host', 'The repository (owner/name; group/project; organization/project/repository; workspace/repository)?', 'text', (c) => c.config.host?.repo ?? (c.detected?.host?.type === hostType(c) ? c.detected.host.repo : null) ?? '', (c, v) => (v ? set(c.config, 'host.repo', v) : null));
@@ -72,7 +100,7 @@ q('tracker.board', 'Ticket board', 'The board (Jira board id; Azure DevOps team;
   else set(c.config, trackerType(c) === 'azure-boards' ? 'tracker.board.team' : 'tracker.board.id', v);
 });
 q('tracker.existing', 'Ticket board', 'Use an existing board as it is (yes), or let `board setup` create the missing lanes, labels and fields (no)? Existing statuses are never renamed or removed either way.', 'bool', (c) => c.config.tracker?.board?.existing ?? Boolean(c.config.board?.projectNumber ?? c.config.tracker?.board?.id), (c, v) => set(c.config, trackerType(c) === 'github' ? 'board.existing' : 'tracker.board.existing', yes(v)));
-q('tracker.shared', 'Ticket board', 'Is the board shared with other teams or repositories? (setup then changes nothing that is not this repository\'s)', 'bool', (c) => c.config.tracker?.board?.shared ?? c.config.board?.shared ?? false, (c, v) => set(c.config, trackerType(c) === 'github' ? 'board.shared' : 'tracker.board.shared', yes(v)));
+q('tracker.shared', 'Ticket board', 'Is the board shared with other teams or repositories? (setup then changes nothing that is not this repository\'s)', 'bool', (c) => c.config.tracker?.board?.shared ?? setting(c.config, 'board.shared'), (c, v) => set(c.config, trackerType(c) === 'github' ? 'board.shared' : 'tracker.board.shared', yes(v)));
 for (const lane of LANES) {
   q(`tracker.lanes.${lane}`, 'Ticket board', `The board's status or column for the pipeline's "${lane}" lane?`, 'text', (c) => (trackerType(c) === 'github' ? c.config.board?.columns?.[lane] : c.config.tracker?.lanes?.[lane]) ?? LANE_DEFAULTS[lane], (c, v) => {
     const at = trackerType(c) === 'github' ? `board.columns.${lane}` : `tracker.lanes.${lane}`;
@@ -94,13 +122,13 @@ q('ci.token', 'CI system', 'The environment variable that will hold the CI API t
 q('ci.command', 'CI system', 'The command that implements the CI contract (docs/providers/custom.md)?', 'text', (c) => c.config.ci?.command ?? 'node scripts/factory-ci.mjs', (c, v) => set(c.config, 'ci.command', v), { when: (c) => ciType(c) === 'custom' });
 
 // Merging and reviews
-q('review.autoMerge', 'Merging and reviews', 'May the review gate merge a Low-risk, high-confidence bug fix by itself once its CI is green on that head?', 'bool', (c) => c.config.implement?.autoMerge?.enabled ?? true, (c, v) => set(c.config, 'implement.autoMerge.enabled', yes(v)));
-q('review.mergeIdentity', 'Merging and reviews', 'Who merges: the developer\'s own login (gh-user), the pipeline\'s PR bot (bot), or an app/token with a rule bypass (app)?', 'choice', (c) => c.config.implement?.autoMerge?.identity ?? 'gh-user', (c, v) => set(c.config, 'implement.autoMerge.identity', v), { choices: ['gh-user', 'bot', 'app'], when: (c) => yes(c.answers['review.autoMerge'] ?? c.config.implement?.autoMerge?.enabled ?? true) });
+q('review.autoMerge', 'Merging and reviews', 'May the review gate merge a Low-risk, high-confidence bug fix by itself once its CI is green on that head?', 'bool', (c) => setting(c.config, 'implement.autoMerge.enabled'), (c, v) => set(c.config, 'implement.autoMerge.enabled', yes(v)));
+q('review.mergeIdentity', 'Merging and reviews', 'Who merges: the developer\'s own login (gh-user), the pipeline\'s PR bot (bot), or an app/token with a rule bypass (app)?', 'choice', (c) => setting(c.config, 'implement.autoMerge.identity'), (c, v) => set(c.config, 'implement.autoMerge.identity', v), { choices: ['gh-user', 'bot', 'app'], when: (c) => yes(c.answers['review.autoMerge'] ?? setting(c.config, 'implement.autoMerge.enabled')) });
 q('review.owners', 'Merging and reviews', 'Who owns the factory\'s files (code owners: handles or teams, comma-separated)?', 'list', (c) => (c.pin.owners ?? []).join(', '), (c, v) => {
   const owners = list(v).map((o) => (o.startsWith('@') || o.includes('@') ? o : `@${o}`));
   if (owners.length) c.pin.owners = owners;
 });
-q('review.enforce', 'Merging and reviews', 'Will a repository admin let `factory review-gate enforce` require review-quorum and the CI checks on the default branch? (yes: doctor warns until it is done; no: reviews are advisory and doctor says so)', 'bool', (c) => c.config.implement?.reviewGate?.enforced ?? true, (c, v) => set(c.config, 'implement.reviewGate.enforced', yes(v)));
+q('review.enforce', 'Merging and reviews', 'Will a repository admin let `factory review-gate enforce` require review-quorum and the CI checks on the default branch? (yes: doctor warns until it is done; no: reviews are advisory and doctor says so)', 'bool', (c) => setting(c.config, 'implement.reviewGate.enforced'), (c, v) => set(c.config, 'implement.reviewGate.enforced', yes(v)));
 
 // Agents and models
 q('agents.local', 'Agents', 'Which agent CLIs are installed and signed in on this machine?', 'list', (c) => (c.config.agent?.available?.local ?? AGENT_CLIS.filter((x) => c.probe?.(x))).join(', '), (c, v) => {
@@ -109,36 +137,36 @@ q('agents.local', 'Agents', 'Which agent CLIs are installed and signed in on thi
   const files = clis.filter((x) => ['claude', 'codex', 'gemini', 'cursor', 'copilot'].includes(x));
   if (files.length) c.pin.tools = [...new Set(files)];
 });
-q('agents.ci', 'Agents', 'Which agent CLIs may run in CI (the PR check, the retro)?', 'list', (c) => (c.config.agent?.available?.ci ?? [c.config.agent?.cli ?? 'claude']).join(', '), (c, v) => set(c.config, 'agent.available.ci', list(v).filter((x) => AGENT_CLIS.includes(x))));
-q('agents.default', 'Agents', 'The default agent CLI for the pipeline\'s agents?', 'choice', (c) => c.config.agent?.cli ?? list(c.answers['agents.local'])[0] ?? 'claude', (c, v) => set(c.config, 'agent.cli', v), { choices: ['claude', 'codex', 'copilot'] });
+q('agents.ci', 'Agents', 'Which agent CLIs may run in CI (the PR check, the retro)?', 'list', (c) => (c.config.agent?.available?.ci ?? [list(c.answers['agents.local'] ?? '')[0] ?? 'claude']).join(', '), (c, v) => set(c.config, 'agent.available.ci', list(v).filter((x) => AGENT_CLIS.includes(x))));
+// The models each CLI may use become the pool's entries (models.pool): each CLI's own id for the model, high effort.
 for (const cli of ['claude', 'codex', 'copilot']) {
-  q(`agents.models.${cli}`, 'Agents', `Which models may ${cli} use (aliases: opus, sonnet, sol, ...; your subscription decides)?`, 'list', (c) => (c.config.agent?.available?.models?.[cli] ?? { claude: ['opus', 'sonnet'], codex: ['sol'], copilot: ['sonnet'] }[cli]).join(', '), (c, v) => set(c.config, `agent.available.models.${cli}`, list(v)), { when: (c) => list(c.answers['agents.local'] ?? '').includes(cli) || list(c.answers['agents.ci'] ?? '').includes(cli) });
+  q(`agents.models.${cli}`, 'Agents', `Which models may ${cli} use (opus, sonnet, sol, or the CLI's own model ids; your subscription decides)?`, 'list', (c) => (poolOfAnswers(c, cli).map((e) => e.alias).join(', ') || { claude: 'opus, sonnet', codex: 'sol', copilot: 'sonnet' }[cli]), (c, v) => setPool(c, cli, list(v)), { when: (c) => list(c.answers['agents.local'] ?? '').includes(cli) || list(c.answers['agents.ci'] ?? '').includes(cli) });
 }
-q('council.seat', 'Agents', 'Seat a council of verifiers from those CLIs and models (review and PR check)?', 'bool', (c) => Boolean(c.config.council), (c, v) => {
+q('council.seat', 'Agents', 'Seat a council of several verifiers from those models (architecture review and PR check)?', 'bool', (c) => Boolean(c.config.architectureReview?.councilMembers > 1), (c, v) => {
   if (!yes(v)) return;
-  if (c.config.council?.members?.length) return; // an existing council is kept as it is
-  const clis = list(c.answers['agents.local'] ?? '').filter((x) => ['claude', 'codex', 'copilot'].includes(x));
-  const members = clis.flatMap((cli) => list(c.answers[`agents.models.${cli}`] ?? '').slice(0, 1).map((model) => ({ name: `${cli}-${model}`.replace(/[^\w-]/g, '-'), cli, model, effort: 'high', lens: 'correctness' })));
-  if (members.length) set(c.config, 'council', { onUnavailable: 'fail', members, stages: { review: {}, prCheck: {} } });
+  // One member per model family the pool holds (at least two): the harness seats one entry per family first.
+  const families = new Set((c.config.models?.pool ?? []).map(familyOf));
+  const seats = Math.min(3, Math.max(2, families.size));
+  for (const section of ['architectureReview', 'prCheck']) if (c.config[section]?.councilMembers == null) set(c.config, `${section}.councilMembers`, seats);
 });
 
 // UI verification and videos
 q('browser.available', 'UI verification', 'Is a browser (Playwright) and the test stack (Docker) available for UI verification and feature videos?', 'bool', (c) => Boolean(c.pin.features?.demoVideo ?? c.config.implement?.ui?.teststackCmd), (c, v) => {
   c.pin.features = { ...(c.pin.features ?? {}), demoVideo: yes(v) };
-  if (yes(v)) set(c.config, 'implement.ui.teststackCmd', c.config.implement?.ui?.teststackCmd ?? ['node', '.factory/bin/factory.mjs', 'teststack']);
+  if (yes(v)) set(c.config, 'implement.ui.teststackCmd', setting(c.config, 'implement.ui.teststackCmd'));
 });
 
 // Observability
-q('metrics.sink', 'Observability', 'Where do agent metrics go: none, directory, http, otlp or command?', 'choice', (c) => c.config.metrics?.sink?.type ?? 'none', (c, v) => set(c.config, 'metrics.sink.type', v), { choices: ['none', 'directory', 'http', 'otlp', 'command'] });
-q('metrics.target', 'Observability', 'The store\'s path, URL or command?', 'text', (c) => c.config.metrics?.sink?.path ?? c.config.metrics?.sink?.url ?? c.config.metrics?.sink?.command ?? '', (c, v) => {
+q('metrics.sink', 'Observability', 'Where do agent metrics go: none, directory, http, otlp or command?', 'choice', (c) => setting(c.config, 'metrics.sink.type'), (c, v) => set(c.config, 'metrics.sink.type', v), { choices: ['none', 'directory', 'http', 'otlp', 'command'] });
+q('metrics.target', 'Observability', 'The store\'s path, URL or command?', 'text', (c) => c.config.metrics?.sink?.path ?? c.config.metrics?.sink?.url ?? c.config.metrics?.sink?.push ?? '', (c, v) => {
   const type = c.answers['metrics.sink'];
-  if (v) set(c.config, `metrics.sink.${type === 'directory' ? 'path' : type === 'command' ? 'command' : 'url'}`, v);
+  if (v) set(c.config, `metrics.sink.${type === 'directory' ? 'path' : type === 'command' ? 'push' : 'url'}`, v);
 }, { when: (c) => !['none', undefined].includes(c.answers['metrics.sink']) });
 q('metrics.token', 'Observability', 'The environment variable that holds the store\'s token (blank: none)?', 'text', (c) => refName(String(c.config.metrics?.sink?.headers?.Authorization ?? '').replace(/^Bearer /, '')) ?? '', (c, v) => (v ? set(c.config, 'metrics.sink.headers', { Authorization: `Bearer ${ref(variableName(v))}` }) : null), { when: (c) => ['http', 'otlp'].includes(c.answers['metrics.sink']) });
 
 // Static analysis and the client's scanner
 q('analysis.enabled', 'Static analysis', 'Run the open-source static analysis (secrets, dependencies, security patterns) in the fix loop and CI?', 'bool', (c) => Boolean(c.config.analysis), (c, v) => (yes(v) ? set(c.config, 'analysis', c.config.analysis ?? {}) : set(c.config, 'analysis', undefined)));
-q('analysis.licenceReview', 'Static analysis', 'Licence review mode: default (items pending legal review stay on) or strict (they are off)?', 'choice', (c) => c.config.analysis?.licenceReview ?? 'default', (c, v) => set(c.config, 'analysis.licenceReview', v === 'default' ? undefined : v), { choices: ['default', 'strict'], when: (c) => yes(c.answers['analysis.enabled']) });
+q('analysis.licenceReview', 'Static analysis', 'Licence review mode: default (items pending legal review stay on) or strict (they are off)?', 'choice', (c) => setting(c.config, 'analysis.licenceReview'), (c, v) => set(c.config, 'analysis.licenceReview', v === 'default' ? undefined : v), { choices: ['default', 'strict'], when: (c) => yes(c.answers['analysis.enabled']) });
 q('scanner.id', 'Commercial scanner', 'Does the client have a commercial scanner to integrate?', 'choice', (c) => c.config.analysis?.commercial?.scanner ?? 'none', (c, v) => (v !== 'none' ? set(c.config, 'analysis.commercial.scanner', v) : null), { choices: SCANNERS });
 const scannerOn = (c) => (c.answers['scanner.id'] ?? 'none') !== 'none';
 q('scanner.mode', 'Commercial scanner', 'How does it run: local (its CLI in the fix loop and CI) or server (it scans in the client\'s CI or SaaS; the harness waits for the result of each head)?', 'choice', (c) => c.config.analysis?.commercial?.mode ?? COMMERCIAL[c.answers['scanner.id']]?.commercial.modes[0] ?? 'local', (c, v) => set(c.config, 'analysis.commercial.mode', v), { choices: ['local', 'server'], when: scannerOn });

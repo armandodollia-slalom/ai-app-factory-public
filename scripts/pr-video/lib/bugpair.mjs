@@ -9,13 +9,10 @@ import { git } from '../../pipeline/lib/git.mjs';
 import { writeText } from '../../pipeline/lib/redact.mjs';
 import { caseIdOf } from './script.mjs';
 import { baseCheckoutDir, fileHash } from '../../factory/lib/prune.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
-export const BUG_PAIR_DEFAULTS = {
-  // Record a "before the fix" video for UI bugs.
-  enabled: true,
-  // A UI bug whose reproduction cannot be shown before the fix opens no PR (the delivery escalates) instead of a note.
-  requireBefore: false,
-};
+// The defaults are in scripts/pr-video/config.json (`video.bugPair`).
+export const BUG_PAIR_DEFAULTS = defaultSettings().video.bugPair;
 export const bugPairSettings = (config = {}) => ({ ...BUG_PAIR_DEFAULTS, ...(config.video?.bugPair ?? {}) });
 
 const readText = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
@@ -107,7 +104,8 @@ export function baseCheckout(root, base, stateDir = '.factory/state') {
   const json = readJson(file) ?? {};
   const name = json.project?.name ?? readJson(path.join(dir, '.factory/app.json'))?.name ?? 'app';
   const tag = `${String(json.stack?.imageTag ?? `${name}-teststack`).replace(/-base-[0-9a-f]{12}$/, '')}-base-${sha.slice(0, 12)}`;
-  const rel = json.stack?.scenariosDir ?? readJson(path.join(root, '.factory/config.json'))?.stack?.scenariosDir ?? '.factory/stack/scenarios';
+  // The before checkout's own teststack.scenariosDir, else this checkout's (its settings or the default).
+  const rel = json.teststack?.scenariosDir ?? setting(readJson(path.join(root, '.factory/config.json')) ?? {}, 'teststack.scenariosDir');
   // Every source and destination is checked before anything is written (a refusal means no before run for this bug,
   // with why).
   const { dirs, files: scenarios } = scenarioTree(root, rel);

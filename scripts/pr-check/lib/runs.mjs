@@ -54,7 +54,7 @@ export function resumeRuns(config, { id = null, force = false } = {}) {
       }
       writeProgress(config, runId, { ...next.fields, pid: null, boot: null, requestedAt: nowIso() });
       const bg = spawnBackground(config, { script: SCRIPT, key: runId, stage: 'pr-check', args: ['run', ...runArgs(progress.flags), '--resume'], file: logFile(config, runId, 'pr-check') });
-      return `${runId}: resumed the interrupted PR check${at} (attempt ${next.attempt}/${next.maxAttempts}, log: ${bg.log}).`;
+      return `${runId}: resumed the interrupted PR check${at} (attempt ${next.attempt}/${next.maxRetries}, log: ${bg.log}).`;
     });
 }
 

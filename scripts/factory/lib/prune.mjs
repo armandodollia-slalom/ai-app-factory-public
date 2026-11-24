@@ -5,11 +5,11 @@
 //   build      build output of a pipeline worktree no run and no live stack-slot lease uses any more (`buildDirs`, and
 //              every git-ignored folder named in `buildDirNames` outside node_modules); the worktree itself stays
 //   slot       a stack slot's build folders (artifacts, build) in a checkout still in use, when no live lease holds the
-//              slot and they are older than `slotMaxAgeHours`, or, oldest first, while all of them hold more than
+//              slot and they are older than `slotMaxAgeSec`, or, oldest first, while all of them hold more than
 //              `slotMaxGb`
 //   image      stack images the pipeline built (recorded in the machine-wide images.jsonl, or listed in a slot's
 //              images.ids) that a rebuild left untagged, no remaining slot records and no container uses, older
-//              than `imageMinAgeHours` (a tagged image is what a slot's tag points at now)
+//              than `imageMinAgeSec` (a tagged image is what a slot's tag points at now)
 //   install    engine installs under ~/.ai-app-factory/versions that no live branch pins (the checked-out HEAD, the
 //              default branch, open pull requests' branches, worktrees in use; also of `installRepos`), no running
 //              process uses, beyond the newest `keepInstalls`
@@ -22,7 +22,7 @@
 // bug before run's base checkout), only once the delivery remote itself confirms it holds the commits, never forced;
 // anything in doubt is kept and reported. `--keep` (FACTORY_KEEP_LOCAL=1) or `prune.keepLocal` keeps it all.
 //
-// Nothing is removed that a running run, a live lease or a worktree touched in the last `idleMinutes` needs. Settings
+// Nothing is removed that a running run, a live lease or a worktree touched in the last `idleSec` needs. Settings
 // (`prune` in .factory/config.json): see PRUNE_DEFAULTS and docs/ai-pipeline/disk.md (the defaults and what each removal checks).
 import { hostFor, hostOf } from '../../pipeline/lib/hosts/index.mjs';
 import { trackerFor } from '../../board/lib/trackers/index.mjs';
@@ -31,31 +31,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
-export const PRUNE_DEFAULTS = {
-  enabled: true,
-  minFreeGb: 20,
-  pausePollSec: 60,
-  idleMinutes: 60,
-  buildDirs: ['.factory/state/teststack', 'artifacts', 'test-results', 'playwright-report'],
-  buildDirNames: ['bin', 'obj'],
-  slotMaxAgeHours: 24,
-  slotMaxGb: 4,
-  imageMinAgeHours: 3,
-  worktreeDays: 7,
-  keepInstalls: 3,
-  installRepos: [],
-  // Static analysis: pinned tools and rule sources in the per-machine cache that this repository does not pin and that
-  // were not used for this many days; analysis reports beyond the newest `analysisReports` commits; merge-base caches.
-  analysisCacheDays: 30,
-  analysisReports: 200,
-  analysisBaseDays: 14,
-  // Alpha, off by default: remove what a delivered run made on this machine (its worktrees, local branches and a bug
-  // before run's base checkout) once the delivery remote confirms it. Off: nothing of a delivered run is removed.
-  afterDelivery: false,
-  // Keep what a delivered run made on this machine, for debugging (with afterDelivery on).
-  keepLocal: false,
-};
+// The defaults are in scripts/factory/config.json (`prune`).
+export const PRUNE_DEFAULTS = defaultSettings().prune;
 
 
 const GB = 1024 ** 3;
@@ -181,7 +160,9 @@ export function liveRefs(repo, { exec = defaultExec, code = null, branches = [] 
 }
 
 // Stack leases of this project, live or not: [{ slot, cwd, live }].
-export function readLeases(home, { now = Date.now(), ttlMs = 240 * 60_000, isAlive, hostname = os.hostname() } = {}) {
+// `ttlMs`: stack.leaseTtlSec in milliseconds, from the caller's settings.
+export function readLeases(home, { now = Date.now(), ttlMs, isAlive, hostname = os.hostname() } = {}) {
+  if (!Number.isFinite(ttlMs)) throw new Error('readLeases needs ttlMs (stack.leaseTtlSec)');
   const dir = path.join(home, 'leases');
   let files = [];
   try {
@@ -263,14 +244,14 @@ export function gather({ root, settings, implementConfig, stackConfig, stackHome
   }
   const batchAlive = Boolean(batch && !batch.finishedAt && batch.pid && isAlive(batch.pid));
   const batchStart = batchAlive ? Date.parse(batch.startedAt) || 0 : null;
-  const leases = readLeases(stackHome, { now, ttlMs: (stackConfig.leaseTtlMinutes ?? 240) * 60_000, isAlive });
+  const leases = readLeases(stackHome, { now, ttlMs: stackConfig.leaseTtlSec * 1000, isAlive });
   const ps = exec('ps', ['-axo', 'command'], { timeoutSec: 30 });
   return { root, main, wtDir, worktrees, runs, batchAlive, batchStart, leases, settings, stackStateDir: stackConfig.stateDir, stackHome, versionsDir, installRoot, processes: ps.status === 0 ? ps.stdout : null, exec, now, code: code ?? (gh || implementConfig ? codeOps(implementConfig ?? { root }, { gh }) : null), docker, analysis };
 }
 
 // The pipeline worktrees (under the worktree folder) with who still needs them.
 function classify(g) {
-  const idleMs = g.settings.idleMinutes * 60_000;
+  const idleMs = g.settings.idleSec * 1000;
   const activeRunPaths = g.runs.filter((r) => g.batchAlive && ['running', 'queued'].includes(r.status)).map((r) => r.worktree).filter(Boolean);
   return g.worktrees.slice(1).filter((w) => inside(w.path, g.wtDir)).map((w) => {
     const run = activeRunPaths.find((p) => w.path === p || w.path.startsWith(`${p}--`));
@@ -280,7 +261,7 @@ function classify(g) {
     const recent = idleMs > 0 && g.now - touched < idleMs;
     // While a run of this repository goes, a worktree it touched (an epic's or a group's has no ticket record) is its.
     const ofRun = g.batchStart != null && touched >= g.batchStart;
-    const why = run || ofRun ? 'a running run uses it' : lease ? `stack slot ${lease.slot} is leased from it` : recent ? `touched in the last ${g.settings.idleMinutes} min` : null;
+    const why = run || ofRun ? 'a running run uses it' : lease ? `stack slot ${lease.slot} is leased from it` : recent ? `touched in the last ${g.settings.idleSec} s` : null;
     return { ...w, inUse: why };
   });
 }
@@ -344,7 +325,7 @@ export function planPrune(g) {
       slots.push({ checkout, slot, dir, held, parts, mtime, bytes: parts.reduce((n, p) => n + sizeOf(p, g), 0) });
     }
   }
-  const maxAgeMs = s.slotMaxAgeHours * 3_600_000;
+  const maxAgeMs = s.slotMaxAgeSec * 1000;
   let kept = slots.reduce((n, x) => n + x.bytes, 0);
   for (const x of [...slots].sort((a, b) => a.mtime - b.mtime)) {
     if (x.held || !x.bytes) continue;
@@ -352,7 +333,7 @@ export function planPrune(g) {
     const over = s.slotMaxGb != null && kept > s.slotMaxGb * GB;
     if (!old && !over) continue;
     kept -= x.bytes;
-    for (const p of x.parts) out.push({ kind: 'slot', path: p, bytes: sizeOf(p, g), reason: `slot ${x.slot} of ${path.basename(x.checkout)}: ${old ? `unused for more than ${s.slotMaxAgeHours} h` : `slot build folders over ${s.slotMaxGb} GB`}` });
+    for (const p of x.parts) out.push({ kind: 'slot', path: p, bytes: sizeOf(p, g), reason: `slot ${x.slot} of ${path.basename(x.checkout)}: ${old ? `unused for more than ${s.slotMaxAgeSec} s` : `slot build folders over ${s.slotMaxGb} GB`}` });
   }
   const slotGone = new Set(out.filter((e) => e.kind === 'slot' || e.kind === 'build' || e.kind === 'worktree').map((e) => e.path));
 
@@ -377,7 +358,7 @@ function ticketClosed(g, run, wt) {
   }
   if (!run.issueUrl) return { ok: false };
   if (g.code.ticketClosed(run.issueUrl) !== true) return { ok: false };
-  const onBase = g.exec('git', ['merge-base', '--is-ancestor', 'HEAD', run.base ?? 'origin/main'], { cwd: wt.path });
+  const onBase = g.exec('git', ['merge-base', '--is-ancestor', 'HEAD', run.base ?? defaultSettings().baseRef], { cwd: wt.path });
   return onBase.status === 0 ? { ok: true, why: 'issue closed and its head is on the base' } : { ok: false };
 }
 
@@ -433,7 +414,7 @@ function planImages(g, { dropped, slotGone }) {
     const [id, created, size, tags] = line.split(' ');
     // A tagged image is what a slot's tag points at now (a slot uses it); a rebuild leaves the old one untagged.
     if (Number(tags) > 0) continue;
-    if (g.now - Date.parse(created) < s.imageMinAgeHours * 3_600_000) continue;
+    if (g.now - Date.parse(created) < s.imageMinAgeSec * 1000) continue;
     out.push({ kind: 'image', id, bytes: Number(size) || 0, reason: 'built by the pipeline, superseded (untagged); no slot records it and no container uses it' });
   }
   return out;
@@ -443,6 +424,7 @@ function planImages(g, { dropped, slotGone }) {
 // Static analysis disk use: the per-machine cache (pinned tools, rule sources) beyond what this repository pins and
 // unused for analysisCacheDays (other repositories on the machine share it, hence the age), reports beyond the newest
 // analysisReports commits, merge-base caches older than analysisBaseDays, and leftover scratch folders.
+// g.settings: the prune settings merged with their defaults (toolConfig), so no default of its own here.
 export function planAnalysis(g) {
   const a = g.analysis;
   if (!a) return [];
@@ -458,13 +440,13 @@ export function planAnalysis(g) {
   const days = (t) => (g.now - t) / 86_400_000;
   for (const kind of ['tools', 'rules']) {
     for (const e of ls(path.join(a.cache, kind))) {
-      if (a.pinned.has(e.n) || days(e.t) < (s.analysisCacheDays ?? 30)) continue;
+      if (a.pinned.has(e.n) || days(e.t) < s.analysisCacheDays) continue;
       out.push({ kind: 'analysis', path: e.p, bytes: sizeOf(e.p, g), reason: `analysis ${kind === 'tools' ? 'tool' : 'rule source'} ${e.n}: not pinned here, unused for ${Math.floor(days(e.t))} day(s)` });
     }
   }
   const reports = ls(path.join(a.dir, 'reports')).sort((x, y) => y.t - x.t);
-  for (const e of reports.slice(s.analysisReports ?? 200)) out.push({ kind: 'analysis', path: e.p, bytes: sizeOf(e.p, g), reason: `analysis report of ${e.n.slice(0, 12)}: older than the newest ${s.analysisReports ?? 200}` });
-  for (const e of ls(path.join(a.dir, 'base'))) if (days(e.t) >= (s.analysisBaseDays ?? 14)) out.push({ kind: 'analysis', path: e.p, bytes: sizeOf(e.p, g), reason: `analysis merge-base cache ${e.n.slice(0, 12)}: older than ${s.analysisBaseDays ?? 14} day(s)` });
+  for (const e of reports.slice(s.analysisReports)) out.push({ kind: 'analysis', path: e.p, bytes: sizeOf(e.p, g), reason: `analysis report of ${e.n.slice(0, 12)}: older than the newest ${s.analysisReports}` });
+  for (const e of ls(path.join(a.dir, 'base'))) if (days(e.t) >= s.analysisBaseDays) out.push({ kind: 'analysis', path: e.p, bytes: sizeOf(e.p, g), reason: `analysis merge-base cache ${e.n.slice(0, 12)}: older than ${s.analysisBaseDays} day(s)` });
   for (const e of [...ls(path.join(a.dir, 'out')), ...ls(a.dir).filter((x) => x.n.startsWith('base-'))]) if (days(e.t) >= 1) out.push({ kind: 'analysis', path: e.p, bytes: sizeOf(e.p, g), reason: 'analysis scratch folder left by a stopped run' });
   return out;
 }

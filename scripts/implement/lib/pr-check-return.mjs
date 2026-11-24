@@ -5,7 +5,7 @@
 // implementation work (static analysis, the pair verifier or council, the architecture review, feature verification)
 // before the PR check sits again on the new head. Findings confined to tests, docs, PR text, video or style stay with the
 // PR check's light fixer. The rule is the harness's, by what the finding is about and which file it names; it changes
-// only through implement.prCheck.returnToImplementation in .factory/config.json (governance).
+// only through prCheck.returnToImplementation in .factory/config.json (governance).
 //
 // Only findings at minSeverity (major) or worse go back: a minor finding about the production change stays with the PR
 // check's fixer, as before (dogfood C15: a bug's PR check passed at 9/10, and each return's new minor polish cost a full
@@ -13,21 +13,10 @@
 
 import { severityAtLeast } from '../../pipeline/lib/severity.mjs';
 
-export const RETURN_DEFAULTS = {
-  enabled: true,
-  // Returns to implementation per story; each also counts against maxAgentRunsPerStory and the story's wall clock.
-  maxReturns: 2,
-  // The least severe finding about the production change that returns; below it, the PR check's fixer handles it.
-  minSeverity: 'major',
-  // Lenses whose findings are about the production change.
-  implementationLenses: ['acceptance', 'flow', 'design', 'correctness', 'security', 'ui', 'rewrite'],
-  // Lenses whose findings stay with the light fixer (when they name no production file).
-  lightLenses: ['video', 'style', 'test-value'],
-  // A finding that names only files matching these is confined to tests, docs or pipeline records: light path.
-  lightPaths: ['tests/**', 'test/**', 'e2e/**', '**/*.spec.*', '**/*.test.*', '**/*Tests/**', '**/*.Tests/**', '**/*.md', 'docs/**', '.factory/plans/**', '.factory/stack/scenarios/**', '.factory/metrics/**'],
-};
+// The defaults are in scripts/pr-check/config.json (`prCheck.returnToImplementation`).
+export const RETURN_DEFAULTS = defaultSettings().prCheck.returnToImplementation;
 
-export const returnSettings = (config) => ({ ...RETURN_DEFAULTS, ...(config.implement?.prCheck?.returnToImplementation ?? {}) });
+export const returnSettings = (config) => ({ ...RETURN_DEFAULTS, ...(config.prCheck?.returnToImplementation ?? {}) });
 
 const globRe = (g) => new RegExp(`^${String(g).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\uE000').replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\uE000/g, '(?:.*/)?')}$`);
 
@@ -53,6 +42,7 @@ const normalizePath = (x, root) => {
 // (finding-route.mjs).
 export { resolvesOf, TEST_GAP_RE } from '../../pipeline/lib/finding-route.mjs';
 import { resolvesOf } from '../../pipeline/lib/finding-route.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 const isLight = (files, settings) => files.length > 0 && files.every((p) => settings.lightPaths.some((g) => globRe(g).test(p)));
 
@@ -66,12 +56,12 @@ export function routeFinding(f, { settings = RETURN_DEFAULTS, memberLenses = {},
   const light = isLight(files, settings);
   const minor = settings.minSeverity && f.severity && !severityAtLeast(f.severity, settings.minSeverity);
   const resolves = part ? [part] : resolvesOf(f, { files, lens });
-  const back = (why) => (minor ? { route: 'light', lens, resolves, why: `${why}, ${f.severity} (below returnToImplementation.minSeverity ${settings.minSeverity}): the PR check's fixer` } : { route: 'implementation', lens, resolves, why });
+  const back = (why) => (minor ? { route: 'light', lens, resolves, why: `${why}, ${f.severity} (below prCheck.returnToImplementation.minSeverity ${settings.minSeverity}): the PR check's fixer` } : { route: 'implementation', lens, resolves, why });
   if (!resolves.includes('code')) {
     if (resolves.includes('tests') || resolves.includes('plan')) {
       // Fixing a test the branch already has stays with the fixer; a missing test is a required case for test automation.
       if (light && !resolves.includes('plan')) return { route: 'light', lens, resolves, why: `a test finding confined to ${files.join(', ')}` };
-      if (minor) return { route: 'light', lens, resolves, why: `a test gap, ${f.severity} (below returnToImplementation.minSeverity ${settings.minSeverity}): the PR check's fixer` };
+      if (minor) return { route: 'light', lens, resolves, why: `a test gap, ${f.severity} (below prCheck.returnToImplementation.minSeverity ${settings.minSeverity}): the PR check's fixer` };
       return { route: 'tests', lens, resolves, why: `resolved by ${resolves.join(' and ')}: a required case for the test plan and test automation` };
     }
     if (resolves.includes('records')) return { route: 'light', lens, resolves, why: 'resolved by the records or the PR text' };

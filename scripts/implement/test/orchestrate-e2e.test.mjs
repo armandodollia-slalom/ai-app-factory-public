@@ -29,7 +29,7 @@ const jsonl = (file) => fs.readFileSync(file, 'utf8').trim().split('\n').map((l)
 
 function pipeline(args) {
   const env = { ...process.env, PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main' };
-  for (const k of ['PIPELINE_CHILD', 'PIPELINE_DISABLE', 'PIPELINE_ROOT', 'IMPLEMENT_ORCHESTRATE']) delete env[k];
+  for (const k of ['PIPELINE_CHILD', 'PIPELINE_DISABLE', 'PIPELINE_ROOT']) delete env[k];
   return spawnSync(process.execPath, ['scripts/pipeline/pipeline.mjs', ...args], { cwd: repo, encoding: 'utf8', env });
 }
 
@@ -41,12 +41,17 @@ before(() => {
   for (const dir of ['scripts/pipeline', 'scripts/review', 'scripts/feature-verification', 'scripts/implement', 'scripts/pr-check', 'scripts/board', 'scripts/models', 'scripts/pr-video', 'scripts/review-gate', 'scripts/retro', 'scripts/factory', 'scripts/stack', 'scripts/teststack'].filter((d) => fs.existsSync(path.join(source, d)))) {
     fs.cpSync(path.join(source, dir), path.join(repo, dir), { recursive: true, filter: (p) => !p.startsWith(path.join(source, dir, 'test')) });
   }
+  // Every section's defaults and descriptions: a stage reads the others' (scripts/pipeline/lib/settings.mjs).
+  for (const d of fs.readdirSync(path.join(source, 'scripts'))) for (const f of ['config.json', 'settings.json']) if (fs.existsSync(path.join(source, 'scripts', d, f)) && !fs.existsSync(path.join(repo, 'scripts', d, f))) {
+    fs.mkdirSync(path.join(repo, 'scripts', d), { recursive: true });
+    fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
+  }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
   const fvConfig = JSON.parse(fs.readFileSync(path.join(repo, 'scripts/feature-verification/config.json'), 'utf8'));
-  fvConfig.precheck.runTests = false;
+  fvConfig.featureVerification.precheck.runTests = false;
   write(repo, 'scripts/feature-verification/config.json', JSON.stringify(fvConfig, null, 2));
   const implConfig = JSON.parse(fs.readFileSync(path.join(repo, 'scripts/implement/config.json'), 'utf8'));
-  Object.assign(implConfig.implement, { fvPollSec: 0.1, checks: [], unitTests: null, prepareCmd: null, parallel: 1 });
+  Object.assign(implConfig.implement, { pollSec: { featureVerification: 0.1 }, checks: [], unitTests: null, prepareCmd: null, maxParallel: 1 });
   write(repo, 'scripts/implement/config.json', JSON.stringify(implConfig, null, 2));
   write(repo, '.gitignore', '.factory/state/\nartifacts/\n');
   write(repo, 'src/Catalog.API/Api.cs', '// catalog\n');
@@ -74,7 +79,7 @@ after(() => {
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
-const sub = (id, owns, over = {}) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], modelClass: 'medium', verify: 'code', modelReason: 'normal', verifyReason: 'api', expectedFiles: 1, expectedLoc: 3, confidence: 0.8, alternatives: [{ option: 'self', reason: 'two services' }], ...over });
+const sub = (id, owns, over = {}) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], model: 'sonnet', verify: 'code', modelReason: 'normal', verifyReason: 'api', expectedFiles: 1, expectedLoc: 3, confidence: 0.8, alternatives: [{ option: 'self', reason: 'two services' }], ...over });
 
 test('implement run (orchestrated): plan, pairs, merges, integration, review loop, feature verification, decision log', () => {
   const plan = { mode: 'delegate', modeReason: 'two services', splitReason: 'one per service', features: { services: ['Catalog.API', 'Basket.API'], estimatedSize: 'small' }, subtasks: [sub('catalog', ['src/Catalog.API/**']), sub('basket', ['src/Basket.API/**'], { dependsOn: ['catalog'] })] };
@@ -84,8 +89,8 @@ test('implement run (orchestrated): plan, pairs, merges, integration, review loo
     JSON.stringify({
       implementer: [{ result: plan }, { result: { status: 'done', reason: 'integrated' } }, { writeImpl: 'src/Basket.API/Coupons.cs', result: { status: 'done', reason: 'owner check' } }],
       'pair-implementer': [{ writeFiles: { 'src/Catalog.API/Coupons.cs': '// catalog coupons\n' }, result: { status: 'done' } }, { writeFiles: { 'src/Basket.API/Coupons.cs': '// basket coupons\n' }, result: { status: 'done' } }],
-      'pair-verifier': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
-      'architecture-reviewer': [{ result: blocking }, { result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+      'pair-verifier': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+      'architecture-reviewer': [{ result: blocking }, { result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
       'test-planner': [{ writePlan: [{ title: 'Valid coupon applies', type: 'happy' }, { title: 'Expired coupon rejected', type: 'sad' }] }],
       'test-plan-verifier': [{ result: { score: 10, summary: 'ok', gaps: [] } }],
       'test-automation': [{ writeTests: [1, 2], result: { status: 'done' } }],
@@ -122,12 +127,14 @@ test('implement run (orchestrated): plan, pairs, merges, integration, review loo
   const story = outcomes.find((o) => o.type === 'story');
   assert.deepEqual([story.outcome, story.decisionId, story.reviewBlocks], ['done', decision.decisionId, 1]);
   const run = jsonl(path.join(metrics, 'implement-runs.jsonl'))[0];
-  assert.deepEqual([run.mode, run.subtasks, run.agent_runs], ['delegate', 2, 8], 'one more verifier run: the review fix');
+  // One more verifier run for the review fix, and the pair verifier's one-seat council pick: the orchestrator is asked
+  // twice (the fake gives no pick, so the harness seats the stage's own verifier).
+  assert.deepEqual([run.mode, run.subtasks, run.agent_runs], ['delegate', 2, 10], 'one more verifier run: the review fix; two council-pick runs');
   assert.equal(sh(wt, 'git', ['log', '-1', '--format=%s']), 'DEMO-1: Add verified test plan and automated tests');
   assert.match(sh(wt, 'git', ['show', '--stat', '--format=', 'HEAD']), /decision-outcomes\.jsonl/);
 
   const status = pipeline(['implement', 'status']);
-  assert.match(status.stdout, /DEMO-1 +finished +done[\s\S]*delegate \(decision [0-9a-f]{8}\), 8 agent runs[\s\S]*catalog +merged/);
+  assert.match(status.stdout, /DEMO-1 +finished +done[\s\S]*delegate \(decision [0-9a-f]{8}\), 10 agent runs[\s\S]*catalog +merged/);
 
   fs.cpSync(metrics, path.join(repo, '.factory/metrics'), { recursive: true });
   const report = pipeline(['implement', 'decisions', '--story', 'DEMO-1', '--json']);
@@ -145,7 +152,7 @@ test('implement run: a review finding the implementer does not change anything f
   fs.rmSync(`${scriptFile}.calls.json`, { force: true });
   fs.writeFileSync(scriptFile, JSON.stringify({
     implementer: [{ result: plan }, { writeImpl: 'src/Catalog.API/Notes.cs', result: { status: 'done', reason: 'notes' } }, { result: { status: 'done', reason: 'DATA-001 does not apply: 0002_Notes.cs is the new migration this story adds', disputes: [{ finding: 'R1-1', kind: 'out-of-scope', reason: 'the migration is new on this branch' }] } }],
-    'pair-verifier': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+    'pair-verifier': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
     'architecture-reviewer': [{ result: blocking }, { result: blocking }, { result: blocking }],
   }));
   const result = pipeline(['implement', 'run', path.join(incoming, 'DEMO-2-notes.md')]);

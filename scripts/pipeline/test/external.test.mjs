@@ -35,7 +35,7 @@ else { process.stdout.write(JSON.stringify([{ name: 'build', state: 'SUCCESS', b
 `,
     { mode: 0o755 },
   );
-  const env = { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, FACTORY_EXTERNAL_TIMEOUT_GH: '1', FACTORY_EXTERNAL_PAUSE_MS: '0' };
+  const env = { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, FACTORY_EXTERNAL_TIMEOUT_GH: '1', FACTORY_EXTERNAL_RETRY_DELAY_SEC: '0' };
   return { dir, env, calls: () => Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0), done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 

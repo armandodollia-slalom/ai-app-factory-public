@@ -5,6 +5,8 @@ import { evidenceText, readReport } from '../../pipeline/lib/analysis/report.mjs
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
+import { decide, orchestratorRun, producerRun } from '../../pipeline/lib/orchestrator.mjs';
+import { selectCouncil, ticketShape } from '../../pipeline/lib/selection.mjs';
 import { changedSince, contestedText, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, councilActionsText, councilFor, memberRunEnv, guardProtectedTests, protectedTestFinding, runDetachedMember, takeLate, councilRounds, disputesFor, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { ownerQuestionsText, runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
@@ -13,8 +15,9 @@ import { git, implChanges, implDiff, mergeBase } from '../../pipeline/lib/git.mj
 import { policyPython } from '../../pipeline/lib/python.mjs';
 import { nextAttempt, runDied } from '../../pipeline/lib/recovery.mjs';
 import { clearEscalation, escalate, loadState, lockFile, metricsFile, readMetricsLocal, updateState } from '../../pipeline/lib/state.mjs';
-import { acquireLock, appendJsonl, extractResult, isProcessAlive, lockHolder, log, nowIso, readJson, readJsonl, releaseLock, run, selfProcess, writeJson } from '../../pipeline/lib/util.mjs';
+import { acquireLock, appendJsonl, extractResult, isProcessAlive, lockHolder, log, nowIso, readJson, releaseLock, run, selfProcess, writeJson } from '../../pipeline/lib/util.mjs';
 import { formatDisputes, ruleDisputes } from '../../implement/lib/disputes.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 const fence = (text, lang = '') => `\`\`\`\`${lang}\n${text.replace(/\r\n/g, '\n').trimEnd()}\n\`\`\`\``;
 const block = (reason) => ({ decision: 'block', reason });
@@ -82,8 +85,8 @@ export function derivedClassesBlock(derived) {
   return ['', '### New projects and their derived classes', '', 'The architecture policy classified these projects from the projects themselves. Check that each class matches what the project is and does, and that no code was put in a project of a more permissive class to stay out of a rule:', '', ...derived.map((d) => `- ${d.summary}`)];
 }
 
-// The review's round limit: its council's when one sits for the review, else review.maxRounds.
-export const reviewMaxRounds = (config) => councilRounds(config, 'review', config.review.maxRounds);
+// The review's round limit: architectureReview.maxCouncilRounds, for any council size.
+export const reviewMaxRounds = (config) => councilRounds(config, 'architectureReview');
 
 // The static analysis report the pipeline wrote for this commit (any slot), as evidence: the reviewers do not run the
 // tools again and do not raise what they already report. Nothing without analysis or without a report.
@@ -98,7 +101,7 @@ function analysisBlock(config) {
 }
 
 function reviewTask(config, story, round, derived = [], disputes = null) {
-  const conventions = (config.review.conventions ?? ['AGENTS.md', 'CONTRIBUTING.md']).filter((f) => fs.existsSync(path.join(config.root, f)));
+  const conventions = config.architectureReview.conventions.filter((f) => fs.existsSync(path.join(config.root, f)));
   return [
     `Story: ${story.key} (${story.file})`,
     `Review round: ${round} of at most ${reviewMaxRounds(config)}`,
@@ -135,10 +138,10 @@ export function applyReviewDisputes(config, key, { verdict, findings, disputes }
 // The members that raised each finding of the last council review round, so a dispute goes only to them.
 const councilFindingsFile = (config, key) => path.join(config.root, config.stateDir, 'review', `${key}.council.json`);
 
-// One review round by a council (council.stages.review): the members review in parallel, each in a fresh process,
+// One review round by the review's council (its own reviewer alone, or the seats architectureReview.councilMembers fills from models.pool): the members review in parallel, each in a fresh process,
 // and the harness merges them. The result has the shape architectureReview returns; disputes are ruled on by the
 // members that raised the finding and then applied as for a single reviewer.
-export async function councilArchitectureReview(config, story, round, { derivedClasses = [], council = councilFor(config, 'review'), runMember = null } = {}) {
+export async function councilArchitectureReview(config, story, round, { derivedClasses = [], council = councilFor(config, 'architectureReview', { subject: story.key }), runMember = null } = {}) {
   const d = readReviewDisputes(config, story.key);
   const raisedBy = readJson(councilFindingsFile(config, story.key), { findings: [] }).findings;
   const norm = (t) => String(t ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -147,11 +150,12 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   // A non-blocking member runs detached (council-member.mjs): the review's process ends with its round, and a member
   // still running then finishes on its own; its result is feedback for the next round (takeLate).
   const lateDir = path.join(config.root, config.stateDir, 'council', `review-${story.key}`);
-  const opts = (m, task, o = null) => ({ name: 'architecture-reviewer', mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.review.timeoutSec, task, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: 'review', story: story.key, round, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } });
+  // Each member runs on its seat's pool entry; a council of one is the review's own reviewer on its own entry.
+  const opts = (m, task, o = null) => ({ name: 'architecture-reviewer', mode: 'read', entry: m.entry, timeoutSec: m.timeoutSec ?? config.architectureReview.timeoutSec, task, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: 'review', story: story.key, round, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } });
   // The detached job file holds the member's env as configured (`${NAME}` references unexpanded): the runner expands it,
-  // so no value read from the environment is ever written to disk.
+  // so no value read from the environment is ever written to disk. Its seat and lens go with it (usage rows).
   // A follow-up question to a member (its `resolves`) runs attached: it is not a round's result file.
-  const call = runMember ?? ((m, task, o) => (m.blocking || o?.purpose ? runAgentAsync(config, opts(m, task, o)) : runDetachedMember({ root: config.root, stageDir: 'review', dir: lateDir, round, member: m, run: { ...opts(m, task), extraEnv: { PIPELINE_COUNCIL_MEMBER: m.name } } })));
+  const call = runMember ?? ((m, task, o) => (m.blocking || o?.purpose ? runAgentAsync(config, opts(m, task, o)) : runDetachedMember({ root: config.root, stageDir: 'review', dir: lateDir, round, member: m, hold: Boolean(council.intercom?.enabled), record: { stage: 'architectureReview', story: story.key, round, member: { name: m.name, entry: m.entry ?? null, lens: m.lens ?? null, model: m.model ?? null, family: m.family ?? null } }, run: { ...opts(m, task), extraEnv: { PIPELINE_COUNCIL_MEMBER: m.name, ...(m.lens ? { PIPELINE_COUNCIL_LENS: m.lens } : {}) } } })));
   const parse = (output) => {
     const raw = extractResult(output);
     if (!raw || !['APPROVED', 'CHANGES_REQUESTED'].includes(raw.verdict)) return null;
@@ -160,7 +164,7 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   };
   const feedback = takeLate(lateDir, round, council.members, parse);
   // What earlier rounds upheld, with their agreed fixes: the members read it, and the merge settles a later objection to such a fix.
-  const memory = councilMemory({ file: memoryFile(config.root, config.stateDir, { stage: 'review', story: story.key }), cwd: config.root, round, fixes: fixesFile(config.root, config.stateDir, { stage: 'review', story: story.key }) });
+  const memory = councilMemory({ file: memoryFile(config.root, config.stateDir, { stage: 'architectureReview', story: story.key }), cwd: config.root, round, fixes: fixesFile(config.root, config.stateDir, { stage: 'architectureReview', story: story.key }) });
   const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
   const out = await runCouncil({
     council,
@@ -177,8 +181,8 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   // A detached member's result used in this round is consumed here; a late one stays for the next round.
   for (const r of out.results) if (r.res?.resultFile) fs.rmSync(r.res.resultFile, { force: true });
   // No model of this stage rules on a split: it becomes an owner question.
-  const intercom = await runIntercomDiscussion({ config, council, results: out.results, subject: story.key, stage: 'review', round, violation: out.violation, readOnly, reviewed: mergeBase(config.root, config.baseRef), run: call });
-  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases: planCases(config.root, config.plansDir, story.key) }), violation: out.violation, changed: changedSince(config.root, mergeBase(config.root, config.baseRef), git), feedback, earlier: memory, root: config.root, ...(intercom ? { intercom } : {}) };
+  const intercom = await runIntercomDiscussion({ config, council, results: out.results, subject: story.key, ruler: (task) => runAgentAsync(config, { ...orchestratorRun(config, 'architectureReview'), task, mode: 'read', cwd: config.root, timeoutSec: 300, usage: { stage: 'review', story: story.key, round, step: 'intercom-ruling' } }), stage: 'architectureReview', round, violation: out.violation, readOnly, reviewed: mergeBase(config.root, config.baseRef), run: call });
+  const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases: planCases(config.root, config.featureVerification.plansDir, story.key) }), violation: out.violation, changed: changedSince(config.root, mergeBase(config.root, config.baseRef), git), feedback, earlier: memory, root: config.root, ...(intercom ? { intercom } : {}) };
   // A scope objection on lines declared for an earlier upheld finding stands unless every blocking member accepts, asked
   // fresh, that the finding's agreed fix requires it (council.mjs adjudicate).
   const merged = await adjudicate({
@@ -187,15 +191,18 @@ export async function councilArchitectureReview(config, story, round, { derivedC
     merged: mergeCouncil(council, out.results, mergeOpts),
     remerge: (adjudications) => mergeCouncil(council, out.results, { ...mergeOpts, adjudications }),
     run: runMember ?? ((m, task) => runAgentAsync(config, { ...opts(m, task), usage: { stage: 'review', story: story.key, round, step: `adjudication-${m.name}` } })),
-    stage: 'review',
+    stage: 'architectureReview',
     story: story.key,
     round,
     retries: config.agent.resultParseRetries,
     readOnly: { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
   });
-  recordCouncilRound(config, { stage: 'review', story: story.key, round, council, merged });
+  // Named before they are recorded: the finding records and the outcome the next round writes from the memory ledger
+  // carry the same id (council-findings.jsonl; the scorecard joins them on it).
+  if (!merged.error) nameFindings(merged.findings, `review-r${round}`);
+  // A detached (non-blocking) member records its own findings when it finishes (council-member.mjs): not again here.
+  recordCouncilRound(config, { stage: 'architectureReview', story: story.key, round, council, merged, selfRecorded: runMember ? [] : council.members.filter((m) => !m.blocking).map((m) => m.name) });
   if (merged.error) return { verdict: 'ERROR', findings: [], summary: `architecture review council: ${merged.error}`, council: merged };
-  nameFindings(merged.findings, `review-r${round}`);
   const issue = (f) => `${f.action === 'rewrite' ? rewriteText(f) : f.action === 'delete-test' ? `DELETE TEST ${f.test || ''}${f.file ? ` in ${f.file}` : ''}: ${f.text}` : f.text}${contestedText(f)}${f.protected ? ` (not acted on: ${f.protected})` : f.notUpheld ? ` (not upheld: ${f.notUpheld})` : f.supersededBy ? ` (superseded by rewrite ${f.supersededBy})` : f.feedback ? ` (feedback from non-blocking member ${f.member})` : ''}${f.members?.length > 1 ? ` [raised by ${f.members.join(', ')}]` : ''}`;
   const all = [...merged.findings.map((f) => ({ ...f, severity: 'blocking' })), ...merged.notes.map((f) => ({ ...f, severity: 'minor' }))].map((f) => ({ ...f, issue: issue(f), category: f.category ?? f.lens }));
   if ((merged.ownerQuestions ?? []).length) {
@@ -212,8 +219,12 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   memory.remember(findings.filter((f) => f.severity === 'blocking'));
   const verdict = ruled.verdict === 'APPROVED' && findings.some((f) => f.severity === 'blocking') ? 'CHANGES_REQUESTED' : ruled.verdict;
   writeJson(councilFindingsFile(config, story.key), { round, findings: findings.filter((f) => f.severity === 'blocking').map((f) => ({ id: f.id ?? null, issue: f.issue, members: f.members ?? [] })) });
-  appendJsonl(metricsFile(config, REVIEWS_FILE), { ts: nowIso(), story: story.key, round, verdict, reviewer: 'council', reviewer_ver: null, findings: findings.map(loggedFinding) });
-  logReviewDecision(config, story, round, { agent: 'council', agentVer: null, verdict, summary: merged.summary, findings, ...(ruled.rulings.length ? { disputes: ruled.rulings.map((r) => ({ finding: r.id, kind: r.kind, ruling: r.ruling, reason: r.reason, evidence: r.evidence ?? null })) } : {}) });
+  // A council of one (alone or beside a non-blocking shadow seat) is the review's own reviewer: its records name it and
+  // carry its own summary.
+  const reviewer = council.sole || council.shadow ? 'architecture-reviewer' : 'council';
+  const summary = (council.sole || council.shadow ? out.results.find((r) => r.member.blocking)?.summary : null) || merged.summary;
+  appendJsonl(metricsFile(config, REVIEWS_FILE), { ts: nowIso(), story: story.key, round, verdict, reviewer, reviewer_ver: null, findings: findings.map(loggedFinding) });
+  logReviewDecision(config, story, round, { agent: reviewer, agentVer: null, verdict, summary, findings, ...(ruled.rulings.length ? { disputes: ruled.rulings.map((r) => ({ finding: r.id, kind: r.kind, ruling: r.ruling, reason: r.reason, evidence: r.evidence ?? null })) } : {}) });
   return { verdict, findings, summary: merged.summary, council: merged, contradictions: merged.contradictions };
 }
 
@@ -243,62 +254,28 @@ export function handOffTestGaps(config, story, findings, round, { add = addRequi
   return { findings: out, count: items.length };
 }
 
-// One review round by a fresh reviewer process that sees only the story and the diff.
-export function architectureReview(config, story, round, { derivedClasses = [] } = {}) {
-  for (let attempt = 0; attempt <= config.agent.resultParseRetries; attempt++) {
-    const result = runAgent(config, {
-      name: 'architecture-reviewer',
-      mode: 'read',
-      model: config.agent.models.reviewer,
-      timeoutSec: config.review.timeoutSec,
-      task: reviewTask(config, story, round, derivedClasses),
-      usage: { stage: 'review', story: story.key, round },
-    });
-    const raw = extractResult(result.output);
-    if (raw && ['APPROVED', 'CHANGES_REQUESTED'].includes(raw.verdict)) {
-      const lifted = raiseUserErrors(Array.isArray(raw.findings) ? raw.findings : [], { to: 'blocking' });
-      for (const f of lifted.raised) log(`${story.key}: review finding raised to blocking: ${String(f.issue ?? '').slice(0, 140)} (${f.raisedReason})`);
-      const ruled = applyReviewDisputes(config, story.key, { verdict: raw.verdict, findings: lifted.findings, disputes: raw.disputes });
-      const handed = handOffTestGaps(config, story, ruled.findings, round);
-      const findings = handed.findings;
-      if (handed.count && !findings.some((f) => f.severity === 'blocking')) ruled.verdict = 'APPROVED';
-      const verdict = ruled.verdict === 'APPROVED' && findings.some((f) => f.severity === 'blocking') ? 'CHANGES_REQUESTED' : ruled.verdict;
-      appendJsonl(metricsFile(config, REVIEWS_FILE), {
-        ts: nowIso(),
-        story: story.key,
-        round,
-        verdict,
-        reviewer_ver: result.version,
-        findings: findings.map(loggedFinding),
-      });
-      logReviewDecision(config, story, round, { agent: 'architecture-reviewer', agentVer: result.version, verdict, summary: String(raw.summary ?? ''), findings, ...(ruled.rulings.length ? { disputes: ruled.rulings.map((r) => ({ finding: r.id, kind: r.kind, ruling: r.ruling, reason: r.reason, evidence: r.evidence ?? null })) } : {}) });
-      return { verdict, findings, summary: String(raw.summary ?? '') };
-    }
-  }
-  return { verdict: 'ERROR', findings: [], summary: 'architecture reviewer produced no parsable result' };
-}
 
 // Policy-pack gate: the Arch_review_Agent (architecture-policy/agents in the factory install) evaluates the
 // deterministic rules of the repository's own policy (.factory/policy) before the LLM reviewer. Its history
 // store records every denial per requesting agent, which feeds the agent's lessons (arch_review.py get_lessons).
 
-// The engine is part of the factory install, not of the repository under review: `review.policy.agent` is
+// The engine is part of the factory install, not of the repository under review: `architectureReview.policy.agent` is
 // looked up in the install root first, then in the repository (a repository may carry its own).
 export function policyAgent(config) {
-  const agent = config.review.policy.agent;
+  const agent = config.architectureReview.policy.agent;
   if (path.isAbsolute(agent)) return agent;
   const roots = [config.installRoot, config.root].filter(Boolean);
   return roots.map((r) => path.resolve(r, agent)).find((f) => fs.existsSync(f)) ?? path.resolve(roots[0], agent);
 }
 
-// The policy content is the repository's: $ARCH_POLICY_DIR when set, else `review.policy.dir` in the checkout
+// The policy content is the repository's: $ARCH_POLICY_DIR when set, else `architectureReview.policy.dir` in the checkout
 // under review (a story worktree reviews against its own copy).
 export function policyDir(config) {
-  return path.resolve(config.root, process.env.ARCH_POLICY_DIR || config.review.policy.dir || '.factory/policy');
+  return path.resolve(config.root, process.env.ARCH_POLICY_DIR || setting(config, 'architectureReview.policy.dir'));
 }
 
 function runPolicy(config, template, input) {
-  const p = config.review.policy;
+  const p = config.architectureReview.policy;
   const values = { agent: policyAgent(config), policyDir: policyDir(config), workspace: config.root };
   const [cmd, ...args] = template.map((a) => a.replace(/\{(agent|policyDir|workspace)\}/g, (_, key) => values[key]));
   // The engine reads where the policy and the code are from its environment, so a custom command needs no flags.
@@ -314,9 +291,9 @@ function runPolicy(config, template, input) {
 
 // The requester's recurring denials from the policy history, as prompt-ready guidance (empty when none).
 function policyLessons(config) {
-  const p = config.review.policy;
+  const p = config.architectureReview.policy;
   if (!p.lessonsCommand) return '';
-  const result = runPolicy(config, p.lessonsCommand, JSON.stringify({ agent: p.requester, limit: p.maxLessons ?? 5 }));
+  const result = runPolicy(config, p.lessonsCommand, JSON.stringify({ agent: p.requester, limit: setting(config, 'architectureReview.policy.maxLessons') }));
   try {
     return String(JSON.parse(result.stdout).prompt ?? '').trim();
   } catch {
@@ -324,13 +301,13 @@ function policyLessons(config) {
   }
 }
 
-// A policy names its own rule categories; `review.policy.categories` maps them to the reviewer's.
+// A policy names its own rule categories; `architectureReview.policy.categories` maps them to the reviewer's.
 function policyFinding(config, item) {
   const patterns = item.patterns?.length ? ` Approved pattern(s): ${item.patterns.join(', ')}.` : '';
   const repeat = item.repeat_mistake ? ' (repeat mistake: this agent was denied for this rule before)' : '';
   return {
     severity: item.outcome === 'BLOCK' ? 'blocking' : 'minor',
-    category: config.review.policy.categories?.[item.category] ?? 'fit',
+    category: config.architectureReview.policy.categories?.[item.category] ?? 'fit',
     rule: item.rule_id,
     repeat: Boolean(item.repeat_mistake),
     // The finding needs a person (the policy profile must be extended): no code change can clear it.
@@ -354,7 +331,7 @@ export function changedWithStatus(config, files, base) {
 }
 
 export function policyReview(config, story, round, { files, base, previousReviewId = null } = {}) {
-  const p = config.review.policy;
+  const p = config.architectureReview.policy;
   if (!p?.enabled) return { verdict: 'SKIPPED', findings: [], summary: 'policy review disabled' };
   if (!fs.existsSync(policyAgent(config))) return { verdict: 'SKIPPED', findings: [], summary: `${p.agent} not found` };
   // No policy.yaml: nothing is configured, whether or not a Python can run the factory's engine (a custom
@@ -371,7 +348,7 @@ export function policyReview(config, story, round, { files, base, previousReview
     changed_files: changedWithStatus(config, files, base),
     ...(base ? { base } : {}),
     ...(previousReviewId ? { previous_review_id: previousReviewId } : {}),
-    options: { semantic: p.semantic ?? 'auto' },
+    options: { semantic: p.semantic },
   });
   const result = runPolicy(config, p.command, input);
   let response;
@@ -426,10 +403,10 @@ export function policyReview(config, story, round, { files, base, previousReview
 export async function reviewRound(config, story, round) {
   const state = loadState(config, story.key);
   const { base, files } = implChanges(config);
-  // With a review council (which can ask for tests to be deleted), a protected test the change deleted is put back and
-  // the round asks for the change again: another story's test, one kept for an upheld finding, the only cover of a line.
-  if (base && councilFor(config, 'review')) {
-    const restored = guardProtectedTests({ cwd: config.root, from: base, keys: [story.key], cases: planCases(config.root, config.plansDir, story.key) });
+  // The review's council can ask for tests to be deleted: a protected test the change deleted is put back and the round
+  // asks for the change again: another story's test, one kept for an upheld finding, the only cover of a line.
+  if (base) {
+    const restored = guardProtectedTests({ cwd: config.root, from: base, keys: [story.key], cases: planCases(config.root, config.featureVerification.plansDir, story.key) });
     if (restored.length) {
       log(`${story.key}: restored ${restored.length} protected test file(s): ${restored.map((v) => v.file).join(', ')}`);
       return { verdict: 'CHANGES_REQUESTED', findings: restored.map(protectedTestFinding), summary: 'Protected tests were deleted; the harness restored them.' };
@@ -438,7 +415,9 @@ export async function reviewRound(config, story, round) {
   const policy = policyReview(config, story, round, { files, base, previousReviewId: state.review.policyReviewId });
   if (policy.reviewId) updateState(config, story.key, (s) => (s.review.policyReviewId = policy.reviewId));
   if (policy.verdict === 'CHANGES_REQUESTED' || policy.verdict === 'ESCALATE') return { ...policy, summary: `Architecture Policy Pack: ${policy.summary}` };
-  const llm = councilFor(config, 'review') ? await councilArchitectureReview(config, story, round, { derivedClasses: policy.derivedClasses ?? [] }) : architectureReview(config, story, round, { derivedClasses: policy.derivedClasses ?? [] });
+  // The review council's seats for the ticket: picked once by the stage's orchestrator under the selection rules, kept.
+  await selectCouncil(config, 'architectureReview', { subject: story.key, shape: ticketShape({ key: story.key }), run: (o) => runAgentAsync(config, { ...o, cwd: config.root, timeoutSec: 300 }) });
+  const llm = await councilArchitectureReview(config, story, round, { derivedClasses: policy.derivedClasses ?? [] });
   // A configured policy that could not run is never skipped silently: the change cannot be approved until it
   // runs (no Python with the modules, a broken policy). With no policy there is nothing to run.
   if (policy.verdict === 'ERROR' && !policy.notConfigured) {
@@ -452,10 +431,10 @@ export async function reviewRound(config, story, round) {
 }
 
 // Only code agents are reviewed: the main session (Stop) or a subagent whose type is listed in
-// review.codeAgents (SubagentStop). Pipeline child agents never reach here (PIPELINE_CHILD).
+// hooks.codeAgents (SubagentStop). Pipeline child agents never reach here (PIPELINE_CHILD).
 export function isCodeAgentStop(config, payload = {}) {
   if (payload.hook_event_name !== 'SubagentStop' || !payload.agent_type) return true;
-  return (config.review.codeAgents ?? []).includes(payload.agent_type);
+  return setting(config, 'hooks.codeAgents').includes(payload.agent_type);
 }
 
 const formatFindings = (findings) =>
@@ -469,7 +448,7 @@ export function resetReview(config, story) {
 
 // A review round records itself in review.inProgress (and holds the review lock) while it runs, so
 // a round cut short by a crash, kill or reboot is found again: the next Stop reruns it, at most
-// recovery.maxAttempts times for the same code before it escalates.
+// recovery.maxRetries times for the same code before it escalates.
 const reviewLock = (config, story) => lockFile(config, story.key, 'review');
 
 export function interruptedReview(config, story) {
@@ -524,7 +503,7 @@ export async function hookStop(config, story, payload = {}) {
   let result;
   const round = review.rounds + 1;
   try {
-    // An earlier round of this code died mid-run: count it, and give up after recovery.maxAttempts.
+    // An earlier round of this code died mid-run: count it, and give up after recovery.maxRetries.
     const died = review.inProgress && !isProcessAlive(review.inProgress.pid, review.inProgress.boot) && review.inProgress.hash === hash;
     const attempt = died ? nextAttempt(config, review, { backoff: false }) : { action: 'fresh', fields: { recoveries: 0 } };
     if (attempt.action === 'crashed') {
@@ -532,7 +511,7 @@ export async function hookStop(config, story, payload = {}) {
       escalate(config, story, 'review', `review round crashed ${attempt.attempts} times`, `Round ${round} of the architecture review died ${attempt.attempts} times without a verdict. Run \`node scripts/review/review.mjs resume ${story.key} --force\` to try again.`);
       return notice(`Review: the architecture review of ${story.key} crashed ${attempt.attempts} times; see .factory/state/escalations/${story.key}-review.md.`);
     }
-    if (died) log(`${story.key}: rerunning interrupted review round ${round} (attempt ${attempt.attempt}/${attempt.maxAttempts})`);
+    if (died) log(`${story.key}: rerunning interrupted review round ${round} (attempt ${attempt.attempt}/${attempt.maxRetries})`);
     updateState(config, story.key, (s) => Object.assign(s.review, attempt.fields, { inProgress: { hash, round, ...selfProcess(), startedAt: nowIso() } }));
     result = await reviewRound(config, story, round);
     updateState(config, story.key, (s) => Object.assign(s.review, { inProgress: null, recoveries: 0 }));
@@ -567,12 +546,28 @@ export async function hookStop(config, story, payload = {}) {
   }
   if (result.verdict === 'CHANGES_REQUESTED') {
     const lessons = result.lessons ? `\n\nYou have been denied for these rules before. Lessons from your review history (follow them for the rest of this story):\n\n${result.lessons}` : '';
-    const declare = councilFor(config, 'review') ? fixDeclarationText(fixesFile(config.root, config.stateDir, { stage: 'review', story: story.key }), result.findings) : '';
-    const actions = councilFor(config, 'review') ? `\n\n${councilActionsText()}${declare ? `\n\n${declare}` : ''}` : '';
+    const declare = fixDeclarationText(fixesFile(config.root, config.stateDir, { stage: 'architectureReview', story: story.key }), result.findings);
+    const actions = `\n\n${councilActionsText()}${declare ? `\n\n${declare}` : ''}`;
     // route: handOffTestGaps (in the review round: test-only findings went to feature verification)
     const reason = `Architecture review round ${round}/${reviewMaxRounds(config)} for ${story.key} requested changes. ${result.summary}\n\n${formatFindings(result.findings)}${lessons}${actions}\n\nMake these corrections, then finish your turn; the review runs again automatically.`;
     updateState(config, story.key, (s) => Object.assign(s.review, { rounds: round, lastHash: hash, lastVerdict: 'CHANGES_REQUESTED', lastReason: reason, unchangedBlocks: 0 }));
-    return block(reason);
+    // The stage's orchestrator decides, once per ticket, whether it fixes the findings itself or returns them to the
+    // implement stage (the code agent, as before). Fixing itself, it runs as itself in the worktree with the code
+    // agent's instructions; the review then sits again at once, by the same council (never by the orchestrator).
+    const led = review.orchestrator ?? await decide(config, {
+      section: 'architectureReview',
+      stage: 'architecture review',
+      story: story.key,
+      work: 'fixing the findings the architecture review council upheld',
+      delegateTo: 'the implement stage (the code agent that wrote the change), as a blocked stop with the findings',
+      context: reason,
+      run: (o) => runAgent(config, { ...o, cwd: config.root, timeoutSec: config.architectureReview.timeoutSec }),
+    });
+    updateState(config, story.key, (s) => (s.review.orchestrator = led));
+    if (led.decision !== 'self') return block(reason);
+    log(`${story.key}: the architecture review's orchestrator fixes round ${round}'s findings itself`);
+    runAgent(config, { mode: 'implement', cwd: config.root, timeoutSec: config.architectureReview.timeoutSec, usage: { stage: 'review', story: story.key, round, step: 'orchestrator-fix' }, ...producerRun(config, { agent: 'implementer', selfDo: led, task: reason }) });
+    return hookStop(config, story, payload);
   }
   updateState(config, story.key, (s) => Object.assign(s.review, { rounds: 0, lastHash: hash, lastVerdict: 'APPROVED', lastReason: result.summary, approvedHash: hash, unchangedBlocks: 0, policyReviewId: null }));
   clearEscalation(config, story, 'review');

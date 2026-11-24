@@ -8,9 +8,16 @@ import { log, run, sleep } from '../../pipeline/lib/util.mjs';
 import { waitForDisk } from '../../factory/lib/prune.mjs';
 import { repoOverlay } from '../../pipeline/lib/config.mjs';
 import { councilFor } from '../../pipeline/lib/council.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
 const GB = 1024 ** 3;
-export const DEFAULT_RESOURCES = { reserveGb: 6, worktreeGb: 3, agentGb: 0.5, lspServerGb: 0.8, stackGb: 1.6, dockerOverheadGb: 1, maxParallel: null, waitPollSec: 15, maxWaitSec: 1800 };
+// lsp.maxLanguageServers (LSP_MAX_SERVERS overrides it): the upper limit on the memory-based number of language servers.
+export const maxLanguageServers = (config, env = process.env) => {
+  const v = Number.parseInt(env.LSP_MAX_SERVERS ?? '', 10);
+  return Number.isInteger(v) && v >= 0 ? v : setting(config, 'lsp.maxLanguageServers');
+};
+// The defaults are in scripts/implement/config.json (`resources`).
+export const DEFAULT_RESOURCES = defaultSettings().resources;
 
 // macOS keeps much of its "used" memory as inactive or purgeable pages it hands back on demand;
 // `vm_stat` reports them. Returns the extra reclaimable bytes, or 0 elsewhere.
@@ -36,20 +43,19 @@ export function memoryInfo({ exec = (cmd, args) => run(cmd, args, { timeoutSec: 
 // The sizing, with a reason per value. Pure: give it memoryInfo() and the CPU count.
 //   unit (a ticket or bug group in flight) = worktreeGb (its worktree, warm language server and builds)
 //                                          + agentGb (the agent CLI working in it)
-//   parallel            = (free - reserve) / unit, at least 1, at most the CPUs (and maxParallel)
+//   parallel            = (free - reserve) / unit, at least 1, at most the CPUs (and implement.maxParallel)
 //   maxConcurrentPairs  = 2 when each unit also has room for a second subtask worktree and its agent
 //                         (lspServerGb + agentGb), else 1
 //   maxConcurrentAgents = 2 per unit (an implementer and a verifier), at most the CPUs
-//   LSP_MAX_SERVERS     = one per unit plus what the rest of the budget holds at lspServerGb each, at most
-//                         one per unit and per pair
+//   language servers    = one per unit plus what the rest of the budget holds at lspServerGb each, at most
+//                         one per unit and per pair, and at most lsp.maxLanguageServers
 //   TESTSTACK_SLOTS     = (Docker memory - overhead - slot 0) / stackGb, at most parallel
-export function autoSize(mem, { cpus = os.cpus().length, resources = {}, pairs = 2, verifiers = 1, explicitAgents = null } = {}) {
+export function autoSize(mem, { cpus = os.cpus().length, resources = {}, pairs = 2, verifiers = 1, explicitAgents = null, maxParallel = null, maxLanguageServers = null } = {}) {
   const r = { ...DEFAULT_RESOURCES, ...resources };
-  if (resources.roslynGb != null && resources.lspServerGb == null) r.lspServerGb = resources.roslynGb; // the key's old name
   const budget = Math.max(0, mem.freeGb - r.reserveGb);
   const unit = r.worktreeGb + r.agentGb;
   let parallel = Math.max(1, Math.floor(budget / unit));
-  parallel = Math.min(parallel, cpus, r.maxParallel ?? Infinity);
+  parallel = Math.min(parallel, cpus, maxParallel ?? Infinity);
   const perUnit = budget / parallel;
   const maxConcurrentPairs = perUnit >= unit + r.lspServerGb + r.agentGb ? pairs : 1;
   // A verify round runs every council member at once: a pair's verify step needs `verifiers` agents, not one.
@@ -58,15 +64,15 @@ export function autoSize(mem, { cpus = os.cpus().length, resources = {}, pairs =
   // A number the repository set itself (implement.maxConcurrentAgents in .factory/config.json) wins over the derived one.
   const maxConcurrentAgents = explicitAgents ?? derivedAgents;
   const left = Math.max(0, budget - parallel * unit);
-  const lspMaxServers = Math.min(parallel * (1 + maxConcurrentPairs), parallel + Math.floor(left / r.lspServerGb));
+  const lspMaxServers = Math.min(parallel * (1 + maxConcurrentPairs), parallel + Math.floor(left / r.lspServerGb), maxLanguageServers ?? Infinity);
   // What Docker memory holds besides slot 0: an upper bound for the machine-wide pool (stack.poolSize), not this run's share.
   const teststackSlots = mem.dockerGb == null ? null : Math.max(0, Math.floor((mem.dockerGb - r.dockerOverheadGb - r.stackGb) / r.stackGb));
   const reasons = [
     `${mem.freeGb} GB free of ${mem.totalGb} GB, ${r.reserveGb} GB reserve: ${Math.round(budget * 10) / 10} GB for the run`,
-    `parallel ${parallel}: ${unit} GB per ticket (worktree ${r.worktreeGb} + agent ${r.agentGb}), at most ${cpus} CPUs`,
+    `parallel ${parallel}: ${unit} GB per ticket (worktree ${r.worktreeGb} + agent ${r.agentGb}), at most ${cpus} CPUs${maxParallel != null ? ` and implement.maxParallel ${maxParallel}` : ''}`,
     `maxConcurrentPairs ${maxConcurrentPairs}: ${Math.round(perUnit * 10) / 10} GB per ticket ${maxConcurrentPairs > 1 ? '>=' : '<'} ${unit + r.lspServerGb + r.agentGb} GB for a second pair`,
     explicitAgents != null ? `maxConcurrentAgents ${maxConcurrentAgents}: implement.maxConcurrentAgents in .factory/config.json` : `maxConcurrentAgents ${maxConcurrentAgents}: ${perTicket} per ticket (${maxConcurrentPairs} pair(s) × ${Math.max(1, verifiers)} verifier(s) at once, at least 2), at most the CPUs`,
-    `LSP_MAX_SERVERS ${lspMaxServers}: one per ticket plus ${Math.round(left * 10) / 10} GB spare at ${r.lspServerGb} GB each`,
+    `language servers ${lspMaxServers}: one per ticket plus ${Math.round(left * 10) / 10} GB spare at ${r.lspServerGb} GB each${maxLanguageServers != null ? `, at most lsp.maxLanguageServers ${maxLanguageServers}` : ''}`,
     mem.dockerGb == null ? 'stack slots: stack.poolSize (Docker memory unknown)' : `stack slots at most ${teststackSlots} (stack.poolSize caps it): Docker ${mem.dockerGb} GB minus ${r.dockerOverheadGb} GB overhead and slot 0, ${r.stackGb} GB per stack`,
   ];
   return { parallel, maxConcurrentPairs, maxConcurrentAgents, lspMaxServers, teststackSlots, memory: mem, reasons };
@@ -81,10 +87,10 @@ export const resourcesFromEnv = (env = process.env) => {
   }
 };
 
-// `--parallel` as given: a number wins; "auto" (or nothing, when implement.parallel is "auto") sizes the
-// run from free memory, prints why, and exports the derived limits to every process of the run.
+// `--parallel` as given: a number wins; "auto" (or nothing) sizes the run from free memory, at most
+// implement.maxParallel, prints why, and exports the derived limits to every process of the run.
 export function parallelFor(config, flag, { dryRun = false, mem = null, cpus = os.cpus().length, print = (m) => console.log(m) } = {}) {
-  const wanted = flag ?? config.implement.parallel ?? 'auto';
+  const wanted = flag ?? 'auto';
   if (wanted !== 'auto' && wanted !== true) return Math.max(1, Number(wanted) || 1);
   const council = (stage) => councilFor(config, stage)?.members?.length ?? 1;
   let explicitAgents = null;
@@ -93,14 +99,14 @@ export function parallelFor(config, flag, { dryRun = false, mem = null, cpus = o
   } catch {
     /* no overlay to read */
   }
-  const sized = autoSize(mem ?? memoryInfo(), { cpus, resources: config.resources ?? {}, pairs: config.implement.maxConcurrentPairs ?? 2, verifiers: Math.max(council('pairVerify'), council('pairUiVerify')), explicitAgents: Number.isInteger(explicitAgents) && explicitAgents > 0 ? explicitAgents : null });
-  // Explicit env settings win over the derived ones.
-  if (process.env.LSP_MAX_SERVERS) sized.lspMaxServers = Number(process.env.LSP_MAX_SERVERS);
+  const sized = autoSize(mem ?? memoryInfo(), { cpus, resources: config.resources ?? {}, pairs: setting(config, 'implement.maxConcurrentPairs'), verifiers: Math.max(council('pairVerify'), council('pairUiVerify')), explicitAgents: Number.isInteger(explicitAgents) && explicitAgents > 0 ? explicitAgents : null, maxParallel: setting(config, 'implement.maxParallel'), maxLanguageServers: maxLanguageServers(config) });
+  // An explicit pool size wins over the derived one.
   if (process.env.TESTSTACK_SLOTS) sized.teststackSlots = Number(process.env.TESTSTACK_SLOTS); // explicit: the pool size itself
   print(`Resources (auto): ${sized.reasons.join('; ')}.`);
   if (!dryRun) {
-    process.env.IMPLEMENT_RESOURCES = JSON.stringify({ parallel: sized.parallel, maxConcurrentPairs: sized.maxConcurrentPairs, maxConcurrentAgents: sized.maxConcurrentAgents, lspMaxServers: sized.lspMaxServers, teststackSlots: sized.teststackSlots, freeGb: sized.memory.freeGb, dockerGb: sized.memory.dockerGb, reserveGb: config.resources?.reserveGb ?? DEFAULT_RESOURCES.reserveGb });
-    process.env.LSP_MAX_SERVERS = String(sized.lspMaxServers);
+    process.env.IMPLEMENT_RESOURCES = JSON.stringify({ parallel: sized.parallel, maxConcurrentPairs: sized.maxConcurrentPairs, maxConcurrentAgents: sized.maxConcurrentAgents, lspMaxServers: sized.lspMaxServers, teststackSlots: sized.teststackSlots, freeGb: sized.memory.freeGb, dockerGb: sized.memory.dockerGb, reserveGb: setting(config, 'resources.reserveGb') });
+    // The memory-based number, which the language server daemon caps with lsp.maxLanguageServers (scripts/lsp/lib/common.mjs).
+    process.env.LSP_SIZED_SERVERS = String(sized.lspMaxServers);
     if (sized.teststackSlots != null && !process.env.TESTSTACK_SLOTS) process.env.TESTSTACK_SLOTS_MAX = String(sized.teststackSlots);
   }
   return sized.parallel;

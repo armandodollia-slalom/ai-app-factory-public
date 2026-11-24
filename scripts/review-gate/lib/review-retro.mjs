@@ -6,6 +6,7 @@
 //   - widening auto-merge beyond Low is only ever a written proposal; the gate's rule is code.
 import { approvalsFor } from './gate.mjs';
 import { outcomeFor } from './pr-review.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 const median = (xs) => {
   const v = xs.filter((x) => x != null).sort((a, b) => a - b);
@@ -14,7 +15,7 @@ const median = (xs) => {
   return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
 };
 const rate = (n, d) => (d ? Math.round((n / d) * 100) / 100 : null);
-const DEFAULTS = { minSample: 5, raiseFindRate: 0.3, raiseEscapeRate: 0.2, lowerFindRate: 0.05 };
+const DEFAULTS = defaultSettings().implement.reviewGate.retro;
 
 // Per class: PRs, how often the 2nd and 3rd reviewers found something the earlier ones didn't, escapes
 // by approval count, and review latency per number of reviewers.

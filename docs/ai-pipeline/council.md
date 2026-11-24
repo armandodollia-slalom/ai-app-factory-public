@@ -1,93 +1,161 @@
 # Council verifiers
 
-**Who reads this:** B and C, when they want several models to verify a stage. A verification stage can seat a
-**council**: several independent verifiers (members), each on its own agent CLI (Claude Code, Codex, GitHub Copilot
-or a custom command), model, reasoning effort and lens, instead of its single verifier. The harness runs the members
-in parallel and merges their results deterministically. The rules every member follows are the factory's
+**Who reads this:** B and C, when they want several models to verify a stage. Every verification stage (the pair
+verifier, the pair UI verifier, the architecture review, the test plan, the test automation and the PR check) is a
+**council**: one verifier or several independent ones (members), each on its own entry of the model pool (an agent CLI:
+Claude Code, Codex, GitHub Copilot or a custom command; a model; a reasoning effort) and through its own lens. The harness runs the members in parallel and merges
+their results deterministically, the same way for one member as for several. The rules every member follows are the factory's
 [`council` skill](../../skills/council/SKILL.md), which is injected into every member's prompt. Adjudication
 (below) is proven by fixture tests only ([proof](../../README.md#what-has-been-proven)).
 
-With no `council` section in `.factory/config.json` (the default), and for every stage the section does not list,
-nothing changes: each stage runs its single verifier with its own round limit.
+By default (`council.members` 1) every stage seats **one member**: its own verifier, on its own agent's pool entry
+(`models.agents.<agent>`, [models.md](models.md)). Seating more changes who reviews and nothing else.
+
+## Round limit and pass score
+
+Each stage has one round limit and one pass score, used for any council size: the council passes when every blocking
+member scores the pass score or more (one decimal place allowed, such as 9.5) and no blocking finding stands; at the
+round limit the stage escalates.
+
+| Stage | Round limit | Default | Pass score | Default |
+| --- | --- | --- | --- | --- |
+| pair verifier, pair UI verifier | `implement.maxCouncilRounds` | 3 | `implement.councilPassScore` | 9.5 |
+| architecture review | `architectureReview.maxCouncilRounds` | 5 | `architectureReview.councilPassScore` | 9.5 |
+| test plan | `testPlan.maxCouncilRounds` | 5 | `testPlan.councilPassScore` | 9.0 |
+| test automation | `testAutomation.maxCouncilRounds` | 5 | `testAutomation.councilPassScore` | 9.0 |
+| PR check | `prCheck.maxCouncilRounds` | 3 | `prCheck.councilPassScore` | 9.5 |
+
+The PR check reads `prCheck.maxCouncilRounds` in every caller (delivery, an epic, a CI fix and a run by hand, where
+`--max-rounds` overrides it for that run). A test stage is verified once its council passes; nothing asks for a repeated
+pass on unchanged work. Each stage section may also carry `councilIntercom`, its own override of `council.intercom`.
+
+## A council of one
+
+A stage that seats one member runs its own verifier as the sole member, on the pool entry the stage's
+[orchestrator](orchestrators.md) picks for it ([seats](#seats)). It reviews everything (its lens is recorded as
+`all`) and gets the same rules as any member, without the parts that need other members: no seat list, no lens to look
+through first, no lens table, no "work alone", no discussion, no non-blocking members and none of the orchestrator's
+sections of the skill. `council.blockQuorum` has no effect, no discussion is held, and an unavailable member fails the
+round. In the PR check the sole member is the stage's own critic panel (the critics, the defender and the judge), which
+passes at `prCheck.councilPassScore` with no blocking finding upheld; its critics run on the picked entry (the defender
+and the judge on their own).
+
+With `council.shadowSeat.enabled` (default off), a second member sits beside the sole member: the shadow seat, the
+best-ranked pool entry ([seats](#seats)) of another model family than the sole member's, with lens `all`. It is
+non-blocking: the stage does not wait for it, its score is never recorded, and its findings, on time or late, are
+feedback for the sole member, in every stage: never part of a verdict, never raised to blocking (the harness's raise
+of a minor finding that describes a user-visible error or weaker access skips feedback), never debated or judged in a
+PR check; they are recorded and reach the producer as notes. Only the sole member decides, so the council still holds no discussion and fails its
+round when the sole member cannot run. The shadow gives the scorecard a unique-findings signal for a one-seat stage,
+at the cost of a second verifier run per round. Beside the PR check's panel the shadow is one more critic (the flow
+critic, reviewing every lens) on its own entry, of another family than the panel's. It never touches the verdict: its
+findings are follow-ups of the check and council records, never debated or judged; one shadow run sits at a time, and
+one still running when the check ends is stopped, not waited for.
 
 ## Configuration
 
-The section is governance: it lives in `.factory/config.json`, never in `app.json`.
+The section is governance: it lives in `.factory/config.json`, never in `app.json`. Members are not listed here: they are
+entries of the model pool, `models.pool` ([models.md](models.md)), and the council setting says how many sit.
 
 ```jsonc
+"models": {
+  "pool": [
+    { "name": "opus",  "cli": "claude",  "model": "claude-opus-5-5",   "effort": "high" },
+    { "name": "sol",   "cli": "codex",   "model": "gpt-6.1-sol",       "effort": "high", "env": { "CODEX_HOME": "~/.codex-personal" } },
+    { "name": "tests", "cli": "copilot", "model": "claude-sonnet-5.5", "effort": "medium" }
+  ]
+},
 "council": {
-  "rounds": 3,                  // most review rounds; a stage may override
-  "passScore": 9,               // every blocking member must score this or more
-  "blockOn": "any",             // any | majority | all: members needed to uphold a blocking finding
+  "members": 1,                 // how many sit, in every stage that does not say otherwise
+  "blockQuorum": "any",         // any | majority | all: members needed to uphold a blocking finding
   "onUnavailable": "fail",      // fail | report: never substitute another model
-  "members": [
-    { "name": "opus",    "cli": "claude",  "model": "opus",   "effort": "high", "lens": "correctness" },
-    { "name": "sol",     "cli": "codex",   "model": "sol",    "effort": "high", "lens": "correctness" },
-    { "name": "tests",   "cli": "copilot", "model": "sonnet", "lens": "test-value" },
-    { "name": "rewrite", "cli": "claude",  "model": "opus",   "lens": "rewrite", "blocking": false }
-  ],
-  "stages": {
-    "pairVerify":     { "members": ["opus", "tests"] },
-    "review":         { "members": ["opus", "sol", "rewrite"] },
-    "testAutomation": { "members": ["tests", "sol"], "rounds": 5 },
-    "prCheck":        { "rounds": 6 }      // no "members": the whole council sits
-  }
-}
+  "explorationSeat": { "enabled": true },  // with two or more seats, one goes to the least-sampled entry
+  "shadowSeat": { "enabled": false }       // with one seat, a non-blocking member of another family beside it
+},
+"architectureReview": { "councilMembers": 3 },
+"prCheck": { "councilMembers": 2 }
 ```
 
 `examples/eshop/.factory/config.json` carries this sample under `$councilSample` (not enabled).
 
-### Members
-
-| Key | Meaning |
+| Setting | Meaning |
 | --- | --- |
-| `name` | unique short name (letters, digits, `-`, `_`); the PR table and the logs use it |
-| `cli` | `claude`, `codex`, `copilot` or `custom` |
-| `model` | an alias from `agent.allowedModels`; it must have an id for the member's CLI in `agent.modelIds.<cli>` (on Codex only `sol` has one by default). Optional for `custom` |
-| `effort` | `low`, `medium`, `high`, `xhigh` or `max`: Claude Code's `--effort`, Codex's `model_reasoning_effort` (`max` becomes `xhigh`). Copilot's CLI documents no effort option, so a Copilot member runs at its model's default; a custom command gets `PIPELINE_AGENT_EFFORT` |
-| `lens` | `correctness`, `acceptance`, `security`, `test-value`, `rewrite` or `ui` (the skill's table) |
-| `blocking` | default `true`; `false` makes the member's findings feedback (see below) |
-| `cmd` | `custom` only: the command, which reads the prompt on stdin (like `PIPELINE_AGENT_CMD`; it gets `PIPELINE_AGENT_MODEL` too) |
-| `timeoutSec` | optional; else the stage's verifier time limit |
-| `env` | optional variables for the member's CLI process, such as a second login's home folder: `{ "CODEX_HOME": "~/.codex-personal" }`. `~` and `${NAME}` are expanded when the member starts. Settings only, never secrets: a variable whose name looks like a token, key or password must be a `${NAME}` reference, a value that looks like a credential is refused, and `PIPELINE_*`, `FACTORY_*` and `NODE_OPTIONS` cannot be set. `factory doctor` and `factory council check` check the member's login with this environment; the metrics record the login home as configured (`login`), never an expanded value |
+| `council.members` | how many members a council seats (default 1: the stage's own verifier alone) |
+| `<section>.councilMembers` | the same for one section's stages: `implement` (both pair verifiers), `architectureReview`, `testPlan`, `testAutomation` or `prCheck`; `null` uses `council.members` |
+| `council.blockQuorum` | `any`, `majority` or `all` blocking members must object for a finding to block (no effect with one member) |
+| `council.onUnavailable` | `fail` the round, or `report` and go on without the member, when a member cannot run (one member always fails) |
+| `council.explorationSeat.enabled` | with two or more seats, one seat goes to the pool entry with the fewest seats in the stage (default on) |
+| `council.shadowSeat.enabled` | with one seat, a non-blocking member of another family sits beside the sole member (default off) |
+| `council.scorecard.*` | the scorecard's minimum sample and weights ([retro.md](retro.md#council-scorecard)) |
 
-`PIPELINE_AGENT_CMD` (the test fake agent) still wins over every member's CLI.
+### Seats
 
-The shipped defaults map `sol` to `gpt-6.1-sol` on Codex (`agent.modelIds.codex`), so a Codex member on `sol` loads
-without extra settings. An implement role (`implement.roles.<role>`) takes the same `env` beside its `cli`. Example: a
-two-member council of Opus 5.5 on Claude Code and Sol 6.1 on a second Codex login:
+The stage's [orchestrator](orchestrators.md) picks the seats once per ticket, one seat too. With one seat it picks the
+pool entry the stage's own verifier runs on (it reviews everything, lens `all`); the pair UI verifier's must drive a
+browser, and a bad pick twice seats the verifier on its own agent's entry. With two or more it picks one pool entry and
+one lens per seat, with a reason for each. It is given the pool with each entry's family, the stage, the number of seats, the
+ticket's shape (UI, backend, test, bug fix) and the [scorecard](retro.md#council-scorecard) (empty until there are records), and
+is told to favour different families. The harness rejects a pick that:
 
-```json
-"council": {
-  "members": [
-    { "name": "opus", "cli": "claude", "model": "opus", "effort": "high", "lens": "correctness" },
-    { "name": "sol", "cli": "codex", "model": "sol", "effort": "high", "lens": "correctness", "env": { "CODEX_HOME": "~/.codex-personal" } }
-  ],
-  "stages": { "review": {}, "prCheck": {} }
-}
-```
+- has the wrong number of seats, or names an entry that is not in the pool;
+- seats a family twice while a family of the pool has no seat (repeats are allowed once every family sits), or an
+  entry twice while an entry of the pool has no seat;
+- gives a lens the stage does not allow, or the `ui` lens to an entry whose CLI cannot drive a browser (Codex);
+- leaves out the stage's core lens: `ui` on the pair UI verifier, `test-value` on the test stages, `acceptance` on the
+  PR check;
+- seats two members with one lens while a lens that fits the stage has no seat.
 
-### Stages
+Entries are ranked for a stage and lens by the scorecard: a row's `score`, with an unknown row (fewer seats than
+`council.scorecard.minSeats`, or none) counted as 0, so it is neither preferred to a known good row (a positive score)
+nor ranked below a known bad one (a negative score); pool order among equals. The orchestrator sees the stage's rows.
 
-| Key | What the council replaces | Round limit it overrides | Agent each member runs |
-| --- | --- | --- | --- |
-| `pairVerify` | the pair verifier of a code subtask ([implement.md](implement.md)) | `implement.maxPairRounds` | `pair-verifier` |
-| `pairUiVerify` | the pair UI verifier of a UI subtask | `implement.maxPairRounds` | `pair-ui-verifier`, on the pair's leased stack slot, screenshots under `round-<n>/<member>/` |
-| `review` | the LLM architecture reviewer ([review.md](review.md)); the policy pack still runs first | `review.maxRounds` | `architecture-reviewer` |
-| `testPlan` | the test plan verifier ([feature-verification.md](feature-verification.md)) | `loops.planMaxRounds` | `test-plan-verifier` |
-| `testAutomation` | the test automation verifier | `loops.automationMaxRounds` | `test-automation-verifier` |
-| `prCheck` | the PR check critics its members' lenses cover ([pr-check.md](pr-check.md)); the defender, the judge and the fixer stay, and so do the stage's own critics no member covers: acceptance (unless a member has that lens), flow (the list of behaviour changes outside the ticket, unless a member's lens is correctness or security), design on a frontend PR (unless a member's lens is ui) and video when there are recordings | `prCheck.maxRounds` (an explicit `--max-rounds`, such as the delivery's fix rounds, still wins) | the critic closest to the lens: acceptance → `pr-check-acceptance`, correctness and security → `pr-check-flow`, test-value and rewrite → `pr-check-style` |
+With two or more seats and `council.explorationSeat.enabled` (default on), one seat is the exploration seat: the pool
+entry with the fewest seats in the stage, summed over its rows (pool order among equals), must sit, so selection keeps
+gathering evidence on models it knows little about and does not lock in an early favourite. The orchestrator is told
+which entry; a pick without it goes back. Among entries with as many seats as each other (an empty scorecard), it is the
+last in pool order, the one the fill would otherwise seat least. The family rule still applies.
 
-A stage is listed with `members` (names from `council.members`) or `{}` (the whole council, without `ui` members), and optionally `lenses`: a member's lens for that stage only, so the same two members can judge code through `correctness` in one stage and tests through `test-value` in another (`"testAutomation": { "lenses": { "opus": "acceptance", "sol": "test-value" } }`). The member must sit for the stage, and `ui` is allowed only for `pairUiVerify`.
-A `ui` member needs a leased app stack slot, so it may sit only for `pairUiVerify`. A Codex member cannot have the `ui` lens: Codex's sandbox cannot start a browser. It can still sit for `pairUiVerify` with another lens: it checks the running app over HTTP (its verify runs may reach localhost) and in the code, and leaves layout and styling to the browser members. Every stage needs at least one
-blocking member. `council.stages.<stage>.rounds` overrides `council.rounds`; with a council, these take precedence over
-the stage's own limit, and at the limit the story escalates exactly as it does without one.
+A rejected pick goes back once with the reason. If the second also fails, the harness fills the seats itself, held
+to the same rules as a pick, in work bounded by the seats times the pool: one entry per family first (each family's
+best-ranked entry, families by that rank), then the entries not yet seated, then repeats, seats in pool order; the
+stage's lenses in order, core lens first, each to the best-ranked seat left that can take it. When that breaks a rule
+(the exploration entry not seated, no browser entry for `ui`), every fill that differs in one seat is tried and the
+first that keeps the rules is seated. A one-seat stage's fallback is its own verifier's entry when that keeps the
+rules (on the pair UI verifier, one that can drive a browser), else the best-ranked entry that does. Only what no fill
+can meet (too few entries for the seats) is recorded on the event as `fillProblems`. Every
+seat blocks. Seat names are unique in a sitting: an entry's first seat is its name, a repeat `<entry>-2`, `<entry>-3`,
+skipping a name another entry already has. The pick is kept for the ticket, in
+`.factory/state/council/seats/<stage>--<ticket>.json`, so the same members and lenses sit in every round and on resume
+(members keep their findings' ids and disputes) and no new pick is made; a kept pick that names an entry the pool no
+longer has is not used. Each pick is one `council.selection` event in `.factory/metrics/council-selections.jsonl`: the
+pool, the pick, the lenses, the reasons, the scorecard version seen, which seat was the exploration seat
+(`explorationSeat`) and which the shadow seat (`shadowSeat`, non-blocking), any rejected pick with its reason, and who chose
+(`orchestrator` or `harness`; a council of one is the harness's, with lens `all`).
+
+| Stage | Lenses it allows, in the harness's order (core lens first) | Agent each member runs |
+| --- | --- | --- |
+| `pairVerify` | correctness, acceptance, security, rewrite, test-value | `pair-verifier` ([implement.md](implement.md)) |
+| `pairUiVerify` | ui, correctness, acceptance, security, rewrite | `pair-ui-verifier`, on the pair's leased stack slot, screenshots under `round-<n>/<member>/` |
+| `architectureReview` | correctness, security, rewrite, acceptance, test-value | `architecture-reviewer` ([review.md](review.md)); the policy pack still runs first |
+| `testPlan` | test-value, acceptance, correctness | `test-plan-verifier` ([feature-verification.md](feature-verification.md)) |
+| `testAutomation` | test-value, correctness, acceptance, rewrite | `test-automation-verifier` |
+| `prCheck` | acceptance, correctness, security, rewrite, test-value | the critic closest to the lens: acceptance → `pr-check-acceptance`, correctness and security → `pr-check-flow`, test-value and rewrite → `pr-check-style`. The defender, the judge and the fixer stay, and so do the stage's own critics no member covers: acceptance (unless a member has that lens), flow (the list of behaviour changes outside the ticket, unless a member's lens is correctness or security), design on a frontend PR (unless a member's lens is ui) and video when there are recordings ([pr-check.md](pr-check.md)) |
+
+The `ui` lens goes only to an entry whose CLI can drive a browser: a Codex entry's sandbox cannot start one, so the lens
+moves to another seat, and with no such seat nobody takes it. A Codex member still sits for `pairUiVerify` with another
+lens: it checks the running app over HTTP (its verify runs may reach localhost) and in the code. The round limit and the
+pass score are the stage's own (above), whatever the council's size.
+
+`PIPELINE_AGENT_CMD` (the test fake agent) still wins over every entry's CLI. A pool entry's `env` (a second login's home
+folder) is checked by `factory doctor` and `factory council check`; the metrics record the login home as configured
+(`login`), never an expanded value.
 
 A lens adds to the stage's own instructions and `AGENT_RESULT` contract; it does not replace them. Every member's task
 is the stage's task, then a "Council member" section (who it is, its lens, the round, the extra fields) and the skill.
 
-The settings load fails on a bad section: an unknown key, stage or lens, duplicate names, a member model without an id
-for its CLI, a stage member that does not exist. `factory council check` prints the problems, or who sits for each stage.
+The settings load fails on a bad section or pool: an unknown key, a list of members (`council.members` is a count), a
+pool entry that breaks a rule, a setting that names no pool entry. `factory council check` prints the problems, or the
+pool with each entry's family and who sits for each stage.
 
 ## How a round works
 
@@ -117,12 +185,16 @@ for its CLI, a stage member that does not exist. `factory council check` prints 
 4. The harness merges (`scripts/pipeline/lib/council.mjs` `mergeCouncil`):
    - Findings of different members that name the same defect (same id, same test, overlapping rewrite regions, same
      file within three lines or with similar text) become one finding with every member's name and evidence.
-   - `blockOn` counts the blocking members that raised the finding as non-minor, out of the blocking members that
+   - `blockQuorum` counts the blocking members that raised the finding as non-minor, out of the blocking members that
      answered: `any` one, `majority` more than half, `all` every one. A finding below that is a note (`notUpheld`).
-   - Minor findings never block. A non-blocking member's findings are feedback unless a blocking member raised the same.
-   - **Pass**: no finding stands, and every blocking member scored `passScore` or more (a member with no score must
-     approve). A low score counts unless every non-minor finding that member raised was outvoted; a low score with no
-     blocking finding at all becomes a finding of its own, so the implementer has something to answer.
+   - Minor findings never block. A non-blocking member's findings are feedback (`feedback`, never raised or judged) unless a blocking member raised the same, and even then only the blocking members' items decide the finding (its id, evidence, rule 4 and action); the non-blocking member's evidence is kept for the record:
+     the same id or similar words, never nearby lines alone (two defects on one line stay apart), and the merged
+     finding keeps a blocking member's text.
+   - **Pass**: no finding stands, and every blocking member scored the stage's pass score or more (a member with no score
+     does not pass). A low score counts unless every non-minor finding that member raised was ruled not upheld
+     (outvoted, settled on adjudication or by an earlier round, or a question for want of evidence); a low score, or no
+     score, with no finding of the member's behind it becomes a finding of its own, so the implementer has something
+     to answer.
    - An upheld `rewrite` replaces the fix list for the regions it deletes: findings inside them become notes.
    - An upheld `delete-test` is acted on, except (harness-enforced) a test that belongs to another story (a ticket key
      in its file name or case id), a regression test kept for an upheld finding (`kept-for` on its plan case), or the
@@ -211,7 +283,7 @@ The merge then works as this page describes, on what is left. Settings, limits, 
 
 ## Who sits again in a PR check round
 
-A member whose last score passed (`passScore`), with nothing it raised upheld, is carried to the next PR check round with its score when the fix touched nothing it judges. Its scope is test files for `test-value`, frontend files for `ui`, and production code for the other lenses. A member with the `acceptance` lens sits again. When every finding the last fix addressed was minor, a shorter rule replaces this one: every member that scored 10 with nothing upheld is carried, whatever the fix touched, except a member with the `acceptance` lens, whatever its name. The record marks a carried member "carried over". A non-blocking member that answers after the last round is waited for up to `council.lateGraceSec` (120); its findings become follow-ups of the check instead of being lost.
+A member whose last score passed (the stage's pass score), with nothing it raised upheld, is carried to the next PR check round with its score when the fix touched nothing it judges. Its scope is test files for `test-value`, frontend files for `ui`, and production code for the other lenses. A member with the `acceptance` lens sits again. When every finding the last fix addressed was minor, a shorter rule replaces this one: every member that scored 10 with nothing upheld is carried, whatever the fix touched, except a member with the `acceptance` lens, whatever its name. The record marks a carried member "carried over". A non-blocking member that answers after the last round is waited for up to `council.lateGraceSec` (120); its findings become follow-ups of the check instead of being lost.
 
 ## Cost and concurrency
 
@@ -231,8 +303,29 @@ Every member is an agent run:
 
 ## Records
 
+- `.factory/metrics/council-selections.jsonl`: one `council.selection` event per pick of a stage's seats ([seats](#seats)).
+- `<lessonsDir>/scorecard.json`: what the retro computes from the records below, per model, lens and stage
+  ([retro.md](retro.md#council-scorecard)).
+- `.factory/metrics/council-findings.jsonl`: what came of every finding, to learn which models do well in which roles.
+  `kind: "finding"`: one record per finding per round per member that raised it (ticket, stage, step, round, finding
+  id, the member's seat, pool entry, model, family and lens, severity, action, file and line, and `shared` when another
+  member raised it too). In the PR check both carry the check run (`check`), as each check of a ticket starts its ids again.
+  A non-blocking member's (the shadow's) finding is recorded too, marked `feedback`, and never gets an outcome.
+  `kind: "outcome"`: in the PR check what came of it (`upheld` or `dismissed`), the judge's own
+  ruling (`ruling`, null when it gave none) and who decided (`by`: `judge`, or `harness` when the finding stood
+  without a ruling or the harness reversed one), with the judge's pool entry, model and family when it ruled; in the other stages `led-to-change` (the fix declaration names lines changed for it) or
+  `no-change` (a note, outvoted, superseded, disputed and dropped, or no change declared). `kind: "miss"`: a problem
+  found after a council passed, against the members that sat on it with the matching lens, or its sole member, each with
+  its seat's entry and model (the scorecard charges that model, whoever holds the seat later): a PR check upheld
+  finding by its own lens, once per check run, against the councils of the tickets it names (every ticket of the check
+  when it names none), a red CI check, once per ticket, check and head (a failing test counts as `test-value`, a build or static
+  analysis failure as `correctness`), and with `lowWeight` a person's "changes requested" review or a later bug ticket
+  that names the ticket, against every member. Every problem but the PR check's own findings counts against the PR
+  check's council too. No evidence text and no absolute path is recorded. A member's own usage
+  rows (`token-usage.jsonl`) carry its `seat`, `entry`, `family` and `lens`, so its tokens, cost and seconds sum per
+  member.
 - `.factory/metrics/council-rounds.jsonl`: one record per council round: stage, story, step (the subtask), round,
-  rounds, passScore, blockOn, pass, the lowest blocking score, and per member its name, CLI, model, effort, lens,
+  rounds, passScore, blockQuorum, pass, the lowest blocking score, and per member its name, pool entry, family, CLI, model, effort, lens,
   blocking, status (`ok`, `failed`, `unavailable`, `late`), score and verdict; after a discussion, also its room, its
   journal (relative to the repository) and the counts of what it settled, with each ruling and its reason.
 - `decisions.jsonl`: stage `council-<stage>`, with every merged finding and why it stands or not.
@@ -246,7 +339,7 @@ Every member is an agent run:
 
 ```bash
 factory council check                          # validate the section; list who sits where
-factory council review --stage review          # seat the review council on this branch against baseRef
+factory council review --stage architectureReview   # seat the architecture review council on this branch against baseRef
 factory council review --stage prCheck --base origin/main --story SHOP-1 --json
 ```
 

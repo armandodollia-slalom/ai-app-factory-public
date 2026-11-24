@@ -28,11 +28,12 @@ An agent's prompt is built from three files, and only the first ships with the f
 | `pair-ui-verifier` | [implement](implement.md#ui-verification) | implement harness, every round of a `verify: "ui"` subtask | runs shell commands and a browser against a leased stack slot; no source edits | the subtask spec, its diff, the running app, mockups and their renders | `APPROVED` or `CHANGES_REQUESTED` with findings citing screenshots |
 | `arch-review` | [review](review.md) | review stage (as `architecture-policy/agents/arch_review.py review`), before each LLM review; any agent on request. In the pipeline this step is the policy engine: deterministic, no model call | read-only | changed files, Architecture Policy Pack rules | `PASS`, `WARN` or `BLOCK` with rule findings |
 | `architecture-reviewer` | [review](review.md) | review stage | read-only | the story, the implementation diff, the repository's convention files | `APPROVED` or `CHANGES_REQUESTED` with findings |
+| `stage-orchestrator` | [orchestrators](orchestrators.md) | the start of every verifier stage, once per ticket, to pick its council (one seat too); the test plan and test automation stages' work; an architecture review or PR check with findings to fix | read when it decides; writes when it does the stage's work itself (with that agent's instructions) | the stage's task, and when it does the work, the stage agent's instructions and task | a decision (`self` or `delegate`, or another the task names) with its reason; when it does the work, the stage agent's own result |
 | `test-planner` | [feature-verification](feature-verification.md) | `factory fv plan`, or the feature verification stage after review approval | writes `.factory/plans/` | the story (and its diff when it changed) | test plan files |
 | `test-plan-verifier` | [feature-verification](feature-verification.md) | plan loop | read-only | the story and the plan | score 0-10 and gaps |
 | `test-automation` | [feature-verification](feature-verification.md) | the feature verification stage after review approval, or `factory fv automate` | writes tests in the application's test tree and `.factory/stack/scenarios/` | the verified plan, the implementation | tests, or `product-bug` |
 | `test-automation-verifier` | [feature-verification](feature-verification.md) | automation loop | read-only | case files, tests, scenario, keyframes | score 0-10 and gaps (with `root_stage`) |
-| `retro` | [retro](retro.md) | `factory retro run` (by hand, or the retro CI job) | writes `.factory/lessons/`, plus the paths in `lessons.retro.allowedPaths` and, in a clone of the factory, `retro.factory.allowedPaths` (other edits are discarded) | aggregated metrics, the decision-log retro digest and existing lessons | updated lessons files (the repository's lessons PR, through the same delivery as every pipeline PR) and proposed factory changes (pushed as a branch for a person) |
+| `retro` | [retro](retro.md) | `factory retro run` (by hand, or the retro CI job) | writes `.factory/lessons/`, plus the paths in `retro.allowedPaths` and, in a clone of the factory, `retro.factory.allowedPaths` (other edits are discarded) | aggregated metrics, the decision-log retro digest and existing lessons | updated lessons files (the repository's lessons PR, through the same delivery as every pipeline PR) and proposed factory changes (pushed as a branch for a person) |
 | `lessons-check` | [retro](retro.md) | the retro, after it edits lessons files | read-only | each lessons file and its agent's definition | the rules that contradict the definition (the harness removes them) |
 | `bug-triage` | [review-gate](review-gate.md) | review gate, once per bug-fix delivery, after CI is green on the branch and before the PR opens | read-only | every ticket of the PR, the systems it touches, its diff | Impact, Complexity and Fix risk per ticket with reasons, floor categories, its confidence |
 | `pr-check` | [pr-check](pr-check.md) | you (Copilot or Claude Code) | runs `factory pr-check run` | the PR or branch | summary of the report |
@@ -51,13 +52,13 @@ Read-only agents are enforced per CLI: Claude Code tool lists in `scripts/agents
 
 ## Council members
 
-A [council](council.md) is not a separate agent definition. When `council.stages.<stage>` lists members, each member runs the stage's own verifier definition (`pair-verifier`, `pair-ui-verifier`, `architecture-reviewer`, `test-plan-verifier`, `test-automation-verifier`, or a PR check critic named after the member), with the council skill (`skills/council/SKILL.md`) and its lens added to the prompt, on the member's own CLI and model:
+A [council](council.md) is not a separate agent definition. Every verifier stage is a council; when it seats more than one member (`council.members`, or the stage section's `councilMembers`), each member runs the stage's own verifier definition (`pair-verifier`, `pair-ui-verifier`, `architecture-reviewer`, `test-plan-verifier`, `test-automation-verifier`, or a PR check critic named after the member), with the council skill (`skills/council/SKILL.md`) and its lens added to the prompt, on its own `models.pool` entry:
 
-| Stage key | Replaces | Member CLIs |
+| Stage | Its own verifier | Member CLIs |
 | --- | --- | --- |
 | `pairVerify` | `pair-verifier` | `claude`, `codex`, `copilot`, or `custom` (a command that reads the prompt on stdin) |
 | `pairUiVerify` | `pair-ui-verifier` | the same |
-| `review` | `architecture-reviewer` (the policy engine still runs first) | the same |
+| `architectureReview` | `architecture-reviewer` (the policy engine still runs first) | the same |
 | `testPlan` | `test-plan-verifier` | the same |
 | `testAutomation` | `test-automation-verifier` | the same |
 | `prCheck` | the PR check critics (the defender and judge stay) | the same |
@@ -69,34 +70,26 @@ Each member is read-only on every CLI, as above. When a later scope objection to
 | CLI | How the pipeline starts an agent | Notes |
 | --- | --- | --- |
 | Claude Code (`claude`, default) | `-p --output-format json`, the agent's tool list from `scripts/agents-claude.json` | the default for every role |
-| Copilot CLI (`copilot`) | `--allow-tool` / `--deny-tool` flags per access mode | `PIPELINE_AGENT_CLI=copilot`, or per role or member |
-| Codex (`codex`) | `exec --json` with a `read-only` or `workspace-write` sandbox | per role or member, for example a second reviewer model |
-| a custom command | `PIPELINE_AGENT_CMD`, or a member's `cmd`; the prompt on stdin | reports usage through `PIPELINE_USAGE_FILE` ([costs](costs.md#how-usage-is-captured)) |
+| Copilot CLI (`copilot`) | `--allow-tool` / `--deny-tool` flags per access mode | a pool entry with `"cli": "copilot"` |
+| Codex (`codex`) | `exec --json` with a `read-only` or `workspace-write` sandbox | a pool entry with `"cli": "codex"`, for example a second reviewer model |
+| a custom command | `PIPELINE_AGENT_CMD`, or a pool entry's `cmd`; the prompt on stdin | reports usage through `PIPELINE_USAGE_FILE` ([costs](costs.md#how-usage-is-captured)) |
 
-Which models each CLI may use is the model policy ([models.md](models.md)): by default `opus` and `sonnet` on Claude Code and Copilot, and `sol` on Copilot and Codex.
+Which models the pipeline may run is the model pool ([models.md](models.md)): by default `opus` and `sonnet` on Claude Code and `sol` on Codex.
 
 ## Models
 
-Unset models use the agent CLI's default. The files below are the factory's defaults; a repository overrides any of these keys in its `.factory/config.json`.
+Every agent runs on an entry of the model pool, `models.pool` ([models.md](models.md)): the entry gives its CLI, the CLI's own model id, its reasoning effort and its process environment. `models.agents.<agent>` names the entry each agent runs on, by agent name as in `agents/`; `models.agents.default` is the entry of every agent with none of its own. The factory's defaults are in `scripts/models/config.json`; a repository overrides them in its `.factory/config.json`. A name that is not in the pool fails the settings load and lists the entries.
 
-| Setting | Agents |
+| Agent | Default entry |
 | --- | --- |
-| `agent.models.default` in `scripts/pipeline/config.json` | every agent without a more specific setting |
-| `agent.models.implementer` in `scripts/implement/config.json` | `implementer` |
-| `agent.models.reviewer` in `scripts/review/config.json` | `architecture-reviewer` |
-| `agent.models.bugTriage` in `scripts/implement/config.json` | `bug-triage` (`opus`) |
-| `agent.models.escalationQuestions` in `scripts/board/config.json` | `escalation-questions` (`sonnet`) |
-| `video.script.model`, else `agent.models.narrator`, else `agent.models.automation` | `demo-narrator` (by default the test-automation model) |
-| `implement.roles.<role>.cli`, `modelClass` and `env` in `scripts/implement/config.json` | the orchestrator, pair implementers, verifiers and UI verifiers (model classes `small`, `medium`, `large` map to models in `modelClasses`) |
-| `council.members[]` | each council member's CLI, model and effort |
-| `agent.models.verifier`, `agent.models.audit` in `scripts/feature-verification/config.json` | feature verification verifiers; the stricter calibration auditor |
-| `prCheck.models.<cli>.<role>` in `scripts/pr-check/config.json`, or `PR_CHECK_MODEL_<ROLE>` | PR check critics, defender, judge and fixer (see [pr-check.md](pr-check.md#models)) |
+| every agent without its own entry (`default`) | `sonnet` |
+| `implementer` (the implement stage's orchestrator) and `stage-orchestrator` (every other stage's) | `orchestrator.model` (`opus`), or the stage's `<section>.orchestrator.model` ([orchestrators](orchestrators.md)) |
+| `pair-verifier`, `architecture-reviewer`, `test-planner`, `test-plan-verifier`, `test-automation`, `test-automation-verifier`, `pr-check-style`, `escalation-questions`, `demo-narrator`, `retro` | `sonnet` |
+| `pair-ui-verifier`, `bug-triage`, `pr-check-acceptance`, `pr-check-flow`, `pr-check-design`, `pr-check-video`, `pr-check-defender`, `pr-check-judge`, `pr-check-fixer` | `opus` |
+| `pair-implementer` | the entry the planner names for its subtask, from `implement.subtaskModels` (every entry by default) |
+| a council member | its seat's entry ([council.md](council.md)) |
 
-`<ROLE>` is `JUDGE`, `ACCEPTANCE`, `FLOW`, `DESIGN`, `STYLE`, `VIDEO`, `DEFENDER` or `FIXER`. To override the judge for the current terminal session:
-
-| macOS (zsh, bash) | Windows (PowerShell) |
-| --- | --- |
-| `export PR_CHECK_MODEL_JUDGE=claude-opus-5.5` | `$env:PR_CHECK_MODEL_JUDGE = 'claude-opus-5.5'` |
+`PIPELINE_MODEL_OVERRIDE=<entry>` runs every agent on one pool entry, for experiments; it is checked like any other name.
 
 ## Lessons
 

@@ -10,6 +10,67 @@
       "sources": [],
       "exclude": [],
       "openapi": []
+    },
+    "recordCmd": "npx playwright test -c playwright.teststack.config.ts --project scenarios --no-deps --timeout 900000 {specs}",
+    "slotWaitSec": 3600,
+    "testTimeoutSec": 900,
+    "localTimeoutSec": 5400
+  },
+  "video": {
+    "narration": {
+      "enabled": true,
+      "voice": "af_heart",
+      "speed": 1,
+      "lang": "en-us",
+      "model": "int8"
+    },
+    "pacing": {
+      "stepDelaySec": 0.7,
+      "holdSec": 1.5,
+      "typeDelaySec": 0.09,
+      "cursorSec": 0.6,
+      "pauseSec": 0.6
+    },
+    "size": {
+      "width": 1280,
+      "height": 720
+    },
+    "ffmpeg": null,
+    "licenceReview": "default",
+    "script": {
+      "scope": "headline",
+      "timeoutSec": 600,
+      "maxSegmentChars": 280,
+      "maxOpeningChars": 240,
+      "maxCloseChars": 200,
+      "maxTotalChars": 2400,
+      "maxSegments": 16,
+      "minWordsPerAction": 5,
+      "speakEvidence": false
+    },
+    "bugPair": {
+      "enabled": true,
+      "requireBefore": false
+    },
+    "apiEvidence": {
+      "enabled": true,
+      "headers": [
+        "content-type",
+        "location",
+        "allow",
+        "retry-after",
+        "accept",
+        "x-requestid",
+        "x-request-id",
+        "idempotency-key",
+        "x-idempotency-key",
+        "x-correlation-id",
+        "if-match",
+        "if-none-match"
+      ],
+      "maxBodyBytes": 1500,
+      "maxPairs": 3,
+      "paymentBodies": "withhold"
     }
   }
 }

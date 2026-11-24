@@ -137,3 +137,29 @@ test('under implement run an agent runs e2e specs and stack commands only on its
   assert.equal(slotZeroRefusal('up', 2, run), null);
   assert.equal(slotZeroRefusal('up', 0, { IMPLEMENT_PARALLEL: '2' }), null, 'the harness itself is not an agent');
 });
+
+// Council r3 (sol-22): the stage's orchestrator doing the fixer's work ran as itself, and the fixer's test guard (keyed
+// on the agent's name) let it change another story's test. Guards hold for the work, whoever does it.
+test('the orchestrator doing the PR check fixer\'s work is held by the fixer\'s test guard', async (t) => {
+  const { foreignTestGuard } = await import('../lib/story-guard.mjs');
+  const { producerRun } = await import('../lib/orchestrator.mjs');
+  const { runAgentAsync } = await import('../lib/agents.mjs');
+  const { loadConfig } = await import('../lib/config.mjs');
+  const edit = { tool_name: 'Edit', tool_input: { file_path: 'e2e/teststack/bug-15.spec.ts', old_string: 'a', new_string: 'b' }, cwd: main.root };
+  const env = { PIPELINE_CHILD: '1', PIPELINE_STORY_KEYS: 'BUG-4' };
+  assert.ok(foreignTestGuard(main, edit, { ...env, PIPELINE_AGENT_NAME: 'pr-check-fixer' }), 'the fixer is refused');
+  assert.ok(foreignTestGuard(main, edit, { ...env, PIPELINE_AGENT_NAME: 'stage-orchestrator', PIPELINE_AGENT_WORK: 'pr-check-fixer' }), 'so is the orchestrator doing its work');
+  assert.equal(foreignTestGuard(main, edit, { ...env, PIPELINE_AGENT_NAME: 'stage-orchestrator', PIPELINE_AGENT_WORK: 'stage-orchestrator' }), null, 'its own work is not the fixer\'s');
+  // The ticket guard too: the orchestrator doing a PR check agent's work does not write the story.
+  const story = { tool_name: 'Edit', tool_input: { file_path: main.abs(`${CACHE}/DEMO-1/story.md`), old_string: 'a', new_string: 'b' }, cwd: main.root };
+  assert.ok(ticketWriteGuard(main, story, { PIPELINE_CHILD: '1', PIPELINE_AGENT_NAME: 'stage-orchestrator', PIPELINE_AGENT_WORK: 'pr-check-fixer' }));
+  assert.equal(ticketWriteGuard(main, story, { PIPELINE_CHILD: '1', PIPELINE_AGENT_NAME: 'stage-orchestrator', PIPELINE_AGENT_WORK: 'implementer' }), null);
+  // The run carries the work: the orchestrator's self-work run gets PIPELINE_AGENT_WORK of the agent it stands in for.
+  const base = loadConfig();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-work-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const cfg = { ...base, root: tmp, agent: { ...base.agent, cmd: `"${process.execPath}" -e "console.log('WORK=' + process.env.PIPELINE_AGENT_WORK + ' NAME=' + process.env.PIPELINE_AGENT_NAME)"` } };
+  const run = producerRun(cfg, { agent: 'pr-check-fixer', task: 't', selfDo: { entry: null, effort: null } });
+  const r = await runAgentAsync(cfg, { ...run, mode: 'read', cwd: tmp, timeoutSec: 30 });
+  assert.match(r.output, /WORK=pr-check-fixer NAME=stage-orchestrator/);
+});

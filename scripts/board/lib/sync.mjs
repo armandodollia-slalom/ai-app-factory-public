@@ -11,7 +11,10 @@
 //    are posted on the story issue and linked from the epic's evidence comment.
 //  - The review gate's bookkeeping for bug-fix PRs (scripts/review-gate/lib/sync.mjs): human reopens of
 //    triaged tickets, open gated PRs evaluated again. Reopened tickets are listed for `implement requeue`.
+import fs from 'node:fs';
+import path from 'node:path';
 import { archiveItem, listItems, setColumn, syncEpicColumns } from './board.mjs';
+import { recordBugTicketMisses } from '../../pipeline/lib/findings.mjs';
 import { readEpicEvidence, upsertEpicEvidence } from './epics.mjs';
 import { featureVideo } from './evidence.mjs';
 import { resolvedLabel } from './escalation.mjs';
@@ -22,17 +25,18 @@ import { gateConfig, gateOff } from '../../review-gate/lib/config.mjs';
 import { realGh } from '../../review-gate/lib/github.mjs';
 import { syncGate } from '../../review-gate/lib/sync.mjs';
 import { refreshDirtyPrs } from './refresh.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // The review gate's step of the sync, with the real GitHub. Returns { reopens, regated, reopenedLabel }.
 export function reviewGateSync(config, items, { log = () => {} } = {}) {
   const gc = gateConfig(config.root);
-  const reopenedLabel = gc.implement.reviewGate?.labels?.reopened ?? 'reopened';
+  const reopenedLabel = setting(gc, 'implement.reviewGate.labels.reopened');
   if (gateOff(gc)) return { reopens: [], regated: [], reopenedLabel };
   const comments = (n) => issueComments(config, n).map((c) => ({ author: c.author?.login ?? c.author ?? null, body: c.body ?? '', createdAt: c.createdAt ?? null }));
   // The base branch's recent log, for reverts of merged gated PRs.
   const baseLog = () => {
     git(config.root, ['fetch', '-q', 'origin']);
-    return git(config.root, ['log', '--since=90.days', '--format=%H%x1f%s%x1f%b%x1e', config.baseRef ?? 'origin/main']).stdout.split('\x1e').map((e) => e.trim()).filter(Boolean).map((e) => {
+    return git(config.root, ['log', '--since=90.days', '--format=%H%x1f%s%x1f%b%x1e', setting(config, 'baseRef')]).stdout.split('\x1e').map((e) => e.trim()).filter(Boolean).map((e) => {
       const [sha, subject, body] = e.split('\x1f');
       return { sha, subject, body };
     });
@@ -128,6 +132,14 @@ export function syncBoard(config, { listStories, log = () => {}, findVideo, gate
   }
   };
   moveClosed(items);
+  // A bug ticket that names a delivered ticket: a lower-weight miss against the councils that passed it.
+  try {
+    const stories = (listStories ? listStories(config) : []).map((s) => ({ key: s.key, text: s.file && fs.existsSync(path.join(config.root, s.file)) ? fs.readFileSync(path.join(config.root, s.file), 'utf8') : '' }));
+    const misses = recordBugTicketMisses(config, stories);
+    if (misses) log(`${misses} council miss(es) recorded for bug tickets that name delivered tickets.`);
+  } catch (error) {
+    log(`bug ticket misses not recorded: ${error.message}`);
+  }
   const { requeued, resolved } = requeueResolved(config, items, { log });
   let gated = { reopens: [], regated: [], reopenedLabel: 'reopened' };
   try {

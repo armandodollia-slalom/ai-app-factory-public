@@ -5,10 +5,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { APP_FILE, INSTALL_ROOT, loadConfig, repoOverlay, repoRoot, splitTopology, videoScriptProblems } from '../pipeline/lib/config.mjs';
+import { APP_FILE, INSTALL_ROOT, loadConfig, repoOverlay, repoRoot, splitTopology } from '../pipeline/lib/config.mjs';
+import { setting, settingsProblems } from '../pipeline/lib/settings.mjs';
 import { agentTextProblems } from '../pipeline/lib/instruction-check.mjs';
 import { lintable } from '../pipeline/lib/lint.mjs';
 import { councilDoctorRows } from '../pipeline/lib/council.mjs';
+import { familyOf, poolOf } from '../pipeline/lib/pool.mjs';
 import { intercomDoctor } from '../pipeline/lib/intercom-server.mjs';
 import { workflowProblems } from './lib/workflow-safety.mjs';
 import { detect, draftProject, loadPacks } from './lib/detect.mjs';
@@ -101,7 +103,7 @@ const readJsonSafe = (f) => {
 const have = (cmd, args = ['--version']) => spawnSync(cmd, args, { encoding: 'utf8', shell: process.platform === 'win32', timeout: 60_000 }).status === 0;
 
 // A test stack: the stack section's compose file (default .factory/stack/docker-compose.yaml) exists.
-const stackConfigured = (root, config) => fs.existsSync(path.join(root, config?.stack?.composeFile ?? '.factory/stack/docker-compose.yaml'));
+const stackConfigured = (root, config) => fs.existsSync(path.join(root, setting(config, 'stack.composeFile')));
 
 // Agent prompts (definition, addendum, lessons) that contradict the factory guard; none without a config.
 function promptChecks(root) {
@@ -152,29 +154,30 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
     ...(pin.features.graphify ? [['graphify', have('graphify', ['--help']), 'needed for the code graph']] : []),
     ...(pin.features.demoVideo ? [['Playwright in this repository', fs.existsSync(path.join(root, 'node_modules/.bin/playwright')) || fs.existsSync(path.join(root, 'node_modules/.bin/playwright.cmd')), 'needed for e2e tests and demo videos: `npm ci`, then `npx playwright install chromium`']] : []),
   ];
-  // Every council member a stage seats: its CLI installed and signed in, its model resolving for that CLI (council.mjs).
+  // The model pool: with a repository's own `models` or `council` settings, each entry with its family, its CLI installed
+  // and signed in, and each stage's seats (council.mjs); with the factory's defaults, the pool alone.
   let councilConfig = null;
-  if (config?.council) {
-    try {
-      councilConfig = loadConfig(null, root);
-      rows.push(...councilDoctorRows(councilConfig, { probe: (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', env, shell: process.platform === 'win32', timeout: 60_000 }).status === 0 }));
-    } catch (error) {
-      rows.push(['council configuration', false, error.message]);
-    }
+  try {
+    councilConfig = loadConfig(null, root);
+    if (config?.council || config?.models) rows.push(...councilDoctorRows(councilConfig, { probe: (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', env, shell: process.platform === 'win32', timeout: 60_000 }).status === 0 }));
+    else rows.push(['models.pool', true, `${poolOf(councilConfig).map((e) => `${e.name} (${e.cli}, ${familyOf(e)})`).join(', ')}: the factory's defaults; set models.pool to check each entry's login`]);
+  } catch (error) {
+    rows.push(['model pool and council configuration', false, error.message]);
   }
   // The council discussion setting, reported on or off (docs/ai-pipeline/council-intercom.md).
-  const intercom = await intercomDoctor(councilConfig ?? config);
+  const intercom = await intercomDoctor(config?.council ? councilConfig : config);
   rows.push(...intercom.rows);
-  // Video script scope (single validator in pipeline/lib/config.mjs; reported here rather than aborting doctor).
-  const videoScriptIssues = videoScriptProblems(config ?? {});
-  if (videoScriptIssues.length) rows.push(['demo video script settings (video.script.scope)', false, videoScriptIssues.join('; ')]);
+  // Every setting's name and value against the settings descriptions (the loader refuses the same ones; doctor reports them
+  // here rather than aborting).
+  if (config) {
+    const issues = settingsProblems(config);
+    rows.push(['settings: known names and allowed values (docs/configuration.md)', issues.length === 0, issues.length ? issues.join('; ') : 'every setting is described and allowed']);
+  }
   const preOpenWarns = [];
   // The PR opens finished (implement.preOpen): CI can prove a story branch's head before its PR exists, and every
   // delivered PR's run record shows no pipeline agent starting after the PR was ready (outside a hold).
   try {
-    const { preOpenProblems, preOpenWarnings, storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
-    const preOpenIssues = preOpenProblems(config ?? {});
-    if (preOpenIssues.length) rows.push(['PR delivery settings (implement.preOpen)', false, preOpenIssues.join('; ')]);
+    const { preOpenWarnings, storyBranchPatterns } = await import('../implement/lib/pre-open.mjs');
     for (const w of preOpenWarnings(config ?? {}, { host: checkoutHost(root, config ?? {}) })) preOpenWarns.push(['PR delivery settings (implement.preOpen)', w]);
     const full = loadConfig('implement', root);
     {
@@ -218,13 +221,13 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
       const c = JSON.parse(fs.readFileSync(file, 'utf8'));
       for (const m of [c.lint, c.lintFallback]) for (const ext of Object.keys(m ?? {})) mapped.add(ext);
     }
-    let lint = { ...(config.precheck ?? {}) };
+    let lint = { ...(config.featureVerification?.precheck ?? {}) };
     try {
-      lint = { ...(loadConfig('feature-verification', root).precheck ?? {}) };
+      lint = { ...(loadConfig('feature-verification', root).featureVerification.precheck ?? {}) };
     } catch {
       // invalid config already reported in the settings rows above
     }
-    const tracked = lintable({ precheck: lint }, spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', timeout: 60_000 }).stdout.split('\n').filter(Boolean));
+    const tracked = lintable({ featureVerification: { precheck: lint } }, spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', timeout: 60_000 }).stdout.split('\n').filter(Boolean));
     const missing = [...mapped].filter((ext) => !(lint.lint ?? {})[ext] && tracked.some((f) => f.endsWith(ext))).sort();
     rows.push(['linters cover every language the packs can lint', missing.length === 0, missing.length ? `${missing.join(', ')} file(s) are tracked but precheck.lint has no linter for them: add the pack's mapping (onboard-codebase skill)` : `precheck.lint: ${Object.keys(lint.lint ?? {}).sort().join(', ') || 'none'}`]);
   }

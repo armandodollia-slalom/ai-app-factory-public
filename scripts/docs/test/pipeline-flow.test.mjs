@@ -73,7 +73,7 @@ test('every setting matches the code: config path or flag, allowed values and de
 test('the council settings are exactly the council stages of the code', async () => {
   const { COUNCIL_STAGES } = await mod('scripts/pipeline/lib/council-config.mjs');
   assert.deepEqual(flow.settings.filter((s) => s.seat).map((s) => s.seat), Object.keys(COUNCIL_STAGES));
-  for (const s of flow.settings.filter((x) => x.seat)) assert.equal(s.config, `council.stages.${s.seat}`);
+  for (const s of flow.settings.filter((x) => x.seat)) assert.equal(s.config, `${COUNCIL_STAGES[s.seat].section}.councilMembers`);
 });
 
 test('the branch-pipeline capability of each CI system is the adapter\'s', async () => {
@@ -321,11 +321,10 @@ test('a UI bug normalizes a backend-only change to frontend and backend; epics n
 
 test('council off vs on: the same steps run; the config fragment seats the stage', () => {
   const off = ev({ pr: true });
-  const on = ev({ pr: true, 'council.review': true, 'council.prCheck': true });
+  const on = ev({ pr: true, 'council.architectureReview': true, 'council.prCheck': true });
   assert.deepEqual(pathOf(on), pathOf(off));
-  const frag = F.configFragment(flow, { 'council.review': true, 'council.prCheck': true })['.factory/config.json'];
-  assert.deepEqual(Object.keys(frag.council.stages), ['review', 'prCheck']);
-  assert.ok(frag.council.members.length);
+  const frag = F.configFragment(flow, { 'council.architectureReview': true, 'council.prCheck': true })['.factory/config.json'];
+  assert.deepEqual([frag.architectureReview.councilMembers, frag.prCheck.councilMembers, frag.council], [3, 3, undefined]);
   assert.deepEqual(F.configFragment(flow, {}), {});
 });
 
@@ -386,10 +385,10 @@ test('a CI system without branch pipelines: no proof before the open, the PR ope
   assert.ok(pathOf(e).includes('ready'), 'ready only when green');
   assert.equal(ev({ pr: true, ciProvider: 'custom' }).facts.draftFirst, true);
   assert.equal(ev({ pr: true, ciProvider: 'custom', ciCustomBranchPipelines: true }).facts.proveOnBranch, true);
-  const off = ev({ pr: true, ciWait: false });
+  const off = ev({ pr: true, ciWaitEnabled: false });
   assert.equal(off.nodes.branchCi.state, 'skipped');
   assert.equal(off.nodes.checks.state, 'skipped');
-  assert.equal(off.facts.draftFirst, false, 'ciWait off: opens ready, without the proof');
+  assert.equal(off.facts.draftFirst, false, 'ciWaitEnabled off: opens ready, without the proof');
 });
 
 test('the failure exits: each stops where the runner stops, with what remains', () => {
@@ -407,17 +406,16 @@ test('the failure exits: each stops where the runner stops, with what remains', 
     [pr, { ownerQ: 'question' }, 'needsDecision'],
     [pr, { ownerQ: 'incomplete' }, 'prcIncomplete'],
     [pr, { branchCi: 'red', ciFixRound: 'red' }, 'ciRed'],
-    [{ pr: true, ciFixRounds: 0 }, { branchCi: 'red' }, 'ciRed'],
+    [{ pr: true, ciMaxFixRounds: 0 }, { branchCi: 'red' }, 'ciRed'],
     [pr, { open: 'refused' }, 'prRefused'],
     [{ ticket: 'ui-bug', pr: true }, { triage: 'failed' }, 'gateAssessFailed'],
     [pr, { checks: 'failed', hold: 'unconfirmed' }, 'holdFailed'],
     [{ pr: true, ciProvider: 'azure-pipelines' }, { ready: 'unconfirmed' }, 'releaseUnconf'],
     [{ entry: 'resume', pr: true }, { resume: 'reopened', reopenHold: 'unconfirmed' }, 'holdFailed'],
     [{ entry: 'resume', pr: true }, { resume: 'held', ready: 'unconfirmed' }, 'releaseUnconf'],
-    [{ pr: true, draftCycles: 2 }, { checks: 'failed', holdFix: ['again', 'failed'] }, 'heldFailed'],
-    [pr, { checks: 'failed', holdFix: 'failed' }, 'heldFailed'],
-    [{ pr: true, draftCycles: 0 }, { checks: 'failed' }, 'heldFailed'],
-    [{ pr: true, ciFixRounds: 0 }, { checks: 'failed' }, 'heldFailed'],
+    [{ pr: true, ciMaxFixRounds: 2 }, { checks: 'failed', holdFix: ['again', 'failed'] }, 'heldFailed'],
+    [{ pr: true, ciMaxFixRounds: 1 }, { checks: 'failed', holdFix: 'failed' }, 'heldFailed'],
+    [{ pr: true, ciMaxFixRounds: 0 }, { checks: 'failed' }, 'heldFailed'],
   ];
   for (const [input, choices, exit] of cases) {
     const e = ev(input, choices);
@@ -467,14 +465,14 @@ test('no step is switched on or off by a walk fact: only edges and outcomes read
 });
 
 test('a green resumed wait with a hold still recorded goes through the release, with the CI wait on or off', () => {
-  for (const input of [{ entry: 'resume', pr: true }, { entry: 'resume', pr: true, ciWait: false }]) {
+  for (const input of [{ entry: 'resume', pr: true }, { entry: 'resume', pr: true, ciWaitEnabled: false }]) {
     const e = ev(input, { resume: 'held' });
     const p = pathOf(e);
     assert.ok(p.indexOf('ready') > 0 && p.indexOf('ready') < p.indexOf('runDone'), `${JSON.stringify(input)}: release before done`);
     assert.equal(e.walk.end, 'merged');
     assert.equal(ev(input, { resume: 'held', ready: 'unconfirmed' }).walk.end, 'releaseUnconf', `${JSON.stringify(input)}: release-unconfirmed`);
   }
-  assert.equal(ev({ entry: 'resume', pr: true, ciWait: false }, { resume: 'held' }).walk.steps.find((s) => s.node === 'checks').skipped, true, 'no wait with ciWait off');
+  assert.equal(ev({ entry: 'resume', pr: true, ciWaitEnabled: false }, { resume: 'held' }).walk.steps.find((s) => s.node === 'checks').skipped, true, 'no wait with ciWaitEnabled off');
   // Without a recorded hold a resumed GitHub Actions wait has nothing to release.
   assert.ok(!pathOf(ev({ entry: 'resume', pr: true }, { resume: 'ci-wait' })).includes('ready'));
 });
@@ -513,7 +511,7 @@ test('static analysis off: no pre-push analysis gate and no analysis fixing roun
 });
 
 test('the post-open fixing loop: another round on hold while cycles are left; only an exhausted budget exits', () => {
-  const two = { pr: true, draftCycles: 2 };
+  const two = { pr: true, ciMaxFixRounds: 2 };
   const e = ev(two, { checks: 'failed', holdFix: ['again', 'green'] });
   const p = pathOf(e);
   assert.equal(p.filter((id) => id === 'holdFix').length, 2, 'two fixing cycles');
@@ -522,7 +520,8 @@ test('the post-open fixing loop: another round on hold while cycles are left; on
   assert.deepEqual(e.walk.steps.filter((s) => s.node === 'holdFix').map((s) => s.available), [['green', 'again'], ['green', 'failed']], 'failed only once every cycle is used');
   assert.equal(ev(two, { checks: 'failed', holdFix: ['again', 'failed'] }).walk.end, 'heldFailed');
   assert.equal(ev(two, { checks: 'failed', holdFix: 'failed' }).walk.end, 'merged', 'a failure with a cycle left is not offered as the end');
-  assert.deepEqual(ev({ pr: true }, { checks: 'failed' }).walk.steps.find((s) => s.node === 'holdFix').available, ['green', 'failed'], 'one cycle: no second round');
+  assert.deepEqual(ev({ pr: true, ciMaxFixRounds: 1 }, { checks: 'failed' }).walk.steps.find((s) => s.node === 'holdFix').available, ['green', 'failed'], 'one round: no second round');
+  assert.deepEqual(ev({ pr: true }, { checks: 'failed' }).walk.steps.find((s) => s.node === 'holdFix').available, ['green', 'again'], 'the default, two rounds in all: a second round');
   const back = F.decodeHash(flow, F.encodeHash(flow, two, { holdFix: ['again', 'green'] }));
   assert.deepEqual(back.choices.holdFix, ['again', 'green'], 'a list of outcomes round-trips through the URL hash');
 });
@@ -532,15 +531,15 @@ const collapsed = (e, from, outcome) => e.edges.filter((x) => x.from === from &&
 const possible = (view) => view.visits.map((v) => v.outcomes.filter((o) => o.possible).map((o) => o.id));
 
 test('removed view: a held resume with the CI wait off still collapses into the release, never straight to done', () => {
-  for (const input of [{ entry: 'resume', pr: true, ciWait: false }, { entry: 'resume', pr: true }]) {
+  for (const input of [{ entry: 'resume', pr: true, ciWaitEnabled: false }, { entry: 'resume', pr: true }]) {
     const e = ev(input, { resume: 'held' });
-    const target = input.ciWait === false ? 'ready' : 'checks';
+    const target = input.ciWaitEnabled === false ? 'ready' : 'checks';
     assert.deepEqual(collapsed(e, 'resume', 'held'), [target], `${JSON.stringify(input)}: the held edge leads where the walk goes`);
     const p = pathOf(e);
     assert.equal(p[1], target, 'the walk agrees');
   }
   // The same edge without a recorded hold (a plain resumed wait) still goes to done with the wait off.
-  assert.deepEqual(collapsed(ev({ entry: 'resume', pr: true, ciWait: false }, { resume: 'ci-wait' }), 'resume', 'ci-wait'), ['runDone']);
+  assert.deepEqual(collapsed(ev({ entry: 'resume', pr: true, ciWaitEnabled: false }, { resume: 'ci-wait' }), 'resume', 'ci-wait'), ['runDone']);
 });
 
 test('step details: the outcomes and destinations are those of the walk\'s visit', () => {
@@ -553,13 +552,13 @@ test('step details: the outcomes and destinations are those of the walk\'s visit
   // A fresh delivery's open offers the open and its failures, not the update.
   assert.deepEqual(possible(F.decisionView(flow, ev({ pr: true }), 'open')), [['opened', 'refused', 'failed']]);
   // Two fixing cycles: the first visit offers another round, never the exhausted budget; the second offers it.
-  const two = { pr: true, draftCycles: 2 };
+  const two = { pr: true, ciMaxFixRounds: 2 };
   assert.deepEqual(possible(F.decisionView(flow, ev(two, { checks: 'failed', holdFix: ['again', 'green'] }), 'holdFix')), [['green', 'again'], ['green', 'failed']]);
   const first = F.decisionView(flow, ev(two, { checks: 'failed' }), 'holdFix');
   assert.equal(first.visits.length, 1);
   assert.equal(first.visits[0].outcomes.find((o) => o.id === 'failed').possible, false, 'first visit of two: budget not spent');
   // A held resume with the wait off: the release's outcomes include release-unconfirmed.
-  const held = F.decisionView(flow, ev({ entry: 'resume', pr: true, ciWait: false }, { resume: 'held' }), 'ready');
+  const held = F.decisionView(flow, ev({ entry: 'resume', pr: true, ciWaitEnabled: false }, { resume: 'held' }), 'ready');
   assert.ok(possible(held)[0].includes('unconfirmed'));
   assert.deepEqual(held.visits[0].outcomes.find((o) => o.id === 'unconfirmed').to, ['releaseUnconf']);
   // Off the walk: what the configuration allows in any walk state, with the budget said.
@@ -572,7 +571,7 @@ test('step details: the outcomes and destinations are those of the walk\'s visit
 });
 
 test('the configuration round-trips through the URL hash, and the command line matches it', () => {
-  const input = { entry: 'feature-epic', prSplit: 'story', pr: true, 'council.review': true, maxReturns: 3 };
+  const input = { entry: 'feature-epic', prSplit: 'story', pr: true, 'council.architectureReview': true, maxReturns: 3 };
   const hash = F.encodeHash(flow, input, { prCheck: 'light' }, { view: 'remove' });
   const back = F.decodeHash(flow, hash);
   assert.deepEqual(F.resolve(flow, back.input).values, F.resolve(flow, input).values);
@@ -580,18 +579,18 @@ test('the configuration round-trips through the URL hash, and the command line m
   assert.equal(back.view.view, 'remove');
   assert.equal(F.decodeHash(flow, '#prSplit=nonsense&prCheck=bogus').input.prSplit, 'epic', 'invalid values fall back');
   assert.equal(F.cliCommand(flow, input), 'factory implement run --epic <EPIC> --pr-split story --pr');
-  assert.equal(F.cliCommand(flow, { pr: true, ciFixRounds: 0 }), 'PIPELINE_CI_FIX_ROUNDS=0 factory implement run <KEY> --pr');
+  assert.equal(F.cliCommand(flow, { pr: true, ciMaxFixRounds: 0 }), 'PIPELINE_CI_FIX_ROUNDS=0 factory implement run <KEY> --pr');
   for (const p of flow.presets) assert.ok(F.cliCommand(flow, p.values).startsWith('factory implement '), p.id);
 });
 
 test('council discussion: no step without a seated council or without the intercom; with both, one shared step and its four outcomes', () => {
   const view = (e) => Object.fromEntries(F.decisionView(flow, e, 'discussion').visits[0].outcomes.map((o) => [o.id, o.possible ? o.to.sort() : null]));
   assert.notEqual(ev({ pr: true, 'council.intercom.enabled': true }).nodes.discussion.state, 'active', 'no council seated: no discussion');
-  const councilOnly = ev({ pr: true, 'council.review': true });
+  const councilOnly = ev({ pr: true, 'council.architectureReview': true });
   assert.notEqual(councilOnly.nodes.discussion.state, 'active', 'council on, intercom off: no discussion');
   assert.equal(councilOnly.decisions.review.available.includes('owner'), false);
 
-  const both = { pr: true, 'council.review': true, 'council.intercom.enabled': true };
+  const both = { pr: true, 'council.architectureReview': true, 'council.intercom.enabled': true };
   const e = ev(both);
   assert.equal(e.nodes.discussion.state, 'active');
   assert.ok(e.edges.some((x) => x.from === 'review' && x.to === 'discussion' && x.live), 'the review council uses it');

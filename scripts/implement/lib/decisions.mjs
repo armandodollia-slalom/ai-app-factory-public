@@ -7,6 +7,7 @@
 // are pure.
 import { DECISIONS_FILE as SHARED_DECISIONS_FILE } from '../../pipeline/lib/decisions.mjs';
 import { matchesAny } from './plan.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 export const DECISIONS_FILE = SHARED_DECISIONS_FILE;
 export const PLAN_STAGE = 'implement-plan';
@@ -46,12 +47,12 @@ export function storyFeatures(storyText, plan, { uiStory }) {
 }
 
 // One record per plan attempt, accepted or rejected.
-export function decisionRecord({ ts, key, decisionId, attempt, accepted, errors = [], agent = {}, raw = null, plan = null, storyText = '', uiStory = false }) {
+export function decisionRecord({ ts, key, decisionId, attempt, accepted, errors = [], agent: run = {}, raw = null, plan = null, storyText = '', uiStory = false }) {
   const source = plan ?? null;
   const subtasks = source
-    ? source.subtasks.map((s) => ({ id: s.id, goal: s.goal, owns: s.owns, dependsOn: s.dependsOn ?? [], modelClass: s.modelClass, verify: s.verify, ...(s.decision ?? {}) }))
+    ? source.subtasks.map((s) => ({ id: s.id, goal: s.goal, owns: s.owns, dependsOn: s.dependsOn ?? [], model: s.model ?? null, verify: s.verify, ...(s.decision ?? {}) }))
     : Array.isArray(raw?.subtasks)
-      ? raw.subtasks.map((s) => ({ id: s?.id ?? null, goal: s?.goal ?? null, owns: s?.owns ?? null, dependsOn: s?.dependsOn ?? [], modelClass: s?.modelClass ?? null, verify: s?.verify ?? null, modelReason: s?.modelReason ?? null, verifyReason: s?.verifyReason ?? null, expectedFiles: s?.expectedFiles ?? null, expectedLoc: s?.expectedLoc ?? null, confidence: s?.confidence ?? null, alternatives: s?.alternatives ?? [] }))
+      ? raw.subtasks.map((s) => ({ id: s?.id ?? null, goal: s?.goal ?? null, owns: s?.owns ?? null, dependsOn: s?.dependsOn ?? [], model: s?.model ?? null, verify: s?.verify ?? null, modelReason: s?.modelReason ?? null, verifyReason: s?.verifyReason ?? null, expectedFiles: s?.expectedFiles ?? null, expectedLoc: s?.expectedLoc ?? null, confidence: s?.confidence ?? null, alternatives: s?.alternatives ?? [] }))
       : [];
   return {
     ts,
@@ -60,7 +61,8 @@ export function decisionRecord({ ts, key, decisionId, attempt, accepted, errors 
     attempt,
     accepted,
     rejectionReasons: accepted ? [] : errors,
-    orchestrator: { cli: agent.cli ?? null, model: agent.model ?? null, promptVersion: agent.version ?? null },
+    // The orchestrator's run: its CLI and pool entry.
+    orchestrator: { cli: run.cli ?? null, model: run.model ?? null, promptVersion: run.version ?? null },
     mode: source?.mode ?? raw?.mode ?? null,
     modeReason: source?.decision?.modeReason ?? raw?.modeReason ?? null,
     splitReason: source?.decision?.splitReason ?? raw?.splitReason ?? null,
@@ -158,7 +160,9 @@ export function subtaskRunRecord(r) {
     subtaskId: r.subtaskId,
     implementer: { cli: r.implementer?.cli ?? null, model: r.implementer?.model ?? null, promptVersion: r.implementer?.version ?? null },
     verifier: { cli: r.verifier?.cli ?? null, model: r.verifier?.model ?? null, promptVersion: r.verifier?.version ?? null },
-    modelClass: r.modelClass ?? null,
+    // The pool entry the subtask's pair implementer ran on, and its effort (the over-provisioned label reads it).
+    model: r.model ?? null,
+    effort: r.effort ?? null,
     verify: r.verify ?? null,
     maxRounds: r.maxRounds,
     rounds: r.rounds ?? [],
@@ -218,7 +222,8 @@ export const storyOutcomeRecord = (r) => ({
 // Labels
 // ---------------------------------------------------------------------------------------------
 
-export const DEFAULT_THRESHOLDS = { smallDiffLoc: 60, tinySubtaskLoc: 40, tinySubtaskFiles: 3, selfMaxTotalLoc: 150, selfOverheadRunsPerSubtask: 2 };
+// The thresholds are implement.decisions' (their defaults are the settings' own).
+export const DEFAULT_THRESHOLDS = defaultSettings().implement.decisions;
 
 // Labels per subtask of each accepted decision. Returns rows { story, decisionId, mode, subtaskId, ...,
 // labels } plus one plan-level row per decision for should-have-been-self.
@@ -236,7 +241,7 @@ export function labelDecisions({ decisions = [], runs = [], outcomes = [], prChe
       if (run) {
         const rounds = run.rounds?.length ?? 0;
         const loc = run.actual?.loc;
-        if (['large', 'medium'].includes(s.modelClass ?? run.modelClass) && run.approved && rounds === 1 && run.escalation === 'none' && loc != null && loc <= t.smallDiffLoc) labels.push('over-provisioned');
+        if (run.effort && run.effort !== 'low' && run.approved && rounds === 1 && run.escalation === 'none' && loc != null && loc <= t.smallDiffLoc) labels.push('over-provisioned');
         if (run.escalation !== 'none' || (run.maxRounds && rounds >= run.maxRounds) || !run.approved) labels.push('under-provisioned');
         const outOfOwns = (run.rounds ?? []).reduce((n, r) => n + (r.outOfOwnsEdits ?? 0), 0);
         const cross = (run.rounds ?? []).reduce((n, r) => n + (r.crossSubtaskFindings ?? 0), 0);
@@ -248,7 +253,7 @@ export function labelDecisions({ decisions = [], runs = [], outcomes = [], prChe
         decisionId: d.decisionId,
         mode: d.mode,
         subtaskId: s.id,
-        modelClass: s.modelClass,
+        model: s.model ?? run?.model ?? null,
         verify: s.verify,
         rounds: run?.rounds?.length ?? null,
         approved: run?.approved ?? null,
@@ -266,7 +271,7 @@ export function labelDecisions({ decisions = [], runs = [], outcomes = [], prChe
       const total = dRuns.reduce((n, r) => n + (r.actual?.loc ?? 0), 0);
       const runsUsed = dRuns.reduce((n, r) => n + (r.agentRuns ?? 0), 0);
       if (tiny && total <= t.selfMaxTotalLoc && runsUsed > t.selfOverheadRunsPerSubtask * dRuns.length)
-        rows.push({ story: d.story, decisionId: d.decisionId, mode: d.mode, subtaskId: '(plan)', modelClass: null, verify: null, rounds: null, approved: null, escalation: null, expectedLoc: null, actualLoc: total, outcome: story?.outcome ?? null, designFindings: null, prCheckDesignFindings: late.get(d.story) ?? 0, labels: ['should-have-been-self'] });
+        rows.push({ story: d.story, decisionId: d.decisionId, mode: d.mode, subtaskId: '(plan)', model: null, verify: null, rounds: null, approved: null, escalation: null, expectedLoc: null, actualLoc: total, outcome: story?.outcome ?? null, designFindings: null, prCheckDesignFindings: late.get(d.story) ?? 0, labels: ['should-have-been-self'] });
     }
   }
   // Bug epics: one row per PR group (decision-outcomes type "pr-group", written by lib/epic.mjs).
@@ -280,7 +285,7 @@ export function groupRow(g) {
   const verified = g.verified ?? 0;
   const failed = (g.tickets?.length ?? 0) - verified;
   const labels = (verified > 0 && failed > 0) || g.mergeConflicts > 0 ? ['bad-grouping'] : [];
-  return { story: g.epic ?? '-', decisionId: g.decisionId ?? null, mode: 'group', subtaskId: g.groupId, modelClass: null, verify: null, rounds: null, approved: Boolean(g.pr), escalation: null, expectedLoc: null, actualLoc: null, outcome: g.outcome ?? null, tickets: g.tickets ?? [], pr: g.pr ?? null, costUsd: g.cost_usd ?? null, labels };
+  return { story: g.epic ?? '-', decisionId: g.decisionId ?? null, mode: 'group', subtaskId: g.groupId, model: null, verify: null, rounds: null, approved: Boolean(g.pr), escalation: null, expectedLoc: null, actualLoc: null, outcome: g.outcome ?? null, tickets: g.tickets ?? [], pr: g.pr ?? null, costUsd: g.cost_usd ?? null, labels };
 }
 
 // Upheld design findings of the PR check per story: each finding id once per check (a finding upheld again
@@ -306,14 +311,14 @@ export function prCheckDesignFindings(records) {
 
 export function formatDecisionReport(rows) {
   if (!rows.length) return 'No orchestrator decisions recorded.';
-  const head = `${'Story'.padEnd(10)} ${'Decision'.padEnd(9)} ${'Mode'.padEnd(8)} ${'Subtask'.padEnd(12)} ${'Model'.padEnd(7)} ${'Verify'.padEnd(6)} ${'Rnds'.padEnd(4)} ${'Esc'.padEnd(9)} ${'LOC exp/act'.padEnd(12)} ${'Design e/pr'.padEnd(11)} Labels`;
+  const head = `${'Story'.padEnd(10)} ${'Decision'.padEnd(9)} ${'Mode'.padEnd(8)} ${'Subtask'.padEnd(12)} ${'Model'.padEnd(10)} ${'Verify'.padEnd(6)} ${'Rnds'.padEnd(4)} ${'Esc'.padEnd(9)} ${'LOC exp/act'.padEnd(12)} ${'Design e/pr'.padEnd(11)} Labels`;
   const lines = rows.map((r) =>
     [
       r.story.padEnd(10),
       String(r.decisionId).slice(0, 8).padEnd(9),
       String(r.mode ?? '-').padEnd(8),
       String(r.subtaskId).padEnd(12),
-      String(r.modelClass ?? '-').padEnd(7),
+      String(r.model ?? '-').padEnd(10),
       String(r.verify ?? '-').padEnd(6),
       String(r.rounds ?? '-').padEnd(4),
       String(r.escalation ?? '-').padEnd(9),

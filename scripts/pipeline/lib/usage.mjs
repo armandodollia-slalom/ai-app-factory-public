@@ -2,7 +2,7 @@
 // story like the other metrics, so it is kept long term and ties each run to its story and epic.
 //
 // One record per agent run and model (a run that used two models writes two records with one run_id):
-// { ts, run_id, story, epic, stage, round, step, agent, agent_ver, mode, cli, model, requested_model,
+// { ts, run_id, story, epic, stage, round, step, agent, agent_ver, mode, cli, entry, family, model, requested_model,
 //   measured, tokens: { input, output, cache_read, cache_write_5m, cache_write_1h }, requests,
 //   cache_hit, cache_hit_rate, cost_usd, pricing: { model, effective, tier, rates }, cli_cost_usd,
 //   premium_requests, nano_aiu, seconds, ok, timed_out }
@@ -18,6 +18,7 @@ import { runTags } from './run-tags.mjs';
 import { metricsFile, readMetricsLocal, readTrackedStream } from './state.mjs';
 import { activeStory, epicOf } from './stories.mjs';
 import { appendJsonl, log, nowIso, readJson, readJsonl } from './util.mjs';
+import { setting } from './settings.mjs';
 
 export const USAGE_FILE = 'token-usage.jsonl';
 export const PRICING_FILE = 'scripts/pipeline/pricing.json';
@@ -178,7 +179,7 @@ const attempt = (fn) => {
   }
 };
 
-export function usageRecords(config, { ctx = {}, agent, agentVer = null, mode, cli, alias = null, modelId = null, models = [], seconds = null, ok = null, timedOut = false, runId, ts = nowIso(), api = null, cwd = null, session = null }) {
+export function usageRecords(config, { ctx = {}, agent, agentVer = null, mode, cli, entry = null, family = null, modelId = null, models = [], seconds = null, ok = null, timedOut = false, runId, ts = nowIso(), api = null, cwd = null, session = null }) {
   // Callers pass the story (null for work outside any story); otherwise it is the active story.
   const story = 'story' in ctx ? (ctx.story ?? null) : attempt(() => activeStory(config)?.key ?? null);
   const epic = story ? attempt(() => epicOf(config, story)?.key ?? null) : null;
@@ -190,13 +191,20 @@ export function usageRecords(config, { ctx = {}, agent, agentVer = null, mode, c
     stage: ctx.stage ?? STAGE_OF_AGENT[agent] ?? agent,
     round: ctx.round ?? null,
     step: ctx.step ?? null,
+    // A PR check's run id (its seats and findings carry it too, so a seat's cost joins its own check).
+    ...(ctx.check ? { check: ctx.check } : {}),
     // A council member's run: which member and which login (its CLI home as configured, never expanded).
-    ...(ctx.member ? { member: ctx.member, login: ctx.login ?? 'default' } : {}),
+    // A council member's run: its seat (and member name), its lens and the login it used; with `entry` below, the cost of
+    // each member can be summed per seat, pool entry and lens.
+    ...(ctx.member ? { member: ctx.member, seat: ctx.member, lens: ctx.lens ?? null, login: ctx.login ?? 'default' } : {}),
     agent,
     agent_ver: agentVer,
     mode,
     cli,
-    requested_model: alias,
+    // The pool entry the run was on and its model family (models.pool), and the model id it asked for.
+    entry,
+    family,
+    requested_model: modelId,
     seconds,
     ok,
     timed_out: Boolean(timedOut),
@@ -209,7 +217,7 @@ export function usageRecords(config, { ctx = {}, agent, agentVer = null, mode, c
     ...runTags(),
   };
   if (!models.length) {
-    return [{ ...common, model: normalizeModel(modelId ?? alias), measured: false, tokens: null, requests: null, cache_hit: null, cache_hit_rate: null, cost_usd: null, pricing: null, cli_cost_usd: null, premium_requests: null, nano_aiu: null }];
+    return [{ ...common, model: normalizeModel(modelId), measured: false, tokens: null, requests: null, cache_hit: null, cache_hit_rate: null, cost_usd: null, pricing: null, cli_cost_usd: null, premium_requests: null, nano_aiu: null }];
   }
   const pricing = loadPricing(config);
   return models.map((u) => {
@@ -308,7 +316,7 @@ export function loadUsageAcrossWorktrees(config, { worktrees = gitWorktrees(conf
   const seen = new Set();
   const rows = [];
   for (const dir of [config.root, ...worktrees]) {
-    const spooled = path.join(dir, config.stateDir ?? '.factory/state', 'metrics-spool', USAGE_FILE);
+    const spooled = path.join(dir, setting(config, 'stateDir'), 'metrics-spool', USAGE_FILE);
     for (const row of [...readTrackedStream(path.join(dir, config.metricsDir), USAGE_FILE), ...readJsonl(spooled)].map((r) => withPrice(config, r))) {
       const id = JSON.stringify(row);
       if (seen.has(id)) continue;

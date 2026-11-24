@@ -17,22 +17,21 @@ import { classifyLegacy, folderFingerprint, legacyRoot } from './legacy.mjs';
 import { fetchTickets, issueIndex, ticketsRoot } from './source.mjs';
 import { BODY_LIMIT, renderBody, sha256 } from './ticket-format.mjs';
 import { trackerFor } from './trackers/index.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // A tracker runner tests inject (a fake gh); null: the configured tracker as it is.
 const defaultGh = null;
 const PLACEHOLDER_SHA = '0'.repeat(40);
 const reportBase = (config) => path.join(ticketsRoot(config), 'migration-report');
 export const STORY_FOOTER = (config) => {
-  const c = config.board?.columns ?? {};
-  return `Assign this issue to yourself and move it to **${c.ready ?? 'Ready'}** when it is ready for implementation (cards in **${c.backlog ?? 'Backlog'}** are never picked up); the pipeline fetches the story from this issue.`;
+  return `Assign this issue to yourself and move it to **${setting(config, 'board.columns.ready')}** when it is ready for implementation (cards in **${setting(config, 'board.columns.backlog')}** are never picked up); the pipeline fetches the story from this issue.`;
 };
 
 export function labelsFor(config, t) {
-  const b = config.board ?? {};
-  if (t.type === 'epic') return [b.epicLabel ?? 'epic'];
-  if (t.type === 'spike') return [b.spikeLabel ?? 'spike'];
+  if (t.type === 'epic') return [setting(config, 'board.epicLabel')];
+  if (t.type === 'spike') return [setting(config, 'board.spikeLabel')];
   const kind = storyKind(t.text);
-  return [b.storyLabel ?? 'story', t.type === 'bug' ? 'bug' : 'enhancement', ...(kind === 'ui' ? ['frontend'] : kind === 'api' ? ['backend'] : [])];
+  return [setting(config, 'board.storyLabel'), t.type === 'bug' ? 'bug' : 'enhancement', ...(kind === 'ui' ? ['frontend'] : kind === 'api' ? ['backend'] : [])];
 }
 
 
@@ -188,7 +187,7 @@ export function applyMigration(config, { gh = defaultGh, run = exec, log = () =>
   }
 
   // 2. Labels.
-  for (const [name, color, description] of [[config.board?.spikeLabel ?? 'spike', 'c5def5', 'A research spike: findings that feed an epic']]) {
+  for (const [name, color, description] of [[setting(config, 'board.spikeLabel'), 'c5def5', 'A research spike: findings that feed an epic']]) {
     try {
       tr.labels.ensure(name, { color, description });
     } catch {

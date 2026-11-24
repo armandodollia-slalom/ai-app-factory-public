@@ -26,6 +26,7 @@ import { mergeReopens, reviewTargets, ticketReopens } from './reopens.mjs';
 import { prClass, prSeverity, ticketSeverity } from './severity.mjs';
 import { gateSystemsSettings } from './systems.mjs';
 import { extractTriage } from './triage-section.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // Set on an assessment the live read produced, so a caller that already read it does not read it again.
 export const LIVE = Symbol('rejections read live');
@@ -124,7 +125,7 @@ function prHistory(host, pr, keys) {
 
 // The ticket's run record in the main checkout (implement's), or null.
 function runRecord(config, cwd, key) {
-  const file = path.join(mainCheckout(cwd), config.stateDir ?? '.factory/state', 'implement', `${key}.json`);
+  const file = path.join(mainCheckout(cwd), setting(config, 'stateDir'), 'implement', `${key}.json`);
   return fs.existsSync(file) ? readJson(file, null) : null;
 }
 

@@ -209,7 +209,7 @@ test('server mode, SonarQube: the head waits for the scanner\'s check, then the 
   const sq = await fake('sonarqube', 'Bearer sq-good');
   process.env.FACTORY_TEST_SONAR = 'sq-good';
   const root = tmp('cs-sq-');
-  const s = scannerFor(serverConfig(root, 'sonarqube', { token: '${FACTORY_TEST_SONAR}', url: sq.url, project: 'shop', timeoutMin: 5 }));
+  const s = scannerFor(serverConfig(root, 'sonarqube', { token: '${FACTORY_TEST_SONAR}', url: sq.url, project: 'shop', timeoutSec: 300 }));
   assert.equal(s.type, 'sonarqube');
   const ev = (checks, now = Date.now()) => scannerEvidence(s, { head: SHA, pr: 1, checks, config: { root }, now });
   assert.equal(ev([]).state, 'pending', 'no check on the head yet: never green');
@@ -227,7 +227,7 @@ test('server mode, SonarQube: the head waits for the scanner\'s check, then the 
   const t0 = Date.now();
   assert.equal(ev(green, t0).state, 'pending');
   const late = ev(green, t0 + 6 * 60_000);
-  assert.deepEqual([late.state, /within 5 min/.test(late.detail)], ['failure', true]);
+  assert.deepEqual([late.state, /within 300 s/.test(late.detail)], ['failure', true]);
   const r = await conformance('scanner', s, { fixture: { head: SHA, pr: 1 } });
   assert.ok(r.ok, JSON.stringify(r.results));
 });

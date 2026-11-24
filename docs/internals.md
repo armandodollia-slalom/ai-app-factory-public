@@ -18,7 +18,7 @@ tool), calls them from the agent tools' hooks, the git hooks and the commands.
 | Agent turn ends | `Stop` and `SubagentStop` | `hook stop` | review, then feature-verification, then pr-check, then board | only after `factory done` |
 | Commit or merge | `.factory/githooks/post-commit`, `post-merge` | `git-hook post-commit\|post-merge` | feature-verification lessons after a merge, only with `git config fv.autoLessons true` | if opted in |
 | `factory board fetch` brings a changed story | (command) | none | feature-verification plans it in the background, only with `git config fv.autoPlan true` | if opted in |
-| Push | `.factory/githooks/pre-push` | `git-hook pre-push` | feature-verification (plans and tests of touched stories are verified and current) | none |
+| Push | `.factory/githooks/pre-push` | `git-hook pre-push` | feature-verification (plans and tests of touched stories are verified and current), retro (the council scorecard is the retro's own: an edit or a deletion of it is refused) | none |
 | Push of a pipeline branch, and pull requests | the factory's CI jobs for `ci.provider` ([hosts-and-trackers.md](hosts-and-trackers.md#ci-systems)) | `factory check`, `factory lint`, the policy self-check, the feature verification check, the analysis jobs | all | none |
 | A bug fix is delivered | the delivery (`deliverFinished`) | `review-gate assess` before the open, `publish` at the open, `regate` after the PR's checks ([review gate](ai-pipeline/review-gate.md)) | review-gate | one `bug-triage` run per PR |
 | The delivery, with the `demoVideo` feature | the delivery | `pr-video local` ([demo videos](ai-pipeline/pr-demo-video.md)) | none | `demo-narrator`: one run for the videos' scripts and one for a backend bug's reproduction steps, each retried once |
@@ -135,7 +135,7 @@ its final message with `AGENT_RESULT: {json}`, which the stage parses. See [agen
 - **Recovery:** every stage survives a crash, kill or reboot. Runs record their pid and the boot they started
   in and hold a lock, so a pid reused after a reboot is never mistaken for the run. A run that died is found on
   the next session start or Stop hook, or by `factory resume`, and continues from its last saved round. Each is
-  retried `recovery.maxAttempts` times (3), waiting `recovery.backoffSec` (60) and then twice as long each time,
+  retried `recovery.maxRetries` times (3), waiting `recovery.retryDelaySec` (60) and then twice as long each time,
   then escalated; `factory resume <KEY> --force` restarts an escalated run (`scripts/pipeline/lib/recovery.mjs`).
 
   | Stage | What is saved | Picked up by |

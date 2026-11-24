@@ -45,9 +45,11 @@ export function draftConfig(found, packs, { features = {} } = {}) {
     const checks = withPacks.flatMap((p) => (p.commands.checks ?? []).filter((c) => has(p, c.requires)).map(({ requires, ...c }) => c));
     config = mergeFragments(config, {
       implement: { ...(prepare.length ? { prepareCmd: prepare.join(' && ') } : {}), checks, ...(unit ? { unitTests: { cmd: unit } } : {}) },
-      precheck: {
-        lint: Object.assign({}, ...withPacks.map((p) => (has(p, p.commands.lintRequires) ? p.commands.lint ?? {} : p.commands.lintFallback ?? {}))),
-        fix: Object.assign({}, ...withPacks.map((p) => (has(p, p.commands.formatRequires) ? p.commands.format ?? {} : p.commands.formatFallback ?? {}))),
+      featureVerification: {
+        precheck: {
+          lint: Object.assign({}, ...withPacks.map((p) => (has(p, p.commands.lintRequires) ? p.commands.lint ?? {} : p.commands.lintFallback ?? {}))),
+          fix: Object.assign({}, ...withPacks.map((p) => (has(p, p.commands.formatRequires) ? p.commands.format ?? {} : p.commands.formatFallback ?? {}))),
+        },
       },
     });
   }

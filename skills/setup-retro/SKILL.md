@@ -33,7 +33,7 @@ both without duplicates. Nothing else needs configuring for the connection.
 
 ## 2. Where this repository's fixes may land
 
-`lessons.retro.allowedPaths` in `.factory/config.json` (default `.factory/agents/`, `.factory/policy/`),
+`retro.allowedPaths` in `.factory/config.json` (default `.factory/agents/`, `.factory/policy/`),
 plus the lessons files. Edits anywhere else are discarded before the commit. Widen it only for paths the
 person names; never include application source.
 
@@ -73,10 +73,10 @@ A factory fix reaches this repository only when a release containing it is pinne
 | How | When to use it |
 | --- | --- |
 | `factory retro run` by hand | while the factory is new here: read every pull request it opens |
-| `git config retro.auto true` | runs `retro run --if-due` after merges, at most once per `lessons.intervalDays` (7) |
+| `git config retro.auto true` | runs `retro run --if-due` after merges, at most once per `retro.intervalDays` (7) |
 | the `factory-retro.yml` workflow | weekly on CI; needs the agent CLI's credential and, for a store, its secrets |
 
-Thresholds (`lessons.storyThreshold`, `maxRules`, `retireAfterStories`) are in `.factory/config.json`;
+Thresholds (`retro.lessons.storyThreshold`, `retro.lessons.maxRules`, `retro.lessons.retireAfterStories`) are in `.factory/config.json`;
 leave the defaults until a few runs show they are wrong.
 
 ## 5. Prove it

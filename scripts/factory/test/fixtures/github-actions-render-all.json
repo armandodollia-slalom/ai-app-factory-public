@@ -21,7 +21,7 @@
   },
   ".github/workflows/factory-gate.yml": {
     "kind": "file",
-    "sha": "cd7c2e605a554b86"
+    "sha": "cbb60b6d9c60c46a"
   },
   ".github/workflows/factory-graphify-cache-prune.yml": {
     "kind": "file",

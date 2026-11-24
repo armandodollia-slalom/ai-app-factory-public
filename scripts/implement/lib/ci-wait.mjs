@@ -3,6 +3,8 @@
 // waited for. A red check goes back through the fixing loop once, as a finding with its log; still red, the run says
 // so and does not call the PR delivered. Checks still running when the wait ends are reported as pending.
 import { gatePushedRecords, pushBase } from '../../pipeline/lib/record-gate.mjs';
+import { recordCiMisses } from '../../pipeline/lib/findings.mjs';
+import { git } from '../../pipeline/lib/git.mjs';
 import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +13,7 @@ import { run as runCmd, tail } from '../../pipeline/lib/util.mjs';
 import { combine, checksSummary } from '../../pipeline/lib/ci/evidence.mjs';
 import { ciTarget } from '../../pipeline/lib/ci/index.mjs';
 import { branchPipelines, headPipelines } from '../../pipeline/lib/ci/evidence.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
 // The head's expected pipelines against its runs (the gate's headWorkflows, without the review gate's modules).
 const headWorkflows = (target, repo, pr, opts) => headPipelines(ciTarget(target, repo), pr, opts);
@@ -58,7 +61,18 @@ export const mergeStateOf = (target, repo, pr) => {
 // `unknown` with the cause, a not-delivered outcome, instead of waiting on (council C12).
 export const UNKNOWN_POLLS = 3;
 
-export async function waitForCi(target, repo, pr, { timeoutSec = 10800, pollSec = 30, settleSec = 60, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {}, now = Date.now, resolveDirty = null, maxResolves = 2, unknownPolls = UNKNOWN_POLLS, ciOptions = {} } = {}) {
+// The wait's defaults are implement.ci.wait's; a caller with the repository's settings passes them (ciWaitOptions).
+const WAIT = defaultSettings().implement.ci.wait;
+export const ciWaitOptions = (config) => ({ timeoutSec: setting(config, 'implement.ci.wait.timeoutSec'), pollSec: setting(config, 'implement.ci.wait.pollSec'), settleSec: setting(config, 'implement.ci.wait.settleSec') });
+
+// `pr-check --wait-ci`: the PR's CI, waited for with the repository's implement.ci.wait settings.
+// Returns { state, outcome, line, failing }.
+export async function waitForPrCi(config, pr, { target = ciTarget(config), wait = waitForCi, log = () => {}, resolveDirty = null } = {}) {
+  const ci = await wait(target, String(target.host.repo), pr, { ...ciWaitOptions(config), log, resolveDirty, ciOptions: { ciSettings: config.implement?.reviewGate?.ci ?? {} } });
+  return { state: ci.state, outcome: ciOutcome(ci), line: ciLine(ci), failing: ci.failing ?? [] };
+}
+
+export async function waitForCi(target, repo, pr, { timeoutSec = WAIT.timeoutSec, pollSec = WAIT.pollSec, settleSec = WAIT.settleSec, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {}, now = Date.now, resolveDirty = null, maxResolves = 2, unknownPolls = UNKNOWN_POLLS, ciOptions = {} } = {}) {
   const deadline = now() + timeoutSec * 1000;
   let last = null;
   let resolves = 0;
@@ -154,31 +168,65 @@ function withRetryCheck(ci, flaky, { pr, log }) {
 
 // Waits for CI; when it is red, runs one fixing round on the failures and pushes, then waits again.
 // Returns { state, failing, fixed, rounds }.
-// How many fixing rounds a red or retry-only CI gets before a person decides: implement.ciFixRounds (default 1),
-// PIPELINE_CI_FIX_ROUNDS for one run. 0 sends it straight to a person.
+// How many fixing rounds a red or retry-only CI gets in all, before and after its PR opens, before a person decides:
+// implement.ci.maxFixRounds (PIPELINE_CI_FIX_ROUNDS overrides it for one run). 0 sends it straight to a person.
 export const ciFixRounds = (settings = {}, env = process.env) => {
-  const v = Number(env.PIPELINE_CI_FIX_ROUNDS ?? settings.ciFixRounds ?? 1);
-  return Number.isInteger(v) && v >= 0 ? v : 1;
+  const v = Number(env.PIPELINE_CI_FIX_ROUNDS ?? settings.ci?.maxFixRounds ?? defaultSettings().implement.ci.maxFixRounds);
+  return Number.isInteger(v) && v >= 0 ? v : defaultSettings().implement.ci.maxFixRounds;
 };
 
-export async function ciGate({ ciOptions = {}, fixTimeoutSec = null, fixRounds = 1, flakyOf = ciFlaky, gh, config = null, repo, pr, branch, cwd, prCheckCli, targetArgs, base, env = process.env, seedFile, run = (cmd, args, opts) => spawnSync(cmd, args, { encoding: 'utf8', ...opts }), wait = waitForCi, log = () => {}, timeoutSec, pollSec = null, settleSec = null, resolveDirty = (cwd && branch && base) ? defaultResolveDirty(cwd, branch, base) : null } = {}) {
+// implement.ci.maxFixRounds is one budget for every CI fixing round of a ticket (or an epic unit): the fix of CI's checks
+// run here before the push (analysis gate) and before the PR (parity), the branch CI rounds and the remedy before the
+// PR, and the rounds after it opens. What was spent is in the run record (`ciFixSpent`, through `load`/`save`), charged
+// when a fixer starts, before it runs: a run that stops anywhere resumes with every round it started counted.
+export function ciFixBudget(settings, { load = () => null, save = () => {} } = {}, env = process.env) {
+  const total = ciFixRounds(settings, env);
+  let local = 0;
+  const spent = () => Math.max(local, Number(load()?.ciFixSpent) || 0);
+  const left = () => Math.max(0, total - spent());
+  const charge = () => {
+    local = spent() + 1;
+    save({ ciFixSpent: local });
+    return local;
+  };
+  // A gate that runs its own fixer (ciGate): offered a round only while one is left, charged when its fixer starts, and
+  // charged after for any round it reports that it did not announce.
+  const gate = async (run, opts) => {
+    let charged = 0;
+    const g = await run({ ...opts, fixRounds: left() > 0 ? 1 : 0, beforeFix: () => { charged += 1; charge(); } });
+    for (let i = charged; i < (g?.rounds ?? 0); i += 1) charge();
+    return g;
+  };
+  return { total, spent, left, charge, gate };
+}
+
+export async function ciGate({ ciOptions = {}, fixTimeoutSec = null, fixRounds = 1, beforeFix = () => {}, flakyOf = ciFlaky, gh, config = null, repo, pr, branch, cwd, prCheckCli, targetArgs, base, env = process.env, seedFile, run = (cmd, args, opts) => spawnSync(cmd, args, { encoding: 'utf8', ...opts }), wait = waitForCi, log = () => {}, timeoutSec, pollSec = null, settleSec = null, resolveDirty = (cwd && branch && base) ? defaultResolveDirty(cwd, branch, base) : null } = {}) {
   // The CI target: the repository's code host and CI system (a gh runner stands for GitHub with GitHub Actions).
   gh = gh ?? ciTarget(config ?? { root: cwd ?? process.cwd() }, repo);
   let ci = await wait(gh, repo, pr, { log, resolveDirty, ciOptions, ...(timeoutSec ? { timeoutSec } : {}), ...(pollSec != null ? { pollSec } : {}), ...(settleSec != null ? { settleSec } : {}) });
   // Green, but a test needed a retry: that is a finding to fix (council C6), handled like a red check.
   if (ci.state === 'success') ci = withRetryCheck(ci, flakyOf(gh, repo, pr), { pr, log });
   if (!['failure', 'flaky'].includes(ci.state)) return { ...ci, fixed: false, rounds: 0 };
+  // A red check on a branch whose councils passed is a miss against them (council-findings.jsonl): a failing test
+  // against the test-value members, a build or static analysis failure against the correctness members.
+  if (config && ci.state === 'failure') {
+    const at = (targetArgs ?? []).findIndex((a) => a === '--story' || a === '--stories');
+    const keys = at < 0 ? [] : String(targetArgs[at + 1] ?? '').split(',').filter(Boolean);
+    const head = cwd ? git(cwd, ['rev-parse', 'HEAD']).stdout.trim() || null : null;
+    recordCiMisses({ ...config, root: cwd ?? config.root }, { keys, failing: ci.failing ?? [], head });
+  }
   if (fixRounds < 1) {
-    log(`${ci.state === 'flaky' ? 'CI passed only with retries' : 'CI is red'} on ${pr}; no fixing round (implement.ciFixRounds 0): a person decides`);
+    log(`${ci.state === 'flaky' ? 'CI passed only with retries' : 'CI is red'} on ${pr}; no fixing round left (implement.ci.maxFixRounds): a person decides`);
     return { ...ci, fixed: false, rounds: 0 };
   }
   log(`${ci.state === 'flaky' ? 'CI passed only with retries' : 'CI is red'} on ${pr} (${ci.failing.join(', ')}); one fixing round on the failures`);
+  beforeFix();
   fs.mkdirSync(path.dirname(seedFile), { recursive: true });
   writeText(seedFile, JSON.stringify({ score: 6, lensScores: {}, upheldFindings: ciFindings(gh, repo, pr, ci.failing, { branch }) }, null, 2));
   // The fix round knows its PR (council C7, live #120): what it changed goes into the PR body's "Changed by the PR check"
   // section, the ticket's notes and the PR's side effects, not only onto the branch.
   const prNumber = String(pr ?? '').match(/(?:\/pull\/)?(\d+)\/?$/)?.[1];
-  const fixOut = run(process.execPath, [prCheckCli, 'run', ...(prNumber ? ['--pr', prNumber] : []), ...targetArgs, '--base', base, '--until', 'major', '--max-rounds', '2', '--fix-first', seedFile, '--push', '--json'], { cwd, env, timeout: (fixTimeoutSec ?? 72000) * 1000 }); // a ceiling (10x the usual 2 h): its agents end on no progress
+  const fixOut = run(process.execPath, [prCheckCli, 'run', ...(prNumber ? ['--pr', prNumber] : []), ...targetArgs, '--base', base, '--until', 'major', '--fix-first', seedFile, '--push', '--json'], { cwd, env, timeout: (fixTimeoutSec ?? 72000) * 1000 }); // a ceiling (10x the usual 2 h): its agents end on no progress
   // What the fix round did, for the person who decides when it could not fix the failures (council C7).
   const fixRun = (() => {
     try {
@@ -293,7 +341,7 @@ export function branchCiState(target, repo, { branch, head, base, changed = [], 
 // every poll, so a fixing round's push is waited for on its own SHA. 'none' (no pipeline runs on a push of this branch)
 // ends the wait at once: the head cannot be proven before a PR, and the caller falls back (a draft PR).
 export function branchWait(where, { pipelines = branchPipelines } = {}) {
-  return async (target, repo, _label, { timeoutSec = 10800, pollSec = 30, settleSec = 60, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {}, now = Date.now, unknownPolls = UNKNOWN_POLLS, ciOptions = {} } = {}) => {
+  return async (target, repo, _label, { timeoutSec = WAIT.timeoutSec, pollSec = WAIT.pollSec, settleSec = WAIT.settleSec, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {}, now = Date.now, unknownPolls = UNKNOWN_POLLS, ciOptions = {} } = {}) => {
     const deadline = now() + timeoutSec * 1000;
     let last;
     let unreadable = 0;

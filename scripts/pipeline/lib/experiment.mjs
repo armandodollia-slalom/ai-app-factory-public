@@ -15,6 +15,7 @@ import { epicTickets, loadTicket } from './tickets.mjs';
 import { summarizeUsage } from './usage.mjs';
 import { log, nowIso, readJson, run, writeJson } from './util.mjs';
 import { trackedStreamFiles } from './state.mjs';
+import { setting } from './settings.mjs';
 
 const IMPLEMENT_CLI = path.join(INSTALL_ROOT, 'scripts/implement/implement.mjs');
 const PR_CHECK_CLI = path.join(INSTALL_ROOT, 'scripts/pr-check/pr-check.mjs');
@@ -123,7 +124,7 @@ export function integrateArm(arm, branches) {
 export const defaultExperimentDeps = {
   runArm: runArmProcess,
   // A pooled e2e spec against an arm's result: `experiment.testCmd` with {file}; passes on exit 0.
-  runTest: (config, arm, file) => run('sh', ['-c', (config.experiment?.testCmd ?? 'npx playwright test -c playwright.teststack.config.ts {file}').replace('{file}', JSON.stringify(file))], { cwd: arm.worktree, timeoutSec: config.experiment?.testTimeoutSec ?? 1800 }).status === 0,
+  runTest: (config, arm, file) => run('sh', ['-c', (setting(config, 'experiment.testCmd')).replace('{file}', JSON.stringify(file))], { cwd: arm.worktree, timeoutSec: setting(config, 'experiment.testTimeoutSec') }).status === 0,
   // The PR check (report only, no fixer) of all the epic's tickets against the arm's whole diff.
   prCheck: (config, arm, keys, base) => {
     const r = run(process.execPath, [PR_CHECK_CLI, 'run', '--stories', keys.join(','), '--base', base, '--no-fix', '--json'], { cwd: arm.worktree, env: armEnv({ id: 'grading' }, arm), timeoutSec: 14400 });

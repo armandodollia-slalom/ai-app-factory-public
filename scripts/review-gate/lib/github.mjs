@@ -8,6 +8,10 @@ import { ghCli, hostFor, hostOf } from '../../pipeline/lib/hosts/index.mjs';
 import { ciTarget } from '../../pipeline/lib/ci/index.mjs';
 import { checksSummary, combine } from '../../pipeline/lib/ci/evidence.mjs';
 import { headWorkflows } from './expected-ci.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
+
+// implement.autoMerge's defaults, for a caller that passes partial settings.
+const AUTO_MERGE = defaultSettings().implement.autoMerge;
 
 // The real gh runner (it lives in the GitHub host adapter).
 export const realGh = ghCli;
@@ -129,7 +133,7 @@ export const prCommits = (target, repo, pr) => asHost(target, repo).pr.commits(p
 //   bot      the pipeline's PR bot (dev-bot-<login>, scripts/pipeline/lib/bot.mjs): `bot()` returns
 //            its { GH_TOKEN }, or null when it is not set up (then the merge is refused)
 export function mergeIdentity(settings, env = process.env, { bot } = {}) {
-  const identity = settings?.identity ?? 'gh-user';
+  const identity = settings?.identity ?? AUTO_MERGE.identity;
   if (identity === 'gh-user') return { identity, env: undefined };
   if (identity === 'app') {
     const name = settings.appTokenEnv ?? 'REVIEW_GATE_APP_TOKEN';
@@ -147,14 +151,14 @@ export function mergeIdentity(settings, env = process.env, { bot } = {}) {
 
 // Merges a PR the gate cleared. It merges at once when the host says nothing is pending; when something is
 // (checks restarted after the base moved, mergeability still being computed) it hands the merge to the host's
-// auto-merge where the repository allows it and `implement.autoMerge.native` is on, and otherwise reports it pending
+// auto-merge where the repository allows it and `implement.autoMerge.hostAutoMerge.enabled` is on, and otherwise reports it pending
 // so `board sync` tries again. It never turns a refusal into a review requirement: a refusal throws with the host's
 // reason (dogfood C6: #78 and #79 qualified, `--auto` was refused because "Allow auto-merge" was off, and the gate
 // asked for approvals). Returns { identity, method, merged, mergedAt, autoMerge, pending, status }.
 // `headSha`: the head the gate assessed; the merge is refused if the branch moved since (council C9). A host that
 // cannot bind a merge to a SHA (capability mergeHeadGuard) is asked for the head right before the merge, and the merge
 // is refused if it moved; such a host never gets auto-merge. The host's own auto-merge is used only with
-// `implement.autoMerge.native: true`: once armed it merges a later head as soon as the required checks pass, without
+// `implement.autoMerge.hostAutoMerge.enabled: true`: once armed it merges a later head as soon as the required checks pass, without
 // the gate's CI evidence for that head (council C9). By default a PR the host has not cleared yet waits, and
 // `board sync` merges it once the host does, after the gate has checked that head again.
 // `target`: a gh runner (with `repo`), or `config` to merge through its code host.
@@ -165,7 +169,7 @@ export function mergePr(target, repo, pr, settings, { bot, allowAuto = null, wai
   const { identity, env, token } = mergeIdentity(settings, process.env, { bot });
   const host = typeof target === 'function' ? hostOf((args, o = {}) => target(args, { ...o, env: o.env ?? env }), { repo }) : token ? prHost(target, gh, { token }) : prHost(target, gh);
   const caps = host.capabilities ?? {};
-  const method = settings?.method ?? 'squash';
+  const method = settings?.method ?? AUTO_MERGE.method;
   const before = host.pr.mergeState(pr, waitMs == null ? {} : { waitMs });
   const status = before.raw ?? String(before.mergeState ?? 'unknown').toUpperCase();
   if (before.state === 'merged') return { identity, method, merged: true, mergedAt: before.mergedAt ?? null, autoMerge: false, pending: false, status: 'MERGED' };
@@ -186,7 +190,7 @@ export function mergePr(target, repo, pr, settings, { bot, allowAuto = null, wai
     how = host.pr.merge(pr, { method, headSha });
   } else {
     const hostAuto = caps.autoMerge !== false && caps.mergeHeadGuard !== false && caps.cancelAutoMerge !== false;
-    const auto = hostAuto && (allowAuto ?? (settings?.native === true && host.repo.settings?.()?.autoMergeAllowed === true));
+    const auto = hostAuto && (allowAuto ?? (settings?.hostAutoMerge?.enabled === true && host.repo.settings?.()?.autoMergeAllowed === true));
     if (!auto) return { identity, method, merged: false, mergedAt: null, autoMerge: false, pending: true, status };
     const stop = stopped();
     if (stop) return stop;

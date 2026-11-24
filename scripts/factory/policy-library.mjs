@@ -19,6 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
 import { INSTALL_ROOT, repoRoot } from '../pipeline/lib/config.mjs';
+import { setting } from '../pipeline/lib/settings.mjs';
+import { readJson } from '../pipeline/lib/util.mjs';
 
 const isDeepEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -221,7 +223,7 @@ function main(argv) {
       console.error(`No policy library in pack "${packId}". Libraries: ${libs.map((l) => l.id).join(', ') || 'none'}.`);
       return 64;
     }
-    const dir = path.resolve(repoRoot(), flag('dir') ?? '.factory/policy');
+    const dir = path.resolve(repoRoot(), flag('dir') ?? setting(readJson(path.join(repoRoot(), '.factory/config.json'), {}) ?? {}, 'architectureReview.policy.dir'));
     if (!fs.existsSync(path.join(dir, 'policy.yaml'))) {
       console.error(`${dir} has no policy.yaml: run \`factory init\` (it copies the starter policy) first.`);
       return 1;

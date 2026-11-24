@@ -1,0 +1,21 @@
+{
+  "$comment": "What every setting in this section does, its type and allowed values; defaults are in config.json beside this file. See scripts/pipeline/lib/settings.mjs.",
+  "architectureReview.timeoutSec": { "does": "The normal time the architecture reviewer may take.", "type": "integer", "min": 1, "unit": "seconds" },
+  "architectureReview.conventions": { "does": "Documents the reviewer checks the change against.", "type": "list", "items": "path" },
+  "architectureReview.policy.enabled": { "does": "Runs the architecture policy step before the reviewer.", "type": "boolean", "readBy": "scripts/review/lib/review.mjs" },
+  "architectureReview.policy.agent": { "does": "The policy engine's script, relative to the factory install.", "type": "string" },
+  "architectureReview.policy.dir": { "does": "The folder of the repository's architecture rules.", "type": "string", "env": "ARCH_POLICY_DIR" },
+  "architectureReview.policy.command": { "does": "The command that runs a policy review (`{agent}` is the engine's script).", "type": "command", "readBy": "scripts/review/lib/review.mjs" },
+  "architectureReview.policy.lessonsCommand": { "does": "The command that reads the policy's lessons (`{agent}` is the engine's script).", "type": "command", "readBy": "scripts/review/lib/review.mjs" },
+  "architectureReview.policy.categories": { "does": "The policy's finding categories mapped to the review's.", "type": "map", "items": "string" },
+  "architectureReview.policy.maxLessons": { "does": "The most policy lessons handed to the reviewer.", "type": "integer", "min": 0 },
+  "architectureReview.policy.requester": { "does": "The agent the policy review is requested for.", "type": "string", "readBy": "scripts/review/lib/review.mjs" },
+  "architectureReview.policy.semantic": { "does": "Whether pending semantic rules go to the reviewer (`auto`) or are left out (`off`).", "type": "enum", "values": ["auto","off"], "readBy": "scripts/review/lib/review.mjs" },
+  "architectureReview.policy.timeoutSec": { "does": "How long the policy engine's command may take.", "type": "integer", "min": 1, "unit": "seconds", "readBy": "scripts/review/lib/review.mjs" },
+  "architectureReview.maxCouncilRounds": { "does": "How many rounds the architecture review council gets before the stage escalates to a person (any council size).", "type": "integer", "min": 1, "max": 50, "unit": "rounds", "readBy": "scripts/pipeline/lib/council.mjs" },
+  "architectureReview.councilPassScore": { "does": "The score every blocking member of the architecture review council must give, with no blocking finding standing, for it to pass (any council size).", "type": "number", "min": 0, "max": 10, "decimals": 1, "readBy": "scripts/pipeline/lib/council.mjs" },
+  "architectureReview.councilMembers": { "does": "How many members sit on the architecture review council (`null`: `council.members`).", "type": "integer", "min": 1, "max": 10, "nullable": true, "readBy": "scripts/pipeline/lib/council.mjs" },
+  "architectureReview.orchestrator.model": { "does": "The `models.pool` entry the architecture review orchestrator runs on (`null`: `orchestrator.model`).", "type": "string", "nullable": true, "allowed": "a `models.pool` entry name", "readBy": "scripts/pipeline/lib/pool.mjs" },
+  "architectureReview.orchestrator.effort": { "does": "The architecture review orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's).", "type": "enum", "values": ["low","medium","high","xhigh","max"], "nullable": true, "readBy": "scripts/pipeline/lib/pool.mjs" },
+  "architectureReview.councilIntercom": { "does": "The architecture review council's own discussion settings, over `council.intercom` (a council of one holds no discussion).", "type": "object", "allowed": "the keys of `council.intercom`", "readBy": "scripts/pipeline/lib/council.mjs" }
+}

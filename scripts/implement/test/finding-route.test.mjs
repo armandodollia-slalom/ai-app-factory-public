@@ -102,10 +102,10 @@ test('the architecture review hands a test-only finding to feature verification 
 });
 
 test('the automation verifier\'s gap that only a production change can close is a product bug, not feedback to the test writer', () => {
-  const config = { categories: { automation: ['wrong-assertion', 'case-not-covered'] }, loops: { requiredScore: 9 } };
+  const config = { featureVerification: { categories: { automation: ['wrong-assertion', 'case-not-covered'] } }, testAutomation: { councilPassScore: 9 } };
   const v = normalizeVerdict(config, 'automation', { score: 6, gaps: [{ case: 'TC-X-1-01', category: 'wrong-assertion', detail: 'the API returns 500 for an unknown id; the case expects 404 and the test is right', resolves: 'code' }, { case: 'TC-X-1-02', category: 'case-not-covered', detail: 'missing' }] });
   assert.deepEqual(productGapsOf(v.gaps).map((g) => g.case), ['TC-X-1-01']);
-  const plan = normalizeVerdict({ ...config, categories: { plan: ['ac-not-covered'] } }, 'plan', { score: 6, gaps: [{ category: 'ac-not-covered', detail: 'x', resolves: 'code' }] });
+  const plan = normalizeVerdict({ ...config, featureVerification: { categories: { plan: ['ac-not-covered'] } } }, 'plan', { score: 6, gaps: [{ category: 'ac-not-covered', detail: 'x', resolves: 'code' }] });
   assert.equal(plan.gaps[0].resolves, undefined, 'only the automation verifier may say it');
 });
 

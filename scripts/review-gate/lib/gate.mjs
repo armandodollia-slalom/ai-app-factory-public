@@ -13,6 +13,7 @@ import { describeSignals } from './confidence.mjs';
 import { addTicketLabel } from './fields.mjs';
 import { editPrLabels, findComment, prHost, requestReviewers, upsertComment } from './github.mjs';
 import { ownersOfFiles } from './systems.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
 export const MARKER = 'review-gate:';
 const MARKER_RE = /<!-- review-gate:(\{.*?\}) -->/;
@@ -172,7 +173,7 @@ export function renderNotice(a, d, state) {
   if (d.action === 'auto-merge') {
     const m = state?.merge ?? {};
     lines.push(m.merged
-      ? `${d.reasons.join('; ')}. Merged${m.mergedAt ? ` at ${m.mergedAt}` : ''} (\`gh pr merge\`, ${m.method ?? 'squash'}); the cards reach Done through \`board sync\`.`
+      ? `${d.reasons.join('; ')}. Merged${m.mergedAt ? ` at ${m.mergedAt}` : ''} (\`gh pr merge\`${m.method ? `, ${m.method}` : ''}); the cards reach Done through \`board sync\`.`
       : `${d.reasons.join('; ')}. Auto-merge is enabled (\`gh pr merge --auto\`): GitHub merges the PR once its required checks pass, and \`board sync\` then moves the cards to Done.`, '');
   }
   lines.push('| Ticket | Impact | Complexity | Fix risk | Severity | Confidence | Systems |', '| --- | --- | --- | --- | --- | --- | --- |');
@@ -196,7 +197,7 @@ export function renderNotice(a, d, state) {
 // Applying the decision to the PR
 // ---------------------------------------------------------------------------------------------
 
-export const approvalsLabel = (settings, n) => (settings.labels?.approvals ?? 'approvals:{n}').replace('{n}', String(n));
+export const approvalsLabel = (settings, n) => (settings.labels?.approvals ?? defaultSettings().implement.reviewGate.labels.approvals).replace('{n}', String(n));
 
 // Reviewers: each ticket's assignees, or the CODEOWNERS of the files it touches when it has none.
 // Never the PR's author (GitHub refuses that).
@@ -235,7 +236,7 @@ export function applyReview(config, gh, a, d, state, { assignees, codeowners, au
   const prefix = approvalsLabel(s, '');
   const stale = currentLabels.filter((l) => l.startsWith(prefix) && l !== want);
   if (d.action === 'review') {
-    attempt('labels', () => editPrLabels(prHost(config, gh), repo, a.pr, { add: [want, s.labels?.needsHuman ?? 'needs-human'], remove: stale }));
+    attempt('labels', () => editPrLabels(prHost(config, gh), repo, a.pr, { add: [want, setting(config, 'implement.reviewGate.labels.needsHuman')], remove: stale }));
     reviewers = attempt('reviewers', () => requestReviewers(prHost(config, gh), repo, a.pr, reviewersFor(a, { assignees, codeowners, author }))) ?? [];
   } else if (!currentLabels.includes(want) || stale.length) attempt('labels', () => editPrLabels(prHost(config, gh), repo, a.pr, { add: currentLabels.includes(want) ? [] : [want], remove: stale }));
   attempt('notice', () => upsertComment(prHost(config, gh), repo, a.pr, MARKER, renderNotice(a, d, { ...state, reviewers })));
@@ -244,7 +245,7 @@ export function applyReview(config, gh, a, d, state, { assignees, codeowners, au
 
 // Marks the tickets of a reopened PR on their issues (the `reopened` label) so people and requeue see it.
 export function labelReopened(config, gh, tickets) {
-  const label = config.implement.reviewGate.labels?.reopened ?? 'reopened';
+  const label = setting(config, 'implement.reviewGate.labels.reopened');
   for (const t of tickets) if (t.issue?.number ?? t.issue) addTicketLabel(config, gh, t.issue?.number ?? t.issue, label);
 }
 

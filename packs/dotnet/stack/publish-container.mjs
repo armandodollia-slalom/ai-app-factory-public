@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { setting } from '../../../scripts/pipeline/lib/settings.mjs';
 
 export function platform(env = process.env, arch = os.arch()) {
   const configured = env.TESTSTACK_PLATFORM;
@@ -39,7 +40,7 @@ export function publishCommands(stack, names, { env = process.env, arch = os.arc
   const services = stack?.services ?? {};
   const wanted = names.includes('--all') ? Object.keys(services) : names;
   if (!wanted.length) throw new Error('name the compose services to build, or --all');
-  const tag = stack?.build?.builtTag ?? 'latest';
+  const tag = setting({ stack }, 'stack.build.builtTag');
   const extra = String(env.DOTNET_PUBLISH_ARGS ?? stack?.build?.env?.DOTNET_PUBLISH_ARGS ?? '').split(/\s+/).filter(Boolean);
   return wanted.map((name) => {
     const entry = services[name];

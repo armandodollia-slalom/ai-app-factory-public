@@ -32,8 +32,9 @@ import { storyVersion } from '../../board/lib/source.mjs';
 import { acquireLock, appendJsonl, extractResult, lockHolder, log, nowIso, releaseLock, run, runAsync, selfProcess, sleep, tail } from '../../pipeline/lib/util.mjs';
 import { coveringUnits, expandArgv as expand, fenceLang, planRuns, runnerFor, sharedFixtureErrors, tagError, taggingLines, testRunners } from './runners.mjs';
 import { servicesOfFile } from '../../implement/lib/project.mjs';
-import { PRODUCER, formatGaps, verifyRound } from './verify.mjs';
+import { PRODUCER, formatGaps, stagePassScore, verifyRound } from './verify.mjs';
 import { ownerQuestionsText } from '../../pipeline/lib/intercom.mjs';
+import { decide, producerRun } from '../../pipeline/lib/orchestrator.mjs';
 import { addRequired, requiredFor, requiredProducerText, unmetRequired } from './required.mjs';
 import { resolvesGiven, routeToRole } from '../../pipeline/lib/finding-route.mjs';
 import { councilActionsText, councilFor, councilRounds, fixDeclarationText, fixesFile, guardProtectedTests, lateBox, planCases, protectedTestFinding } from '../../pipeline/lib/council.mjs';
@@ -86,7 +87,7 @@ function logPrecheck(config, stage, story, round, errors) {
 // are ignored: whatever the fixers cannot fix, lintFiles reports.
 export function fixFiles(config, files, { runner = run } = {}) {
   const fixed = [];
-  for (const [ext, template] of Object.entries(config.precheck.fix ?? {})) {
+  for (const [ext, template] of Object.entries(config.featureVerification.precheck.fix ?? {})) {
     const matching = lintable(config, files).filter((f) => f.endsWith(ext));
     if (!matching.length || !template?.length) continue;
     const head0 = expand([template[0]], { packs: path.join(INSTALL_ROOT, 'packs'), factoryBin: path.join(INSTALL_ROOT, 'node_modules', '.bin') })[0];
@@ -100,7 +101,7 @@ export function fixFiles(config, files, { runner = run } = {}) {
 
 export function lintFiles(config, files, { runner = run } = {}) {
   const errors = [];
-  for (const [ext, template] of Object.entries(config.precheck.lint ?? {})) {
+  for (const [ext, template] of Object.entries(config.featureVerification.precheck.lint ?? {})) {
     const matching = lintable(config, files).filter((f) => f.endsWith(ext));
     if (!matching.length || !template?.length) continue;
     // A configured linter that is not installed is a problem to fix in the checkout, not a pass.
@@ -108,7 +109,7 @@ export function lintFiles(config, files, { runner = run } = {}) {
     if (head.includes('/') && !fs.existsSync(path.resolve(config.root, head))) {
       // Only a linter the repository configured itself is a problem when missing; the engine's default
       // (markdownlint from the repository's own node_modules) is simply not available there.
-      if (!(ext in (repoOverlay(config.root).precheck?.lint ?? {}))) continue;
+      if (!(ext in (repoOverlay(config.root).featureVerification?.precheck?.lint ?? {}))) continue;
       errors.push(`\`${template[0]}\` (precheck.lint for ${ext}) is not installed in this checkout, so ${matching.join(', ')} could not be linted: run the repository's install (the implement prepareCmd), then try again.`);
       continue;
     }
@@ -170,7 +171,7 @@ function planTask(config, story, { mode, reasons, storyDiff, feedback }) {
     `Plan directory: ${story.planDir}`,
     `Mode: ${mode}${reasons?.length ? ` (${reasons.join('; ')})` : ''}`,
     `Case id format: ${casePrefix(story.key)}NN (two or more digits)`,
-    `Allowed sad-path values: ${config.categories.sadPathSubtypes.join(', ')}`,
+    `Allowed sad-path values: ${config.featureVerification.categories.sadPathSubtypes.join(', ')}`,
     '',
     '### Story',
     '',
@@ -190,9 +191,9 @@ function planTask(config, story, { mode, reasons, storyDiff, feedback }) {
 function planVerifierTask(config, story, plan) {
   const lines = [
     `Story: ${story.key}`,
-    `Required score: ${config.loops.requiredScore}/10`,
-    `Allowed categories: ${config.categories.plan.join(', ')}`,
-    `Allowed missing-sad-path subtypes: ${config.categories.sadPathSubtypes.join(', ')}`,
+    `Required score: ${stagePassScore(config, 'plan')}/10`,
+    `Allowed categories: ${config.featureVerification.categories.plan.join(', ')}`,
+    `Allowed missing-sad-path subtypes: ${config.featureVerification.categories.sadPathSubtypes.join(', ')}`,
     '',
     '### Story',
     '',
@@ -245,12 +246,12 @@ export function ownerEscalation(config, story, stage, verdict) {
   return { status: 'escalated', reason: 'owner question' };
 }
 
-export function notPassed(config, score, gaps = []) {
+export function notPassed(config, score, gaps = [], stage = 'plan') {
   const open = gaps.length;
-  return `last round: lowest score ${score ?? 'none'}/10, ${open} open gap(s); passing needs ${config.loops.requiredScore}/10 and no open gap`;
+  return `last round: lowest score ${score ?? 'none'}/10, ${open} open gap(s); passing needs ${stagePassScore(config, stage)}/10 and no open gap`;
 }
 
-export async function planLoop(config, story, { force = false, resume = false, seedFeedback = null, maxRounds = councilRounds(config, 'testPlan', config.loops.planMaxRounds), verifyFirst = false } = {}) {
+export async function planLoop(config, story, { force = false, resume = false, seedFeedback = null, maxRounds = councilRounds(config, 'testPlan'), verifyFirst = false } = {}) {
   const lock = lockFile(config, story.key, 'plan');
   if (!acquireLock(lock)) {
     log(`${story.key}: plan run already in progress (pid ${lockHolder(lock)}).`);
@@ -289,19 +290,27 @@ export async function planLoop(config, story, { force = false, resume = false, s
     const mode = initial.state === 'missing' ? 'create' : 'update';
     const storyDiff = mode === 'update' ? storyDiffSince(config, story, initial.plan.index?.data['story-sha']) : null;
     let feedback = resume ? resumeFeedback('plan', saved?.feedback ?? seedFeedback) : (seedFeedback ?? firstFeedback);
-    let consecutive = 0;
     let lastGaps = [];
     let lastScore = null;
+    // The stage's orchestrator decides who writes the plan: the test planner, or itself (kept on resume).
+    const led = saved?.orchestrator ?? await decide(config, {
+      section: 'testPlan',
+      stage: 'test plan',
+      story: story.key,
+      work: 'the test plan of the story: every happy and sad path as test cases, one Markdown file per case',
+      delegateTo: 'the test planner (`test-planner`)',
+      context: `Story ${story.key}: ${story.file}. The plan is ${initial.state} (${mode}).${feedback ? `\n\nWhat the plan must address:\n${feedback}` : ''}`,
+      run: (o) => runAgent(config, { ...o, timeoutSec: config.featureVerification.timeoutsSec.plan }),
+    });
+    const selfDo = led.decision === 'self' ? led : null;
     for (let round = Math.min(saved?.round ?? 1, maxRounds); round <= maxRounds; round++) {
-      updateState(config, story.key, (s) => (s.plan.progress = { round, feedback }));
-      log(`${story.key}: plan round ${round}/${maxRounds} (${mode})`);
+      updateState(config, story.key, (s) => (s.plan.progress = { round, feedback, orchestrator: led }));
+      log(`${story.key}: plan round ${round}/${maxRounds} (${mode})${selfDo ? ', written by the orchestrator' : ''}`);
       const producer = runAgent(config, {
-        name: PRODUCER.plan,
         mode: 'write',
-        model: config.agent.models.plan,
-        timeoutSec: config.timeoutsSec.plan,
+        timeoutSec: config.featureVerification.timeoutsSec.plan,
         usage: { stage: 'plan', story: story.key, round },
-        task: planTask(config, story, { mode: round === 1 ? mode : 'update', reasons: initial.reasons, storyDiff, feedback }) + declareFixes(config, story, 'testPlan', lastGaps),
+        ...producerRun(config, { agent: PRODUCER.plan, selfDo, task: planTask(config, story, { mode: round === 1 ? mode : 'update', reasons: initial.reasons, storyDiff, feedback }) + declareFixes(config, story, 'testPlan', lastGaps) }),
       });
       if (!producer.ok) {
         feedback = `The previous run ${producer.timedOut ? 'timed out' : `failed (exit ${producer.status})`}. Finish the plan.`;
@@ -330,19 +339,15 @@ export async function planLoop(config, story, { force = false, resume = false, s
         continue;
       }
       logPlanDecision(config, story, round, producer, feedback);
-      let verdict;
-      do {
-        verdict = await verifyRound(config, {
-          stage: 'plan',
-          story,
-          round,
-          producerVersion: producer.version,
-          task: planVerifierTask(config, story, readPlan(config, story)),
-          late,
-        });
-        if (verdict.error) break;
-        consecutive = verdict.passed ? consecutive + 1 : 0;
-      } while (verdict.passed && consecutive < config.loops.consecutivePasses);
+      // One council sitting a round: a council that passes once verifies the plan.
+      const verdict = await verifyRound(config, {
+        stage: 'plan',
+        story,
+        round,
+        producerVersion: producer.version,
+        task: planVerifierTask(config, story, readPlan(config, story)),
+        late,
+      });
       if (verdict.error) {
         feedback = null;
         continue;
@@ -415,7 +420,7 @@ export function uiEvidenceErrors(tests) {
 // loaded, and a backend PR with no recorded API calls). `precheck.requireStack: false` turns this off.
 export function stackErrors(config, story, plan, tests, runners, scenarioRequired) {
   const stackRunners = runners.filter((r) => r.stack);
-  if (!stackRunners.length || config.precheck?.requireStack === false || !tests.size) return [];
+  if (!stackRunners.length || config.featureVerification.precheck?.requireStack === false || !tests.size) return [];
   if (!plan.cases.some((c) => ['functional', 'e2e'].includes(String(c.data.layer ?? '').toLowerCase()))) return [];
   const where = stackRunners.map((r) => (r.match ?? r.roots ?? []).join(', ')).filter(Boolean).join(' or ') || 'the stack runner\'s files';
   const onStack = [...tests.keys()].filter((f) => runnerFor(config, f, runners)?.runner.stack);
@@ -436,7 +441,7 @@ export function supportFiles(config, testFiles, scenarioDir, base) {
   if (!dirs.length) return [];
   const list = (args) => git(config.root, args).stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   const changed = [...list(['diff', '--name-only', base, '--', ...dirs]), ...list(['ls-files', '--others', '--exclude-standard', '--', ...dirs])];
-  const harness = [`${config.plansDir}/`, '.factory/metrics/', '.factory/state/'];
+  const harness = [`${config.featureVerification.plansDir}/`, '.factory/metrics/', '.factory/state/'];
   return [...new Set(changed)].filter((f) => !testFiles.includes(f) && !harness.some((h) => f.startsWith(h)) && !f.split('/').includes('graphify-out') && fs.existsSync(path.join(config.root, f)));
 }
 
@@ -453,7 +458,7 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
   for (const id of planIds) if (!covered.has(id)) errors.push(`${id} has no automated test (put the id in the test name).`);
   for (const id of covered) if (!planIds.has(id)) errors.push(`${id} is referenced by tests but is not in the plan (remove or rename it).`);
   // `precheck.scenarioFile` names the file every story's scenario folder must hold (null: no scenario needed).
-  const scenarioFile = config.precheck.scenarioFile === undefined ? 'scenario.yaml' : config.precheck.scenarioFile;
+  const scenarioFile = config.featureVerification.precheck.scenarioFile;
   if (scenarioFile && !scenario.some((f) => scenarioNames(scenarioFile).includes(path.posix.basename(f)))) errors.push(`Missing scenario: create ${scenarioDir}/${scenarioFile}.`);
 
   const runners = testRunners(config);
@@ -487,12 +492,12 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
     for (const f of (report?.findings ?? []).filter((x) => x.severity === 'blocking' && testFiles.includes(x.file))) errors.push(`${f.tool} ${f.rule} at ${f.file}${f.line ? `:${f.line}` : ''}: ${f.message} (static analysis; blocking)`);
   }
 
-  const validate = config.precheck.validateScenario;
+  const validate = config.featureVerification.precheck.validateScenario;
   if (validate?.length && (!validate[0].includes('/') || fs.existsSync(path.join(config.root, validate[0])))) {
     const result = run(validate[0], expand(validate.slice(1), { scenario: story.scenario }), { cwd: config.root, timeoutSec: 600 });
     if (result.status !== 0 && result.status !== 127) errors.push(`Scenario validation failed:\n${tail(result.stdout + result.stderr, 3000)}`);
   }
-  if (skipTests || !config.precheck.runTests || errors.length) return { errors, tests };
+  if (skipTests || !config.featureVerification.precheck.runTests || errors.length) return { errors, tests };
 
   // Which runner runs which files (precheck.testRunners, lib/runners.mjs). Nothing configured, or a file
   // no runner takes, is a logged note, not a failure: the verifier still reads the tests.
@@ -515,19 +520,19 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
         continue;
       }
       log(`${story.key}: running ${r.build.join(' ')}`);
-      const result = run(r.build[0], r.build.slice(1), { cwd: config.root, timeoutSec: config.timeoutsSec.tests, ...(envOf(r.runner) ? { env: envOf(r.runner) } : {}) });
+      const result = run(r.build[0], r.build.slice(1), { cwd: config.root, timeoutSec: config.featureVerification.timeoutsSec.tests, ...(envOf(r.runner) ? { env: envOf(r.runner) } : {}) });
       if (result.status === 0) ready.push(r);
       else out.push(failure(r.build, result));
     }
     const results = await Promise.all(ready.map((r) => {
       log(`${story.key}: running ${r.run.join(' ')}`);
-      return runAsync(r.run[0], r.run.slice(1), { cwd: config.root, timeoutSec: config.timeoutsSec.tests, ...(envOf(r.runner) ? { env: envOf(r.runner) } : {}) }).then((result) => ({ argv: r.run, result }));
+      return runAsync(r.run[0], r.run.slice(1), { cwd: config.root, timeoutSec: config.featureVerification.timeoutsSec.tests, ...(envOf(r.runner) ? { env: envOf(r.runner) } : {}) }).then((result) => ({ argv: r.run, result }));
     }));
     for (const { argv, result } of results) if (result.status !== 0) out.push(failure(argv, result));
     // What CI runs: each unit's whole test project, unfiltered, one after another (they may start containers).
     // A story's tests can pass alone and fail beside the project's other tests (dogfood C2: new test classes each
     // started their own app host and database container next to the existing one, and timed out in CI).
-    if (!out.length && fullProjects && config.precheck?.runFullProjects !== false) {
+    if (!out.length && fullProjects && config.featureVerification.precheck?.runFullProjects !== false) {
       // The story's own test projects, then every other test project that covers a service the change touches
       // (council C2: a changed service could still break a test project holding none of the story's tests).
       const touched = [...new Map(implChanges(config).files.flatMap((f) => servicesOfFile(f, config.project)).map((svc) => [svc.name, svc])).values()];
@@ -539,7 +544,7 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
         const env = envOf(r.runner) ? { env: envOf(r.runner) } : {};
         if (r.build) {
           log(`${story.key}: building ${r.unit} (${r.why}): ${r.build.join(' ')}`);
-          const built = run(r.build[0], r.build.slice(1), { cwd: config.root, timeoutSec: config.timeoutsSec.tests, ...env });
+          const built = run(r.build[0], r.build.slice(1), { cwd: config.root, timeoutSec: config.featureVerification.timeoutsSec.tests, ...env });
           if (built.status !== 0) {
             appendJsonl(metricsFile(config, 'full-project-runs.jsonl'), [{ ts: nowIso(), story: story.key, unit: r.unit, why: r.why, argv: r.build.join(' '), status: built.status, timedOut: Boolean(built.timedOut), step: 'build' }]);
             out.push(`The test project ${r.unit} (${r.why}) does not build with this change: ${failure(r.build, built)}`);
@@ -547,7 +552,7 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
           }
         }
         log(`${story.key}: running the whole test project as CI does (${r.why}): ${r.runAll.join(' ')}`);
-        const result = await runAsync(r.runAll[0], r.runAll.slice(1), { cwd: config.root, timeoutSec: config.timeoutsSec.tests, ...env });
+        const result = await runAsync(r.runAll[0], r.runAll.slice(1), { cwd: config.root, timeoutSec: config.featureVerification.timeoutsSec.tests, ...env });
         // What ran, on which head, with how many tests (council C9: CANC-1's whole-project run of Ordering.FunctionalTests
         // passed before the PR, and the same command fails 3 of 3 on the head CI failed on; the record held no head and no
         // count to say what had run). A run that reports success with no test is not a pass.
@@ -569,7 +574,7 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
   })();
 
   // Stack runners (`stack: true`, end to end): on a leased stack slot of its own when several tickets run
-  // at once (useSlots, see lib/slots.mjs), else the one shared slot-0 stack per machine, where tests of
+  // at once (featureVerification.slots.enabled, see lib/slots.mjs), else the one shared slot-0 stack per machine, where tests of
   // different stories (different worktrees) take turns. The lock lives in git's common dir, which every
   // worktree shares. Runs alongside the local runners.
   const onStack = async ({ runner, files: specFiles, run: argv }) => {
@@ -579,10 +584,10 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
       // The verifier needs keyframes from passing tests too; a runner asks for them with its `env`.
       // No retries (council C6): a spec that passes only on a retry fails here, so it is fixed before it ships.
       const args = /playwright/.test(argv.join(' ')) && !argv.some((a) => /^--retries/.test(a)) ? [...argv, '--retries=0'] : argv;
-      const result = await runAsync(args[0], args.slice(1), { cwd: config.root, timeoutSec: config.timeoutsSec.tests, env: { ...process.env, ...(runner.env ?? {}), ...slotEnv } });
+      const result = await runAsync(args[0], args.slice(1), { cwd: config.root, timeoutSec: config.featureVerification.timeoutsSec.tests, env: { ...process.env, ...(runner.env ?? {}), ...slotEnv } });
       const seen = runner.evidence === false ? [] : readEvidence(config, { casePrefix: casePrefix(story.key), since });
       evidence = [...evidence, ...seen];
-      if (result.status === 0) return config.precheck?.requireUiEvidence === false ? [] : uiEvidenceErrors(seen);
+      if (result.status === 0) return config.featureVerification.precheck?.requireUiEvidence === false ? [] : uiEvidenceErrors(seen);
       let error = failure(argv, result);
       const failed = seen.filter((t) => !t.ok);
       if (failed.length) {
@@ -591,10 +596,10 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
       }
       return [error];
     };
-    const onSlot = await onLeasedSlot(config, { key: story.key, specFiles, timeoutSec: config.timeoutsSec.tests }, runSpecs);
+    const onSlot = await onLeasedSlot(config, { key: story.key, specFiles, timeoutSec: config.featureVerification.timeoutsSec.tests }, runSpecs);
     if (onSlot) return onSlot;
     const lock = teststackLock(config);
-    const deadline = Date.now() + config.timeoutsSec.tests * 1000 * 2;
+    const deadline = Date.now() + config.featureVerification.timeoutsSec.tests * 1000 * 2;
     while (!acquireLock(lock)) {
       if (Date.now() > deadline) return [`Timed out waiting for the shared app stack (held by pid ${lockHolder(lock)}).`];
       log(`${story.key}: waiting for the app stack (pid ${lockHolder(lock)} is running e2e tests)`);
@@ -617,7 +622,7 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
 }
 
 // Whole test projects in every automation round (the old behaviour), or once after the verifier approves (default).
-const fullEveryRound = (config) => config.precheck?.fullProjectsEveryRound === true;
+const fullEveryRound = (config) => config.featureVerification.precheck?.fullProjectsEveryRound === true;
 
 // `scenario.yaml` also accepts `scenario.yml`.
 const scenarioNames = (name) => (/\.ya?ml$/.test(name) ? [name.replace(/\.ya?ml$/, '.yaml'), name.replace(/\.ya?ml$/, '.yml')] : [name]);
@@ -634,11 +639,11 @@ function automationTask(config, story, { mode, feedback, implFiles }) {
     `Story: ${story.key} (${story.file})`,
     `Mode: ${mode}`,
     `Verified plan: ${story.planDir} (${plan.cases.length} cases: ${plan.cases.map((c) => c.data.id).join(', ')})`,
-    `Scenario directory: ${config.scenariosDir}/${story.scenario} (name: ${story.scenario})`,
+    `Scenario directory: ${config.teststack.scenariosDir}/${story.scenario} (name: ${story.scenario})`,
     'Every test must carry its case id: in its name or title where the language allows it, else where its runner says below.',
     ...taggingLines(config, story.key),
     `Before you finish, run \`${fvCommandFor(config)} precheck ${story.key}\` and fix everything it reports until it prints "precheck passed". It runs the harness's deterministic checks (case coverage, story tags, lint, scenario validation) without the tests; run the story's tests yourself.`,
-    ...(config.precheck.automationNotes ?? []),
+    ...(config.featureVerification.precheck.automationNotes ?? []),
     '',
     '### Implementation files changed for this story',
     '',
@@ -662,8 +667,8 @@ function automationVerifierTask(config, story, tests, evidence = []) {
   const { scenario } = automationFiles(config, story);
   const lines = [
     `Story: ${story.key}`,
-    `Required score: ${config.loops.requiredScore}/10`,
-    `Allowed categories: ${config.categories.automation.join(', ')}`,
+    `Required score: ${stagePassScore(config, 'automation')}/10`,
+    `Allowed categories: ${config.featureVerification.categories.automation.join(', ')}`,
     'Set "root_stage": "plan" on a gap only when the test case itself is wrong or untestable, not the test.',
     '',
     '### Test cases (the specification the tests must match)',
@@ -673,7 +678,7 @@ function automationVerifierTask(config, story, tests, evidence = []) {
   lines.push('', '### Automated tests');
   const runners = testRunners(config);
   for (const [file, ids] of tests) lines.push('', `#### ${file} (references ${[...ids].join(', ')})`, '', fence(readRel(config, file), fenceLang(config, file, runners)));
-  lines.push('', `### Scenario data (${config.scenariosDir}/${story.scenario})`);
+  lines.push('', `### Scenario data (${config.teststack.scenariosDir}/${story.scenario})`);
   for (const file of scenario) lines.push('', `#### ${file}`, '', fence(readRel(config, file), fenceLang(config, file)));
   lines.push('', 'Helper modules imported by the tests may be opened with your read tools if you need them.');
   if (evidence.some((t) => t.keyframes.length)) {
@@ -703,7 +708,7 @@ export function verifiedHashOf(config, targetHash) {
   return { hash: now.hash, from: now.hash !== targetHash ? targetHash : null, files: now.files };
 }
 
-export async function automationLoop(config, story, { implHash = null, skipTests = false, resume = false, verifyFirst = false, scoped = false, maxRounds = councilRounds(config, 'testAutomation', config.loops.automationMaxRounds) } = {}) {
+export async function automationLoop(config, story, { implHash = null, skipTests = false, resume = false, verifyFirst = false, scoped = false, maxRounds = councilRounds(config, 'testAutomation') } = {}) {
   const lock = lockFile(config, story.key, 'automation');
   if (!acquireLock(lock)) {
     updateState(config, story.key, (s) => (s.automation.requestedHash = implHash ?? s.automation.requestedHash));
@@ -747,7 +752,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
     // A plan run already in progress (for example the post-commit hook after the story's notes were
     // committed) holds the lock: wait for it, then use its plan (or run the loop if it didn't verify).
     const lock = lockFile(config, story.key, 'plan');
-    const deadline = Date.now() + config.timeoutsSec.plan * 1000 * (config.loops.planMaxRounds + 1);
+    const deadline = Date.now() + config.featureVerification.timeoutsSec.plan * 1000 * (councilRounds(config, 'testPlan') + 1);
     while (plan.status === 'busy' && Date.now() < deadline) {
       log(`${story.key}: waiting for the running plan loop (pid ${lockHolder(lock)}).`);
       while (lockHolder(lock) && Date.now() < deadline) await sleep(5000);
@@ -796,19 +801,28 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       feedback = `The tests were changed after verification; deterministic checks fail:\n${pre.errors.map((e) => `- ${e}`).join('\n')}`;
     }
   }
+  // The stage's orchestrator decides who writes the tests: the test automation agent, or itself (kept on resume).
+  const led = saved?.orchestrator ?? await decide(config, {
+    section: 'testAutomation',
+    stage: 'test automation',
+    story: story.key,
+    work: 'the automated tests of the verified test plan, one test per case, and the scenario they load',
+    delegateTo: 'the test automation agent (`test-automation`)',
+    context: `Story ${story.key}: ${story.file}. Cases: ${planCases(config.root, config.featureVerification.plansDir, story.key).length}; tests so far: ${automationFiles(config, story).tests.size} file(s).${feedback ? `\n\nWhat the tests must address:\n${feedback}` : ''}`,
+    run: (o) => runAgent(config, { ...o, timeoutSec: config.featureVerification.timeoutsSec.automation }),
+  });
+  const selfDo = led.decision === 'self' ? led : null;
   for (let round = Math.min(saved?.round ?? 1, maxRounds); round <= maxRounds; round++) {
-    updateState(config, story.key, (s) => (s.automation.progress = { hash: targetHash, round, feedback }));
+    updateState(config, story.key, (s) => (s.automation.progress = { hash: targetHash, round, feedback, orchestrator: led }));
     const mode = automationFiles(config, story).tests.size ? 'update' : 'create';
-    log(`${story.key}: automation round ${round}/${maxRounds} (${mode})`);
+    log(`${story.key}: automation round ${round}/${maxRounds} (${mode})${selfDo ? ', written by the orchestrator' : ''}`);
     const roundStart = git(config.root, ['rev-parse', 'HEAD']).stdout.trim();
     const producer = await withAgentSlot(config, story.key, (slotEnv) => runAgent(config, {
-      name: PRODUCER.automation,
       mode: 'write',
-      model: config.agent.models.automation,
-      timeoutSec: config.timeoutsSec.automation,
+      timeoutSec: config.featureVerification.timeoutsSec.automation,
       usage: { stage: 'automation', story: story.key, round },
       extraEnv: slotEnv,
-      task: automationTask(config, story, { mode, feedback, implFiles }) + (council ? `\n\n${councilActionsText({ refuse: 'say so in your result', owns: false })}` : '') + declareFixes(config, story, 'testAutomation', lastGaps),
+      ...producerRun(config, { agent: PRODUCER.automation, selfDo, task: automationTask(config, story, { mode, feedback, implFiles }) + (council ? `\n\n${councilActionsText({ refuse: 'say so in your result', owns: false })}` : '') + declareFixes(config, story, 'testAutomation', lastGaps) }),
     }));
     // No stack slot came free in time: the stage stops and says why rather than test against another checkout's stack.
     if (producer?.noSlot) {
@@ -844,7 +858,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
     }
     // With a council (which can ask for tests to be deleted), a protected test the agent deleted is put back and the round
     // fails with a finding the agent answers next round.
-    const restored = council && roundStart ? guardProtectedTests({ cwd: config.root, from: roundStart, keys: [story.key], cases: planCases(config.root, config.plansDir, story.key) }) : [];
+    const restored = council && roundStart ? guardProtectedTests({ cwd: config.root, from: roundStart, keys: [story.key], cases: planCases(config.root, config.featureVerification.plansDir, story.key) }) : [];
     if (restored.length) {
       log(`${story.key}: restored ${restored.length} protected test file(s) the automation agent changed: ${restored.map((v) => v.file).join(', ')}`);
       logPrecheck(config, 'automation', story, round, restored.map((v) => protectedTestFinding(v).issue));
@@ -867,13 +881,8 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       feedback = withOpenGaps(`Deterministic checks failed:\n${pre.errors.map((e) => `- ${e}`).join('\n')}`);
       continue;
     }
-    let verdict;
-    let consecutive = 0;
-    do {
-      verdict = await verifyRound(config, { stage: 'automation', story, round, producerVersion: producer.version, task: automationVerifierTask(config, story, pre.tests, pre.evidence), uiCases: uiCaseIds(pre.evidence, story.key), late });
-      if (verdict.error) break;
-      consecutive = verdict.passed ? consecutive + 1 : 0;
-    } while (verdict.passed && consecutive < config.loops.consecutivePasses);
+    // One council sitting a round: a council that passes once verifies the tests.
+    const verdict = await verifyRound(config, { stage: 'automation', story, round, producerVersion: producer.version, task: automationVerifierTask(config, story, pre.tests, pre.evidence), uiCases: uiCaseIds(pre.evidence, story.key), late });
     if (verdict.error) continue;
     const owner = ownerEscalation(config, story, 'automation', verdict);
     if (owner) return owner;
@@ -926,7 +935,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
     feedback = `The verifier scored the tests ${verdict.score}/10. Fix every gap:\n${formatGaps(verdict.gaps.filter((g) => g.root_stage !== 'plan'))}${planGaps.length ? '\n\nThe plan was also updated to fix case-level problems; re-read the case files.' : ''}${councilNotes(verdict)}`;
   }
   // not-an-agent: an escalation to a person
-  escalate(config, story, 'automation', `tests did not pass in ${maxRounds} rounds (${notPassed(config, lastScore, lastGaps)})`, lastGaps.length ? formatGaps(lastGaps) : feedback ?? '');
+  escalate(config, story, 'automation', `tests did not pass in ${maxRounds} rounds (${notPassed(config, lastScore, lastGaps, 'automation')})`, lastGaps.length ? formatGaps(lastGaps) : feedback ?? '');
   return { status: 'escalated' };
 }
 
@@ -1006,7 +1015,7 @@ export function recoverRun(config, story, kind, { force = false } = {}) {
   set({ status: 'starting', pid: null, boot: null, log: rel, requestedAt: nowIso(), ...next.fields });
   const args = kind === 'automation' ? ['automate', story.key, '--impl-hash', hash, '--resume'] : ['plan', story.key, '--resume'];
   spawnFv(config, story.key, kind, args, file);
-  log(`${story.key}: resumed the interrupted ${kind} run (attempt ${next.attempt}/${next.maxAttempts}, log ${rel}).`);
+  log(`${story.key}: resumed the interrupted ${kind} run (attempt ${next.attempt}/${next.maxRetries}, log ${rel}).`);
   return { kind, action: 'resumed', attempt: next.attempt, round: s.progress?.round ?? 1, log: rel };
 }
 

@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { runAgentAsync } from '../pipeline/lib/agents.mjs';
 import { parseArgs, runMain } from '../pipeline/lib/cli.mjs';
 import { loadConfig } from '../pipeline/lib/config.mjs';
-import { COUNCIL_STAGES, councilDoctorRows, councilFor, memberRunEnv, councilReviewSection, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, runCouncil, testProtection } from '../pipeline/lib/council.mjs';
-import { resolveIntercom, seatedNames } from '../pipeline/lib/council-config.mjs';
+import { familyOf, poolOf } from '../pipeline/lib/pool.mjs';
+import { COUNCIL_STAGES, stageTimeoutSec, councilDoctorRows, councilFor, memberCount, memberRunEnv, councilReviewSection, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, runCouncil, testProtection } from '../pipeline/lib/council.mjs';
+import { resolveIntercom } from '../pipeline/lib/council-config.mjs';
 import { applyRulings, checkoutState, intercomStateDir, runIntercomDiscussion } from '../pipeline/lib/intercom.mjs';
 import { intercomDoctor } from '../pipeline/lib/intercom-server.mjs';
 import { git } from '../pipeline/lib/git.mjs';
@@ -31,10 +32,11 @@ const usage = (rulings = false) => `Usage: factory council <command> [options]
 Stages: ${Object.keys(COUNCIL_STAGES).join(', ')} (pairUiVerify needs a leased app stack and runs only in the pipeline).`;
 
 // The stage folder whose config.json the stage's settings come from.
-export const STAGE_CONFIG = { pairVerify: 'implement', pairUiVerify: 'implement', review: 'review', testPlan: 'feature-verification', testAutomation: 'feature-verification', prCheck: 'pr-check' };
+export const STAGE_CONFIG = { pairVerify: 'implement', pairUiVerify: 'implement', architectureReview: 'review', testPlan: 'feature-verification', testAutomation: 'feature-verification', prCheck: 'pr-check' };
 // For a PR check council, the critic agent each lens runs (scripts/pr-check/lib/loop.mjs COUNCIL_CRITIC).
-const PR_CRITIC = { acceptance: 'pr-check-acceptance', correctness: 'pr-check-flow', security: 'pr-check-flow', 'test-value': 'pr-check-style', rewrite: 'pr-check-style', ui: 'pr-check-design' };
-const ORDER = ['review', 'pairVerify', 'prCheck', 'testAutomation', 'testPlan'];
+// A one-seat council's sole member reviews every lens (`all`): by hand it runs the acceptance critic, the stage's core lens.
+const PR_CRITIC = { all: 'pr-check-acceptance', acceptance: 'pr-check-acceptance', correctness: 'pr-check-flow', security: 'pr-check-flow', 'test-value': 'pr-check-style', rewrite: 'pr-check-style', ui: 'pr-check-design' };
+const ORDER = ['architectureReview', 'pairVerify', 'prCheck', 'testAutomation', 'testPlan'];
 
 const fence = (text, lang = '') => `\`\`\`\`${lang}\n${String(text).trimEnd()}\n\`\`\`\``;
 
@@ -68,13 +70,12 @@ function pickStage(config, wanted) {
     if (!COUNCIL_STAGES[wanted]) throw new Error(`unknown stage "${wanted}" (${Object.keys(COUNCIL_STAGES).join(', ')})`);
     return wanted;
   }
-  const configured = Object.keys(config.council?.stages ?? {});
-  const stage = ORDER.find((s) => configured.includes(s));
-  if (!stage) throw new Error('no council is configured: add a `council` section with at least one stage under council.stages to .factory/config.json (docs/ai-pipeline/council.md)');
-  return stage;
+  // Every verifier stage is a council; without --stage, the first one in the usual order that seats more than one
+  // member, else the architecture review (its own reviewer alone).
+  return ORDER.find((s) => memberCount(config, s) > 1) ?? ORDER[0];
 }
 
-const intercomOn = (c) => Boolean(c && (resolveIntercom(c).enabled || Object.keys(c.stages ?? {}).some((s) => resolveIntercom(c, s).enabled)));
+const intercomOn = (config) => Boolean(resolveIntercom(config.council).enabled || Object.keys(COUNCIL_STAGES).some((s) => councilFor(config, s).intercom.enabled));
 
 async function review(flags) {
   const probe = loadConfig(null);
@@ -82,7 +83,6 @@ async function review(flags) {
   if (COUNCIL_STAGES[stage].ui) throw new Error('the pairUiVerify council drives the app on a leased test stack slot; it runs only inside `factory implement run`');
   const config = loadConfig(STAGE_CONFIG[stage]);
   const council = councilFor(config, stage);
-  if (!council) throw new Error(`no council sits for ${stage}: add council.stages.${stage} to .factory/config.json`);
   const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
   if (flags.rulings) return reviewRulings(config, council, stage, readOnly, flags);
   const base = flags.base || config.baseRef;
@@ -95,7 +95,7 @@ async function review(flags) {
   const task = reviewTask({ branch, base, story, storyText, diff, stage });
   const subject = story?.key ?? `branch:${branch}`;
   const agentOf = (m) => (stage === 'prCheck' ? PR_CRITIC[m.lens] : COUNCIL_STAGES[stage].agent);
-  const runMember = (m, t, o) => runAgentAsync(config, { name: agentOf(m), task: t, mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? 1800, noSubagents: true, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: `council-${stage}`, story: subject, round: 1, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } });
+  const runMember = (m, t, o) => runAgentAsync(config, { name: agentOf(m), task: t, mode: 'read', entry: m.entry, timeoutSec: m.timeoutSec ?? stageTimeoutSec(config, stage), noSubagents: true, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: `council-${stage}`, story: subject, round: 1, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } });
   const out = await runCouncil({
     council,
     round: 1,
@@ -107,7 +107,7 @@ async function review(flags) {
   });
   // A discussion, when enabled: a split waits for `--rulings` (the person or model running this rules on it).
   const intercom = await runIntercomDiscussion({ config, council, results: out.results, subject, stage, violation: out.violation, readOnly, reviewed: sha(`${mergeBase}\n${task}`, 16), run: runMember, deferRulings: true });
-  const cases = story ? planCases(config.root, config.plansDir, story.key) : [];
+  const cases = story ? planCases(config.root, config.featureVerification.plansDir, story.key) : [];
   const merged = mergeCouncil(council, out.results, { protect: (f) => testProtection(f, { keys: story ? [story.key] : [], cases }), violation: out.violation, ...(intercom ? { intercom } : {}) });
   return report(config, { stage, subject, council, merged, flags, base, step: 'by-hand' });
 }
@@ -119,7 +119,7 @@ function reviewRulings(config, council, stage, readOnly, flags) {
   const saved = applyRulings(intercomStateDir(config), path.resolve(flags.rulings), { stage, ...checkoutState(readOnly), members: council.members.map((m) => m.name) });
   const results = saved.results.map((r) => ({ ...r, member: council.members.find((m) => m.name === r.member) }));
   const keys = String(saved.meta.subject).startsWith('branch:') ? [] : [saved.meta.subject];
-  const cases = keys.flatMap((k) => planCases(config.root, config.plansDir, k));
+  const cases = keys.flatMap((k) => planCases(config.root, config.featureVerification.plansDir, k));
   const merged = mergeCouncil(council, results, { protect: (f) => testProtection(f, { keys, cases }), intercom: saved.result });
   return report(config, { stage, subject: saved.meta.subject, council, merged, flags, base: null, step: 'by-hand-rulings' });
 }
@@ -155,27 +155,26 @@ async function check(flags) {
     console.error(error.message);
     return 1;
   }
-  const c = config.council;
-  if (!c) {
-    console.log('No council configured: every stage runs its single verifier.');
-    return 0;
-  }
-  const stages = Object.keys(c.stages ?? {}).map((stage) => {
-    const s = councilFor(loadConfig(STAGE_CONFIG[stage]), stage);
-    return { stage, rounds: s.rounds, passScore: s.passScore, blockOn: s.blockOn, onUnavailable: s.onUnavailable, ...(s.intercom.enabled ? { intercom: s.intercom } : {}), members: seatedNames(c, stage) };
+  // The pool every seat comes from, with each entry's derived family.
+  const pool = poolOf(config).map((e) => ({ name: e.name, cli: e.cli, model: e.model ?? null, effort: e.effort, family: familyOf(e) }));
+  // Every verifier stage is a council: how many sit (council.members or the stage's councilMembers), who (its own
+  // verifier alone with one seat), its round limit and its pass score.
+  const stages = Object.keys(COUNCIL_STAGES).map((stage) => {
+    const sc = loadConfig(STAGE_CONFIG[stage]);
+    const s = councilFor(sc, stage);
+    return { stage, seats: memberCount(sc, stage), maxCouncilRounds: s.maxCouncilRounds, councilPassScore: s.councilPassScore, blockQuorum: s.blockQuorum, onUnavailable: s.onUnavailable, ...(s.intercom.enabled ? { intercom: s.intercom } : {}), members: s.sole ? [`its own verifier${s.members[0].entry ? ` (${s.members[0].entry})` : ''}`] : s.members.map((m) => `${m.name} (${m.entry}, ${m.family}, ${m.lens})`) };
   });
-  if (flags.json) console.log(JSON.stringify({ ok: true, stages }, null, 2));
+  if (flags.json) console.log(JSON.stringify({ ok: true, pool, stages }, null, 2));
   else {
     console.log('Council configuration: OK');
-    for (const s of stages) console.log(`- ${s.stage}: ${s.members.join(', ')} (${s.rounds} round(s), pass ${s.passScore}/10, blockOn ${s.blockOn}, onUnavailable ${s.onUnavailable}${s.intercom?.enabled ? `, intercom ${s.intercom.host}:${s.intercom.port}` : ''})`);
-    // Whether every seated member can run here: its CLI, its login (with the member's own env) and its model.
+    console.log(`Pool: ${pool.map((e) => `${e.name} (${e.cli}, ${e.model ?? 'custom'}, ${e.family})`).join('; ')}`);
+    for (const s of stages) console.log(`- ${s.stage} (${s.seats} seat${s.seats === 1 ? '' : 's'}): ${s.members.join(', ')} (${s.maxCouncilRounds} round(s), pass ${s.councilPassScore}/10, blockQuorum ${s.blockQuorum}, onUnavailable ${s.onUnavailable}${s.intercom?.enabled ? `, intercom ${s.intercom.host}:${s.intercom.port}` : ''})`);
+    // Whether every pool entry can run here: its CLI and its login (with the entry's own env).
     const rows = councilDoctorRows(config, { probe: (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', env, shell: process.platform === 'win32', timeout: 60_000 }).status === 0 });
-    const ic = intercomOn(c) ? await intercomDoctor(config) : { rows: [], warnings: [] };
+    const ic = intercomOn(config) ? await intercomDoctor(config) : { rows: [], warnings: [] };
     rows.push(...ic.rows);
     for (const [what, ok, note] of rows) console.log(`${ok ? 'ok     ' : 'MISSING'}  ${what}${note ? `  (${note})` : ''}`);
     for (const [what, note] of ic.warnings) console.log(`WARN     ${what}  (${note})`);
-    const idle = Object.values(COUNCIL_STAGES).length - stages.length;
-    if (idle) console.log(`Other stages (${Object.keys(COUNCIL_STAGES).filter((k) => !stages.some((s) => s.stage === k)).join(', ')}) run their single verifier.`);
   }
   return 0;
 }
@@ -185,7 +184,7 @@ async function main() {
   const { flags } = parseArgs(rest, new Set(['stage', 'base', 'story', 'rulings']));
   let rulings = false;
   try {
-    rulings = intercomOn(loadConfig(null).council);
+    rulings = intercomOn(loadConfig(null));
   } catch {
     // no readable configuration: the plain usage
   }

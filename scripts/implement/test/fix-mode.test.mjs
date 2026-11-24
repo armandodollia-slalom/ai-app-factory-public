@@ -5,7 +5,7 @@ import { fixBeforePr, prCheckSection } from '../lib/implement.mjs';
 // Council C1: BUG-10 shipped a false 200 on a retried 404 (FLOW-1-1) and CAT-1 two major video findings,
 // because a single-ticket PR opened with the report round's verdict as it was.
 const reported = (severities) => ({ status: 'done', verdict: 'FAIL', score: 8, openFindings: severities.map((severity, i) => ({ id: `F-${i}`, lens: 'flow', severity, title: `t${i}` })) });
-const wt = (prCheck) => ({ implement: { prCheck } });
+const wt = (prCheck) => ({ prCheck, implement: { waitSec: { prCheck: 14400 } } });
 const opts = { key: 'B-1', worktree: '/tmp/wt', base: 'origin/main' };
 
 test('fix mode: a major finding sends the story through the fixing loop before the PR; the PR gets the final report', () => {
@@ -17,7 +17,7 @@ test('fix mode: a major finding sends the story through the fixing loop before t
   const out = fixBeforePr(wt({}), opts, reported(['major', 'minor']), { runCli });
   assert.equal(calls.length, 1);
   const args = calls[0].args.slice(1);
-  assert.deepEqual(args, ['run', '--story', 'B-1', '--base', 'origin/main', '--until', 'major', '--max-rounds', '3', '--fix-first', '/tmp/wt/.factory/state/pr-check/B-1/result.json', '--json']);
+  assert.deepEqual(args, ['run', '--story', 'B-1', '--base', 'origin/main', '--until', 'major', '--fix-first', '/tmp/wt/.factory/state/pr-check/B-1/result.json', '--json']);
   assert.equal(calls[0].o.cwd, '/tmp/wt');
   assert.equal(calls[0].o.env.PIPELINE_ROOT, '/tmp/wt');
   assert.deepEqual([out.mode, out.verdict, out.score, out.rounds, out.reportScore, out.reportMajor], ['fix', 'ACCEPTED', 9, 2, 8, 1]);
@@ -40,7 +40,7 @@ test('a fixing loop that fails leaves the report round\'s verdict, with the reas
 });
 
 // Dogfood C4: a feature paid a third fixing round for a minor video finding. A feature stops at majors; its minors
-// (video ones too) go to the PR's Follow-ups. A lens named in implement.prCheck.fixLenses is still fixed at any severity.
+// (video ones too) go to the PR's Follow-ups. A lens named in prCheck.fixLenses is still fixed at any severity.
 test('a feature\'s minor findings, on any lens, go to the Follow-ups instead of a fixing round; fixLenses still forces a fix', async () => {
   const { prCheckFollowUps, followUpsSection } = await import('../lib/implement.mjs');
   let called = 0;
@@ -80,7 +80,7 @@ test('the PR body lists the whole test projects run before it, the latest run of
 test('fix mode keeps the report round side effects and reports its fixing rounds', () => {
   const runCli = () => ({ status: 0, stdout: JSON.stringify({ verdict: 'PASS', score: 10, rounds: 2, fixRounds: 1, commits: ['bbee105'], openFindings: [], sideEffects: [] }) });
   const prc = { ...reported(['minor']), sideEffects: ['GET /api/catalog/items: new optional sort parameter'] };
-  const out = fixBeforePr(wt({ fixUntil: 'minor' }), opts, prc, { runCli });
+  const out = fixBeforePr(wt({ fixMinSeverity: 'minor' }), opts, prc, { runCli });
   assert.deepEqual(out.sideEffects, ['GET /api/catalog/items: new optional sort parameter']);
   assert.match(prCheckSection(out), /then 1 fixing round\(s\) and 1 fix commit\(s\)/);
 });

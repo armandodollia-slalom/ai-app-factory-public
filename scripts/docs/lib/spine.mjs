@@ -130,7 +130,7 @@ export function nodeTable(flow, { base = 'ai-pipeline/' } = {}) {
   const cell = (t) => String(t ?? '').replace(/\|/g, '\\|');
   const page = (doc) => `[${doc.split('#')[0].split('/').pop()}](${relLink(doc, base)})`;
   const who = (n) => (n.agents ? n.agents.map((a) => `\`${a.split(' (')[0]}\``).join(', ') : n.calls ? `harness, may call ${n.calls.map((a) => `\`${a.split(' (')[0]}\``).join(', ')}` : flow.kinds[n.kind].label.toLowerCase());
-  const settingsOf = (n) => (n.settings ?? []).map((id) => setting[id]).filter((s) => s.kind !== 'scenario').map((s) => `\`${s.flag && !s.config ? s.flag : s.config}\``).slice(0, 3).join(', ') || 'none';
+  const settingsOf = (n) => [...new Set((n.settings ?? []).map((id) => setting[id]).filter((s) => s.kind !== 'scenario').map((s) => `\`${s.flag && !s.config ? s.flag : s.config}\``))].slice(0, 3).join(', ') || 'none';
   const rows = ['| Id | Step | Agent or harness | Settings | Page |', '| --- | --- | --- | --- | --- |'];
   for (const n of spineNodes(flow)) {
     const d = decisionAt[n.id];

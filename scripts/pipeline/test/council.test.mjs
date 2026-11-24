@@ -8,70 +8,71 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
-import { councilProblems, envProblems, seatedNames } from '../lib/council-config.mjs';
+import { councilProblems, envProblems } from '../lib/council-config.mjs';
+import { poolProblems } from '../lib/pool.mjs';
+import { councilSettings, poolSettings, seatedCouncil } from './fixtures/pool.mjs';
 import { agentEnv, councilActionsText, councilDoctorRows, memberLogin, memberRunEnv, councilFor, councilReviewSection, councilRounds, disputesFor, guardProtectedTests, memberTask, mergeCouncil, normalizeFinding, protectedTestFinding, runCouncil, runDetachedMember, takeLate, testProtection, withCouncilReview } from '../lib/council.mjs';
 import { agentDefinition, cliInvocation } from '../lib/agents.mjs';
 import { sha } from '../lib/util.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const INSTALL = path.resolve(here, '../../..');
-const agent = { allowedModels: ['opus', 'sonnet', 'sol'], modelIds: { claude: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' }, copilot: { sonnet: 'claude-sonnet-5.5', sol: 'gpt-6.1-sol' }, codex: { sol: 'gpt-6.1-sol' } } };
 const members = [
   { name: 'opus', cli: 'claude', model: 'opus', effort: 'high', lens: 'correctness' },
   { name: 'sol', cli: 'codex', model: 'sol', effort: 'high', lens: 'correctness' },
   { name: 'tests', cli: 'copilot', model: 'sonnet', lens: 'test-value' },
   { name: 'rewrite', cli: 'claude', model: 'opus', lens: 'rewrite', blocking: false },
 ];
-const COUNCIL = { rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail', members, stages: { pairVerify: { members: ['opus', 'tests'] }, review: { members: ['opus', 'sol', 'rewrite'] }, testAutomation: { members: ['tests', 'sol'], rounds: 5 }, prCheck: {} } };
+// The four members as the pool, with a council of three for the architecture review.
+const POOLED = { ...poolSettings(members), architectureReview: { councilMembers: 3 } };
+const COUNCIL = { blockQuorum: 'any', onUnavailable: 'fail' };
 
 // ---------------------------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------------------------
 
-test('council config: the brief\'s example is valid, and with no council section there is nothing to check', () => {
-  assert.deepEqual(councilProblems(COUNCIL, agent), []);
-  assert.deepEqual(councilProblems(undefined, agent), []);
-  assert.deepEqual(seatedNames(COUNCIL, 'prCheck'), ['opus', 'sol', 'tests', 'rewrite'], 'no members: the whole council sits');
-  assert.deepEqual(seatedNames(COUNCIL, 'testPlan'), [], 'a stage not listed seats nobody');
+test('council config: the council is a count of members; a list of members is refused, naming the pool', () => {
+  assert.deepEqual(councilProblems({ ...COUNCIL, members: 2 }), []);
+  assert.deepEqual(councilProblems(undefined), []);
+  assert.match(councilProblems({ members }).join('\n'), /council\.members is now how many members a council seats[\s\S]*models\.pool entries/);
+  assert.match(councilProblems({ members: 0 }).join('\n'), /council\.members must be a whole number, 1 or more/);
+  assert.match(councilProblems({ blockQuorum: 'most', onUnavailable: 'substitute' }).join('\n'), /blockQuorum must be one of any, majority, all[\s\S]*onUnavailable must be one of fail, report/);
 });
 
-test('council config: bad member, bad lens, unknown model for a CLI, unknown stage and duplicate names are refused', () => {
-  const bad = (patch) => councilProblems({ ...COUNCIL, ...patch }, agent).join('\n');
-  assert.match(bad({ members: [...members, { name: 'x', cli: 'gemini', model: 'opus', lens: 'correctness' }] }), /members\[4\] \("x"\)\.cli must be one of claude, codex, copilot, custom/);
-  assert.match(bad({ members: [...members, { name: 'x', cli: 'claude', model: 'opus', lens: 'style' }] }), /lens "style" is not a lens/);
-  assert.match(bad({ members: [...members, { name: 'x', cli: 'codex', model: 'opus', lens: 'security' }] }), /model "opus" has no id for agent CLI "codex" \(agent\.modelIds\.codex\.opus\)/);
-  assert.match(bad({ members: [...members, { name: 'x', cli: 'claude', model: 'gpt-9', lens: 'security' }] }), /model "gpt-9" is not in agent\.allowedModels/);
-  assert.match(bad({ stages: { verifyAll: {} } }), /council\.stages\.verifyAll is not a stage a council can sit for/);
-  assert.match(bad({ members: [...members, { ...members[0] }] }), /two members named "opus"/);
-  assert.match(bad({ stages: { review: { members: ['opus', 'ghost'] } } }), /names "ghost", which is not in council\.members/);
-  assert.match(bad({ stages: { review: { members: ['rewrite'] } } }), /seats no blocking member/);
-  assert.match(bad({ members: [...members, { name: 'eyes', cli: 'claude', model: 'opus', lens: 'ui' }], stages: { review: { members: ['eyes'] } } }), /lens ui\), which needs a leased app stack slot; only pairUiVerify has one/);
-  assert.match(bad({ blockOn: 'most', onUnavailable: 'substitute', passScore: 11, rounds: 0 }), /rounds must be[\s\S]*passScore must be[\s\S]*blockOn must be one of any, majority, all[\s\S]*onUnavailable must be one of fail, report/);
-  assert.match(bad({ members: [...members, { name: 'own', cli: 'custom', lens: 'security' }] }), /\.cmd must be the command a custom member runs/);
-  assert.deepEqual(councilProblems({ ...COUNCIL, members: [...members, { name: 'own', cli: 'custom', cmd: 'my-agent --json', lens: 'security' }] }, agent), []);
+test('pool config: a bad entry, a duplicate name, a custom entry without its command and an unknown entry name are refused', () => {
+  const pool = poolSettings(members).models.pool;
+  const bad = (patch, extra = {}) => poolProblems({ models: { pool: patch, agents: { default: 'opus', ...extra } } }).join('\n');
+  assert.match(bad([...pool, { name: 'x', cli: 'gemini', model: 'gemini-3', effort: 'high' }]), /models\.pool\[4\] \("x"\)\.cli must be one of claude, codex, copilot, custom/);
+  assert.match(bad([...pool, { name: 'x', cli: 'claude', model: 'claude-opus-5-5', effort: 'huge' }]), /\("x"\)\.effort must be one of low, medium, high, xhigh, max/);
+  assert.match(bad([...pool, { ...pool[0] }]), /two entries named "opus"/);
+  assert.match(bad([...pool, { name: 'own', cli: 'custom', effort: 'high' }]), /\("own"\)\.cmd must be the command a custom entry runs/);
+  assert.match(bad([...pool, { name: 'x', cli: 'claude', effort: 'high' }]), /\("x"\)\.model must be the CLI's own model id/);
+  assert.match(bad(pool, { 'pr-check-judge': 'ghost' }), /models\.agents\.pr-check-judge is "ghost", which is not in models\.pool \(entries: opus, sol, tests, rewrite\)/);
+  assert.match(bad([]), /models\.pool must list at least one entry/);
+  assert.deepEqual(bad([...pool, { name: 'own', cli: 'custom', cmd: 'my-agent --json', effort: 'high' }]), '');
 });
 
-test('council config is checked when the settings load: a typo fails at once, not halfway through a round', () => {
+test('pool config is checked when the settings load: an agent naming no entry fails at once and lists the entries', () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'council-cfg-')));
   spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
   fs.mkdirSync(path.join(dir, '.factory'));
-  fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ council: { ...COUNCIL, members: [{ ...members[1], model: 'opus' }, members[0]] } }));
-  assert.throws(() => loadConfig('review', dir), /\.factory\/config\.json: council\.members\[0\] \("sol"\)\.model "opus" has no id for agent CLI "codex"/);
-  fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ agent: { modelIds: { codex: { sol: 'gpt-6.1-sol' } } }, council: COUNCIL }));
+  fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ ...POOLED, models: { ...POOLED.models, agents: { ...POOLED.models.agents, 'architecture-reviewer': 'gpt-9' } } }));
+  assert.throws(() => loadConfig('review', dir), /\.factory\/config\.json: models\.agents\.architecture-reviewer is "gpt-9", which is not in models\.pool \(entries: opus, sol, tests, rewrite\)/);
+  fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify(POOLED));
   const config = loadConfig('review', dir);
-  assert.equal(councilFor(config, 'review').members.length, 3);
+  assert.equal(councilFor(config, 'architectureReview').members.length, 3);
 });
 
-test('rounds: council.rounds, overridden per stage, take precedence over the stage\'s own limit only where a council sits', () => {
-  const config = { council: COUNCIL };
-  assert.equal(councilRounds(config, 'review', 5), 3);
-  assert.equal(councilRounds(config, 'testAutomation', 5), 5);
-  assert.equal(councilRounds(config, 'prCheck', 6), 3);
-  assert.equal(councilRounds(config, 'testPlan', 4), 4, 'no council for the stage: its own setting');
-  assert.equal(councilRounds({}, 'review', 5), 5, 'no council section: unchanged');
-  assert.equal(councilFor({}, 'review'), null);
-  const c = councilFor(config, 'review');
-  assert.deepEqual(c.members.map((m) => [m.name, m.blocking]), [['opus', true], ['sol', true], ['rewrite', false]]);
+// GEN-8: every verifier stage is a council with its own round limit and pass score, whatever its size.
+test('rounds and pass score: each stage\'s own (<section>.maxCouncilRounds, .councilPassScore), for one member or several', () => {
+  const config = { ...POOLED, architectureReview: { maxCouncilRounds: 4, councilPassScore: 9.5, councilMembers: 3 } };
+  assert.deepEqual([councilRounds(config, 'architectureReview'), councilFor(config, 'architectureReview').councilPassScore], [4, 9.5]);
+  assert.deepEqual(['pairVerify', 'pairUiVerify', 'architectureReview', 'testPlan', 'testAutomation', 'prCheck'].map((s) => [councilRounds({}, s), councilFor({}, s).councilPassScore]), [[3, 9.5], [3, 9.5], [5, 9.5], [5, 9], [5, 9], [3, 9.5]], 'the defaults');
+  const sole = councilFor({}, 'architectureReview');
+  assert.deepEqual([sole.sole, sole.members.length, sole.members[0].lens, sole.members[0].blocking, sole.intercom.enabled, sole.onUnavailable], [true, 1, 'all', true, false, 'fail'], 'no members: a council of one');
+  // Three seats from the pool: one entry per family first (opus, sol), then the next in pool order; every one blocks.
+  const c = councilFor(config, 'architectureReview');
+  assert.deepEqual(c.members.map((m) => [m.name, m.family, m.lens, m.blocking]), [['opus', 'Anthropic', 'correctness', true], ['sol', 'OpenAI', 'security', true], ['tests', 'Anthropic', 'rewrite', true]]);
 });
 
 test('effort maps to each CLI\'s own option; a custom member runs its own command', () => {
@@ -88,11 +89,11 @@ test('effort maps to each CLI\'s own option; a custom member runs its own comman
 });
 
 test('every member\'s prompt carries its lens, the council fields and the skill text; disputes go only to the members that raised them', () => {
-  const c = councilFor({ council: COUNCIL }, 'review');
+  const c = seatedCouncil(POOLED, 'architectureReview', [members[0], members[1], members[3]]);
   const t = memberTask('STAGE TASK', { council: c, member: c.members[1], round: 2 });
   assert.match(t, /^STAGE TASK\n\n## Council member/);
   assert.match(t, /You are \*\*sol\*\*; your lens is \*\*correctness\*\*/);
-  assert.match(t, /Council round 2 of at most 3/);
+  assert.match(t, /Council round 2 of at most 5/);
   // Every member, whatever its lens, checks the change for behaviour the ticket does not ask for (dogfood C14, BUG-46).
   assert.match(t, /Whatever your lens, check the change itself for scope: behaviour the ticket does not ask for \(a new limit[\s\S]*blocking finding with `lens` "acceptance"/);
   assert.match(t, /`delete-test`[\s\S]*`rewrite`/);
@@ -106,7 +107,7 @@ test('every member\'s prompt carries its lens, the council fields and the skill 
 // Merging
 // ---------------------------------------------------------------------------------------------
 
-const council3 = (over = {}) => ({ stage: 'review', rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail', members: [{ name: 'a', cli: 'claude', lens: 'correctness', blocking: true }, { name: 'b', cli: 'codex', lens: 'correctness', blocking: true }, { name: 'c', cli: 'copilot', lens: 'test-value', blocking: true }], ...over });
+const council3 = (over = {}) => ({ stage: 'review', maxCouncilRounds: 3, councilPassScore: 9, blockQuorum: 'any', onUnavailable: 'fail', members: [{ name: 'a', cli: 'claude', lens: 'correctness', blocking: true }, { name: 'b', cli: 'codex', lens: 'correctness', blocking: true }, { name: 'c', cli: 'copilot', lens: 'test-value', blocking: true }], ...over });
 const ok = (m, score, findings = [], extra = {}) => ({ member: m, status: 'ok', score, verdict: findings.some((f) => f.severity !== 'minor') ? 'CHANGES_REQUESTED' : 'APPROVED', summary: '', findings: findings.map((f) => normalizeFinding(f, m)), ...extra });
 const bug = { file: 'src/a.js', line: 10, issue: 'the owner check is missing', severity: 'blocking', evidence: 'a.js:10 returns every order' };
 
@@ -121,9 +122,9 @@ test('same-defect findings are merged once with every member\'s evidence and nam
   assert.equal(m.score, 6);
 });
 
-test('blockOn: any upholds one member\'s finding, majority needs most of the blocking members, all needs every one', () => {
-  const lone = (blockOn) => {
-    const c = council3({ blockOn });
+test('blockQuorum: any upholds one member\'s finding, majority needs most of the blocking members, all needs every one', () => {
+  const lone = (blockQuorum) => {
+    const c = council3({ blockQuorum });
     const [a, b, cc] = c.members;
     return mergeCouncil(c, [ok(a, 6, [bug]), ok(b, 9), ok(cc, 10)]);
   };
@@ -132,11 +133,11 @@ test('blockOn: any upholds one member\'s finding, majority needs most of the blo
   for (const rule of ['majority', 'all']) {
     const m = lone(rule);
     assert.equal(m.findings.length, 0, rule);
-    assert.match(m.notes[0].notUpheld, new RegExp(`blockOn "${rule}" needs ${rule === 'all' ? 3 : 2}`));
+    assert.match(m.notes[0].notUpheld, new RegExp(`blockQuorum "${rule}" needs ${rule === 'all' ? 3 : 2}`));
     assert.equal(m.pass, true, `${rule}: an outvoted member's low score does not hold the council`);
   }
-  const two = (blockOn) => {
-    const c = council3({ blockOn });
+  const two = (blockQuorum) => {
+    const c = council3({ blockQuorum });
     const [a, b, cc] = c.members;
     return mergeCouncil(c, [ok(a, 6, [bug]), ok(b, 7, [{ ...bug, line: 11 }]), ok(cc, 10)]);
   };
@@ -152,7 +153,7 @@ test('minor never blocks or lowers the pass decision; a low score with no blocki
   assert.equal(minor.notes.length, 1);
   const unexplained = mergeCouncil(c, [ok(a, 5, [], { summary: 'feels wrong' }), ok(b, 10), ok(cc, 9)]);
   assert.equal(unexplained.pass, false);
-  assert.match(unexplained.findings[0].text, /a scored 5\/10 \(below 9\) without a blocking finding/);
+  assert.match(unexplained.findings[0].text, /a scored 5\/10 \(the pass score is 9\) without a standing blocking finding/);
 });
 
 test('a non-blocking member is not waited for, its score is never recorded, and its late result comes back as feedback', async () => {
@@ -260,7 +261,7 @@ test('dispute rulings with several members: only the raisers rule, and one re-as
 // ---------------------------------------------------------------------------------------------
 
 test('the PR body gets the skill\'s "Council review" table with every sitting, regenerated in place; no score when a member gave none', () => {
-  const rec = (round, scores, ts) => ({ ts, stage: 'review', story: 'SHOP-1', round, members: [{ name: 'opus', cli: 'claude', blocking: true, score: scores[0] }, { name: 'sol', cli: 'codex', blocking: true, score: scores[1] }, { name: 'rw', cli: 'claude', blocking: false, score: null }] });
+  const rec = (round, scores, ts) => ({ ts, stage: 'architectureReview', story: 'SHOP-1', round, members: [{ name: 'opus', cli: 'claude', blocking: true, score: scores[0] }, { name: 'sol', cli: 'codex', blocking: true, score: scores[1] }, { name: 'rw', cli: 'claude', blocking: false, score: null }] });
   const records = [rec(1, [3, 3], '2026-01-01'), rec(1, [7, 8], '2026-01-02'), rec(2, [9, null], '2026-01-03')];
   const section = councilReviewSection(records);
   assert.equal(section, ['## Council review', '', 'Rounds: 3 (2 sittings)', '', '| Member | Sitting 1, round 1 | Sitting 2, round 1 | Sitting 2, round 2 |', '| --- | --- | --- | --- |', '| opus (claude) | 3/10 | 7/10 | 9/10 |', '| sol (codex) | 3/10 | 8/10 | no score |', '| Result | not passed | not passed | not passed |'].join('\n'));
@@ -282,14 +283,14 @@ test('the PR body gets the skill\'s "Council review" table with every sitting, r
   assert.match(auto, /\| sol \(codex\) \| 10\/10 \(test-value\) \| 8\/10 \(test-value\) \| 10\/10 \(test-value\) \| 10\/10 \(test-value\) \|/);
 });
 
-test('doctor checks every seated member: CLI installed, signed in, model resolving', () => {
-  const rows = councilDoctorRows({ council: COUNCIL, agent }, { probe: (cmd, args) => !(cmd === 'codex' && args[0] === 'login'), env: {}, home: '/nowhere', versionOf: () => 'codex-cli 0.167.1' });
+test('doctor lists every pool entry with its family and login check, and each stage\'s seats', () => {
+  const rows = councilDoctorRows({ ...POOLED, council: COUNCIL }, { probe: (cmd, args) => !(cmd === 'codex' && args[0] === 'login'), env: {}, home: '/nowhere', versionOf: () => 'codex-cli 0.167.1' });
   const get = (what) => rows.find((r) => r[0] === what);
-  assert.equal(get('council member opus (claude, opus): signed in')[1], true);
-  assert.equal(get('council member sol (codex, sol): signed in')[1], false);
-  assert.equal(get('council member tests (copilot, sonnet): signed in')[1], false, 'no Copilot token or config');
-  assert.match(get('council member sol (codex, sol): model resolves')[2], /sol -> gpt-6\.1-sol/);
-  assert.deepEqual(councilDoctorRows({ agent }), []);
+  assert.deepEqual(rows[0], ['council seats per stage', true, 'pairVerify 1, pairUiVerify 1, architectureReview 3, testPlan 1, testAutomation 1, prCheck 1']);
+  assert.equal(get('pool entry opus (claude, claude-opus-5-5, family Anthropic): signed in')[1], true);
+  assert.equal(get('pool entry sol (codex, gpt-6.1-sol, family OpenAI): signed in')[1], false, 'sol sits on the architecture review');
+  assert.equal(get('pool entry tests (copilot, claude-sonnet-5.5, family Anthropic): signed in')[1], false, 'no Copilot token or config');
+  assert.equal(get('pool entry rewrite (claude, claude-opus-5-5, family Anthropic): signed in')[1], true);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -312,7 +313,8 @@ function councilRepo(council) {
   git('config', 'user.name', 'T');
   fs.mkdirSync(path.join(dir, '.factory'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.gitignore'), '.factory/state/\n.factory/metrics/\n');
-  fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ agent: { modelIds: { codex: { sol: 'gpt-6.1-sol' } } }, review: { policy: { enabled: false } }, council }, null, 2));
+  const settings = councilSettings(council);
+  fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ ...settings, architectureReview: { policy: { enabled: false }, councilPassScore: 9, ...settings.architectureReview } }, null, 2));
   fs.mkdirSync(path.join(dir, 'src'));
   fs.writeFileSync(path.join(dir, 'src/orders.js'), 'export const list = () => [];\n');
   git('add', '-A');
@@ -327,7 +329,7 @@ const skipOnWindows = process.platform === 'win32' ? 'the fake CLIs are shell wr
 
 test('factory council review: three members on claude, codex and copilot run in parallel with their own model and effort, and the result merges', { skip: skipOnWindows }, () => {
   const bin = fakeClis();
-  const council = { passScore: 9, members: [{ name: 'opus', cli: 'claude', model: 'opus', effort: 'high', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', effort: 'max', lens: 'security', env: { CODEX_HOME: '~/.codex-second' } }, { name: 'tests', cli: 'copilot', model: 'sonnet', lens: 'test-value' }], stages: { review: {} } };
+  const council = { members: [{ name: 'opus', cli: 'claude', model: 'opus', effort: 'high', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', effort: 'max', lens: 'security', env: { CODEX_HOME: '~/.codex-second' } }, { name: 'tests', cli: 'copilot', model: 'sonnet', lens: 'test-value' }], stages: { architectureReview: {} } };
   const dir = councilRepo(council);
   const script = path.join(dir, '..', `${path.basename(dir)}-script.json`);
   const finding = { severity: 'blocking', file: 'src/orders.js', line: 1, issue: 'list returns every order to any caller', evidence: 'src/orders.js:1' };
@@ -338,11 +340,11 @@ test('factory council review: three members on claude, codex and copilot run in 
   }));
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_CLI_SCRIPT: script, FACTORY_METRICS_SPOOL: '0', FACTORY_METRICS_SHARD: '0' };
   for (const k of ['PIPELINE_AGENT_CMD', 'PIPELINE_AGENT_CLI', 'PIPELINE_CHILD', 'PIPELINE_ROOT', 'PIPELINE_MODEL_OVERRIDE']) delete env[k];
-  const r = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'review', '--stage', 'review', '--base', 'main', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
+  const r = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'review', '--stage', 'architectureReview', '--base', 'main', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
   assert.equal(r.status, 1, `not passed: ${r.stderr}`);
   const out = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
   assert.deepEqual(out.members.map((m) => [m.name, m.cli, m.status, m.score]), [['opus', 'claude', 'ok', 6], ['sol', 'codex', 'ok', 5], ['tests', 'copilot', 'ok', 9]]);
-  assert.equal(out.findings.length, 1);
+  assert.equal(out.findings.length, 1, JSON.stringify(out.findings.map((f) => [f.file, f.line, f.members, f.text])));
   assert.deepEqual(out.findings[0].members, ['opus', 'sol']);
   const calls = fs.readFileSync(`${script}.calls.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   const by = Object.fromEntries(calls.map((c) => [c.cli, c]));
@@ -359,20 +361,20 @@ test('factory council review: three members on claude, codex and copilot run in 
   for (const c of calls) assert.match(c.prompt, /## Council member[\s\S]*### The council skill/);
   assert.equal(by.claude.agent, 'architecture-reviewer');
   const recorded = fs.readFileSync(path.join(dir, '.factory/metrics/council-rounds.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.equal(recorded.at(-1).stage, 'review');
+  assert.equal(recorded.at(-1).stage, 'architectureReview');
   assert.deepEqual(recorded.at(-1).members.map((m) => [m.name, m.login]), [['opus', 'default'], ['sol', 'CODEX_HOME=~/.codex-second'], ['tests', 'default']], 'which login each member used, as configured');
   assert.equal(recorded.at(-1).pass, false);
 
   // `factory council check` validates the same configuration.
   const check = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'check'], { cwd: dir, env, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
-  assert.match(check.stdout, /Council configuration: OK\n- review: opus, sol, tests \(3 round\(s\), pass 9\/10, blockOn any, onUnavailable fail\)/);
+  assert.match(check.stdout, /Council configuration: OK\nPool: opus \(claude, claude-opus-5-5, Anthropic\); sol \(codex, gpt-6\.1-sol, OpenAI\); tests \(copilot, claude-sonnet-5\.5, Anthropic\)\n[\s\S]*- architectureReview \(3 seats\): opus \(opus, Anthropic, correctness\), sol \(sol, OpenAI, security\), tests \(tests, Anthropic, rewrite\) \(5 round\(s\), pass 9\/10, blockQuorum any, onUnavailable fail\)/);
 });
 
 test('factory council review: a member whose CLI is unavailable fails the round under fail and is reported under report', { skip: skipOnWindows }, () => {
   const bin = fakeClis();
   for (const onUnavailable of ['fail', 'report']) {
-    const council = { onUnavailable, members: [{ name: 'opus', cli: 'claude', model: 'opus', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness' }], stages: { review: {} } };
+    const council = { onUnavailable, members: [{ name: 'opus', cli: 'claude', model: 'opus', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness' }], stages: { architectureReview: {} } };
     const dir = councilRepo(council);
     const script = path.join(dir, '..', `${path.basename(dir)}-script.json`);
     fs.writeFileSync(script, JSON.stringify({ opus: [{ verdict: 'APPROVED', score: 10, findings: [] }], sol: [{ exit: 1, text: 'Claude AI usage limit reached|1700000000', stderr: 'usage limit reached' }] }));
@@ -444,7 +446,7 @@ test('a detached member (council-member.mjs) that finishes after its round leave
   try {
     const member = { name: 'slow', cli: 'claude', model: 'opus', lens: 'rewrite', blocking: false };
     const lateDir = path.join(dir, '.factory/state/council/review-X-1');
-    const pending = runDetachedMember({ root: dir, stageDir: 'review', dir: lateDir, round: 1, member, run: { name: 'architecture-reviewer', mode: 'read', task: 'review', model: 'opus' } });
+    const pending = runDetachedMember({ root: dir, stageDir: 'review', dir: lateDir, round: 1, member, run: { name: 'architecture-reviewer', mode: 'read', task: 'review' } });
     // The round ends without it; its process keeps running and writes its result.
     const parse = (o) => {
       const r = JSON.parse(o.slice(o.indexOf('{')));
@@ -457,7 +459,7 @@ test('a detached member (council-member.mjs) that finishes after its round leave
     assert.equal(late.length, 1);
     assert.equal(late[0].findings[0].text, 'one function would do');
     assert.deepEqual(takeLate(lateDir, 2, [member], parse), [], 'consumed once');
-    const merged = mergeCouncil(councilFor({ council: { members: [{ name: 'a', cli: 'claude', model: 'opus', lens: 'correctness' }, member], stages: { review: {} } } }, 'review'), [{ member: { name: 'a', cli: 'claude', lens: 'correctness', blocking: true }, status: 'ok', score: 10, verdict: 'APPROVED', findings: [] }], { feedback: late });
+    const merged = mergeCouncil(seatedCouncil(poolSettings([{ name: 'a', cli: 'claude', model: 'opus' }, member]), 'architectureReview', [{ name: 'a', cli: 'claude', model: 'opus', lens: 'correctness' }, member]), [{ member: { name: 'a', cli: 'claude', lens: 'correctness', blocking: true }, status: 'ok', score: 10, verdict: 'APPROVED', findings: [] }], { feedback: late });
     assert.equal(merged.pass, true);
     assert.equal(merged.notes[0].feedback, true);
   } finally {
@@ -471,7 +473,7 @@ test('prompt versions: without a council the acting agents\' definitions carry n
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'council-prompts-')));
   spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
   const plain = loadConfig('implement', dir);
-  const withCouncil = { ...plain, council: { members, stages: { pairVerify: {}, review: {}, testAutomation: {}, prCheck: {} } } };
+  const withCouncil = { ...plain, ...councilSettings({ members, stages: { pairVerify: {}, architectureReview: {}, testAutomation: {}, prCheck: {} } }) };
   for (const name of ['implementer', 'pair-implementer', 'pr-check-fixer', 'test-automation']) {
     const def = agentDefinition(plain, name);
     assert.doesNotMatch(def.body, /Council findings|DELETE TEST|council/i, `${name}'s definition has no council text`);
@@ -484,57 +486,44 @@ test('prompt versions: without a council the acting agents\' definitions carry n
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('a member\'s env: CLI settings such as a login home, expanded per run; never a literal secret; the harness\'s variables are off limits', () => {
-  const ok = { ...COUNCIL, members: [...members, { name: 'sol2', cli: 'codex', model: 'sol', lens: 'correctness', env: { CODEX_HOME: '~/.codex-personal', OPENAI_API_KEY: '${MY_KEY}' } }] };
-  assert.deepEqual(councilProblems(ok, agent), []);
-  const bad = (env) => councilProblems({ ...COUNCIL, members: [...members, { name: 'x', cli: 'codex', model: 'sol', lens: 'correctness', env }] }, agent).join('\n');
-  assert.match(bad({ OPENAI_API_KEY: 'sk-live-abcdefghijk' }), /env\.OPENAI_API_KEY looks like a secret: put the value in the environment and write "\$\{OPENAI_API_KEY\}" here/);
-  assert.match(bad({ GH_TOKEN: 'abc' }), /env\.GH_TOKEN looks like a secret/);
-  assert.match(bad({ SOMETHING: 'ghp_abcdefghijklmnopq' }), /env\.SOMETHING holds what looks like a credential/);
-  assert.match(bad({ PIPELINE_ROOT: '/x' }), /env\.PIPELINE_ROOT is the harness's own variable/);
-  assert.match(bad({ CODEX_HOME: 3 }), /env\.CODEX_HOME must be a string/);
-  assert.match(bad('~/.codex'), /env must be an object/);
+test('a pool entry\'s env: CLI settings such as a login home, expanded per run; never a literal secret; the harness\'s variables are off limits', () => {
+  const pool = poolSettings(members).models.pool;
+  const withEnv = (env) => poolProblems({ models: { pool: [...pool, { name: 'x', cli: 'codex', model: 'gpt-6.1-sol', effort: 'high', env }], agents: { default: 'opus' } } }).join('\n');
+  assert.equal(withEnv({ CODEX_HOME: '~/.codex-personal', OPENAI_API_KEY: '${MY_KEY}' }), '');
+  // Key-shaped strings are built from parts, so no file holds one.
+  assert.match(withEnv({ OPENAI_API_KEY: ['sk', 'live', 'abcdefghijk'].join('-') }), /env\.OPENAI_API_KEY looks like a secret: put the value in the environment and write "\$\{OPENAI_API_KEY\}" here/);
+  assert.match(withEnv({ GH_TOKEN: 'abc' }), /env\.GH_TOKEN looks like a secret/);
+  assert.match(withEnv({ SOMETHING: ['ghp', 'abcdefghijklmnopq'].join('_') }), /env\.SOMETHING holds what looks like a credential/);
+  assert.match(withEnv({ PIPELINE_ROOT: '/x' }), /env\.PIPELINE_ROOT is the harness's own variable/);
+  assert.match(withEnv({ CODEX_HOME: 3 }), /env\.CODEX_HOME must be a string/);
+  assert.match(withEnv('~/.codex'), /env must be an object/);
   assert.deepEqual(envProblems({ CLAUDE_CONFIG_DIR: '${HOME}/.claude-second' }, 'e'), []);
 
   assert.deepEqual(agentEnv({ CODEX_HOME: '~/.codex-personal', KEY: '${MY_KEY}', DIR: '${BASE}/x' }, { MY_KEY: 's3cret', BASE: '/b' }, '/home/me'), { CODEX_HOME: '/home/me/.codex-personal', KEY: 's3cret', DIR: '/b/x' });
   assert.throws(() => agentEnv({ KEY: '${UNSET_VAR_X}' }, {}), /env\.KEY needs the environment variable UNSET_VAR_X, which is not set/);
   assert.equal(memberLogin({ env: { CODEX_HOME: '~/.codex-personal', OPENAI_API_KEY: '${MY_KEY}' } }), 'CODEX_HOME=~/.codex-personal', 'the home as configured; nothing else, never a value read from the environment');
   assert.equal(memberLogin({}), 'default');
-  assert.deepEqual(memberRunEnv({ name: 'sol', env: { CODEX_HOME: '/h' } }), { PIPELINE_COUNCIL_MEMBER: 'sol', PIPELINE_COUNCIL_LOGIN: 'CODEX_HOME=/h', CODEX_HOME: '/h' });
+  assert.deepEqual(memberRunEnv({ name: 'sol', env: { CODEX_HOME: '/h' } }), { PIPELINE_COUNCIL_MEMBER: 'sol', PIPELINE_COUNCIL_LOGIN: 'CODEX_HOME=/h' }, 'the entry\'s env itself comes with its pool entry');
 });
 
-test('doctor and council check probe each member with its own env (a second login home)', () => {
-  const council = { members: [{ name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness', env: { CODEX_HOME: '~/.codex-personal' } }], stages: { review: {} } };
+test('doctor and council check probe each pool entry with its own env (a second login home)', () => {
+  const config = poolSettings([{ name: 'sol', cli: 'codex', model: 'sol', env: { CODEX_HOME: '~/.codex-personal' } }]);
   const seen = [];
-  const rows = councilDoctorRows({ council, agent }, { probe: (cmd, args, env) => (seen.push([cmd, args.join(' '), env.CODEX_HOME]), !(args[0] === 'login' && env.CODEX_HOME !== path.join(os.homedir(), '.codex-personal'))), env: { CODEX_HOME: '/default/home' }, versionOf: () => 'codex-cli 0.167.1' });
+  const rows = councilDoctorRows(config, { probe: (cmd, args, env) => (seen.push([cmd, args.join(' '), env.CODEX_HOME]), !(args[0] === 'login' && env.CODEX_HOME !== path.join(os.homedir(), '.codex-personal'))), env: { CODEX_HOME: '/default/home' }, versionOf: () => 'codex-cli 0.167.1' });
   assert.deepEqual(seen.find((s) => s[1] === 'login status'), ['codex', 'login status', path.join(os.homedir(), '.codex-personal')]);
-  assert.deepEqual(rows.map((r) => [r[0], r[1]]), [
-    ['council member sol (codex, sol, CODEX_HOME=~/.codex-personal): CLI installed', true],
-    ['council member sol (codex, sol, CODEX_HOME=~/.codex-personal): CLI version runs the factory guard', true],
-    ['council member sol (codex, sol, CODEX_HOME=~/.codex-personal): signed in', true],
-    ['council member sol (codex, sol, CODEX_HOME=~/.codex-personal): model resolves', true],
+  assert.deepEqual(rows.slice(1).map((r) => [r[0], r[1]]), [
+    ['pool entry sol (codex, gpt-6.1-sol, family OpenAI, CODEX_HOME=~/.codex-personal): CLI installed', true],
+    ['pool entry sol (codex, gpt-6.1-sol, family OpenAI, CODEX_HOME=~/.codex-personal): CLI version runs the factory guard', true],
+    ['pool entry sol (codex, gpt-6.1-sol, family OpenAI, CODEX_HOME=~/.codex-personal): signed in', true],
   ]);
-});
-
-test('an implement role may carry env beside its cli, under the same rules', () => {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'council-role-env-')));
-  spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
-  fs.mkdirSync(path.join(dir, '.factory'));
-  fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ implement: { roles: { verifier: { cli: 'codex', env: { CODEX_HOME: '~/.codex-personal' } } } } }));
-  assert.equal(loadConfig('implement', dir).implement.roles.verifier.env.CODEX_HOME, '~/.codex-personal');
-  const dir2 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'council-role-env-')));
-  spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir2 });
-  fs.mkdirSync(path.join(dir2, '.factory'));
-  fs.writeFileSync(path.join(dir2, '.factory/config.json'), JSON.stringify({ implement: { roles: { verifier: { cli: 'codex', env: { OPENAI_API_KEY: 'sk-abcdefghijklmnop' } } } } }));
-  assert.throws(() => loadConfig('implement', dir2), /implement\.roles\.verifier\.env\.OPENAI_API_KEY looks like a secret/);
 });
 
 // The council's builder left it open: doctor did not check the Codex version, and a codex older than 0.167.1 runs a
 // member without the factory's inline guard.
 test('doctor checks that a Codex member\'s CLI is new enough to run the factory guard', async () => {
   const { versionAtLeast } = await import('../lib/council.mjs');
-  const council = { members: [{ name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness' }], stages: { review: {} } };
-  const row = (v) => councilDoctorRows({ council, agent }, { probe: () => true, env: {}, versionOf: () => v }).find((r) => /CLI version/.test(r[0]));
+  const config = poolSettings([{ name: 'sol', cli: 'codex', model: 'sol' }]);
+  const row = (v) => councilDoctorRows(config, { probe: () => true, env: {}, versionOf: () => v }).find((r) => /CLI version/.test(r[0]));
   assert.equal(row('codex-cli 0.167.1')[1], true);
   assert.equal(row('codex-cli 0.170.0')[1], true);
   assert.equal(row('codex-cli 0.166.9')[1], false);
@@ -643,4 +632,94 @@ test('evidence or nothing: a finding with no file and line, command output or sc
   fs.writeFileSync(path.join(dir, 'artifacts/sol/page.png'), 'png');
   assert.equal(mergeCouncil(c, [ok(a, 10), ok(b, 4, [{ ...noise, screenshot: 'artifacts/sol/page.png' }]), ok(cc, 10)], { root: dir }).pass, false);
   assert.equal(mergeCouncil(c, [ok(a, 10), ok(b, 4, [{ ...noise, screenshot: null, evidence: '`dotnet test` exits 1: OrderTests.Pays failed (expected 200, got 500)' }]), ok(cc, 10)], { root: dir }).pass, false);
+});
+
+// Council r1 (sol-11): a detached non-blocking member never keeps the stage's process alive (the review's Stop hook).
+test('a detached member nobody waits for does not hold the stage process open (the review passes hold: false without a discussion)', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'council-detached-')));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const council = new URL('../lib/council.mjs', import.meta.url).href;
+  const script = `import { runDetachedMember } from ${JSON.stringify(council)};
+runDetachedMember({ root: ${JSON.stringify(dir)}, stageDir: 'review', dir: ${JSON.stringify(dir)}, round: 1, member: { name: 'shadow' }, run: { timeoutSec: 600 }, pollMs: 20, spawnImpl: () => {}, hold: false }).then(() => console.log('resolved'));
+console.log('round over');`;
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'round over', 'the process ended with the member still running');
+  assert.ok(Date.now() - t0 < 10_000);
+});
+
+// Council r1 (sol-16): a non-blocking member on time, with another defect on the same line, took over the blocking
+// members' finding (its text, and credit for raising it). Proximity alone never makes a feedback finding the same.
+test('a non-blocking member\'s different defect on the same line stays feedback; the blocking finding keeps its text and raisers', () => {
+  const m = (name, blocking, lens) => ({ name, cli: 'claude', lens, blocking });
+  const c = { stage: 'prCheck', maxCouncilRounds: 6, councilPassScore: 9.5, blockQuorum: 'any', onUnavailable: 'fail', members: [m('slow', false, 'rewrite'), m('opus', true, 'correctness'), m('sol', true, 'security')] };
+  const [slow, opus, sol] = c.members;
+  const expired = { severity: 'blocking', title: 'Expired coupon is accepted', detail: 'AC 2 says 400', file: 'src/Basket/Coupons.cs', line: 1, resolves: 'code' };
+  const one = (member, score, findings) => ({ member, status: 'ok', score, verdict: 'CHANGES_REQUESTED', summary: '', findings: findings.map((f) => normalizeFinding(f, member)) });
+  const helper = { severity: 'major', title: 'The coupon helper could be one function', file: 'src/Basket/Coupons.cs', line: 1, resolves: 'code' };
+  const merged = mergeCouncil(c, [one(slow, 3, [helper]), one(opus, 5, [expired]), one(sol, 6, [{ ...expired, title: 'Expired coupons pass the check' }])]);
+  assert.deepEqual(merged.findings.map((f) => [f.text, f.members]), [['Expired coupon is accepted', ['opus', 'sol']]]);
+  assert.deepEqual(merged.notes.map((f) => [f.text, f.members]), [['The coupon helper could be one function', ['slow']]]);
+  // The same defect in similar words does join, and the blocking member's text leads.
+  const same = mergeCouncil(c, [one(slow, 3, [{ ...expired, title: 'An expired coupon is accepted' }]), one(opus, 5, [expired])]);
+  assert.deepEqual(same.findings.map((f) => [f.text, f.members]), [['Expired coupon is accepted', ['opus', 'slow']]]);
+});
+
+// Council r4 (A4): a member with no time limit of its own runs under the stage's verifier time limit (as documented
+// for models.pool[].timeoutSec), never a time written in the council command.
+test('factory council review: a member with no time limit of its own is stopped at the stage\'s verifier time limit', { skip: skipOnWindows }, () => {
+  const bin = fakeClis();
+  const council = { members: [{ name: 'opus', cli: 'claude', model: 'opus', effort: 'high', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', effort: 'high', lens: 'security' }], stages: { architectureReview: {} } };
+  const dir = councilRepo(council);
+  const file = path.join(dir, '.factory/config.json');
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, JSON.stringify({ ...settings, architectureReview: { ...settings.architectureReview, timeoutSec: 2 } }, null, 2));
+  const script = path.join(dir, '..', `${path.basename(dir)}-script.json`);
+  fs.writeFileSync(script, JSON.stringify({ opus: [{ verdict: 'APPROVED', score: 10, findings: [] }], sol: [{ delayMs: 15000, verdict: 'APPROVED', score: 10, findings: [] }] }));
+  const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_CLI_SCRIPT: script, FACTORY_METRICS_SPOOL: '0', FACTORY_METRICS_SHARD: '0', PIPELINE_CEILING_FACTOR: '1' };
+  for (const k of ['PIPELINE_AGENT_CMD', 'PIPELINE_AGENT_CLI', 'PIPELINE_CHILD', 'PIPELINE_ROOT', 'PIPELINE_MODEL_OVERRIDE']) delete env[k];
+  const r = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'review', '--stage', 'architectureReview', '--base', 'main', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
+  const out = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
+  assert.deepEqual(out.members.map((m) => [m.name, m.status === 'ok']), [['opus', true], ['sol', false]], r.stderr.slice(-1500));
+});
+
+// Council r5 (sol-31): every stage the documented by-hand examples name runs on default settings (the docs named a
+// `review` stage that does not exist, and the default one-seat PR check had no critic for its member's lens `all`).
+test('every documented `factory council review --stage` example runs on default settings', { skip: skipOnWindows }, () => {
+  const doc = fs.readFileSync(path.join(INSTALL, 'docs/ai-pipeline/council.md'), 'utf8');
+  const block = doc.slice(doc.indexOf('## By hand'));
+  const stages = [...new Set([...block.slice(0, block.indexOf('```', block.indexOf('```bash') + 7)).matchAll(/factory council review --stage (\S+)/g)].map((m) => m[1]))];
+  assert.ok(stages.length >= 2, stages.join(', '));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'council-byhand-')));
+  const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@example.com');
+  git('config', 'user.name', 'T');
+  fs.mkdirSync(path.join(dir, '.factory'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.factory/state/\n.factory/metrics/\n');
+  fs.writeFileSync(path.join(dir, '.factory/config.json'), '{}\n');
+  fs.writeFileSync(path.join(dir, 'a.js'), 'x\n');
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  git('checkout', '-qb', 'feat/x');
+  fs.writeFileSync(path.join(dir, 'a.js'), 'y\n');
+  git('commit', '-qam', 'change');
+  const script = path.join(dir, '..', `${path.basename(dir)}-byhand.json`);
+  const ok = { result: { verdict: 'APPROVED', score: 10, summary: 'ok', coverage: [], findings: [] } };
+  fs.writeFileSync(script, JSON.stringify({ 'architecture-reviewer': [ok], 'pr-check-acceptance': [ok], 'pair-verifier': [ok], 'test-plan-verifier': [ok], 'test-automation-verifier': [ok] }));
+  const env = { ...process.env, PIPELINE_AGENT_CMD: `"${process.execPath}" "${path.join(here, 'fixtures', 'fake-agent.mjs')}"`, PIPELINE_FAKE_SCRIPT: script, FACTORY_METRICS_SPOOL: '0', FACTORY_METRICS_SHARD: '0' };
+  for (const k of ['PIPELINE_AGENT_CLI', 'PIPELINE_CHILD', 'PIPELINE_ROOT', 'PIPELINE_MODEL_OVERRIDE']) delete env[k];
+  try {
+    for (const stage of stages) {
+      const r = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'review', '--stage', stage, '--base', 'main', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
+      assert.ok([0, 1].includes(r.status), `${stage}: exit ${r.status}\n${r.stderr.slice(-800)}`);
+      const out = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
+      assert.ok(out.members.length && out.members.every((m) => m.status === 'ok'), `${stage}: ${JSON.stringify(out.members)}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(script, { force: true });
+    for (const suffix of ['.calls.json', '.prompts.log']) fs.rmSync(script + suffix, { force: true });
+  }
 });

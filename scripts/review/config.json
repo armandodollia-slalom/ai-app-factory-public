@@ -1,19 +1,29 @@
 {
-  "agent": {
-    "models": {
-      "reviewer": null
-    }
-  },
-  "review": {
-    "maxRounds": 5,
+  "architectureReview": {
+    "maxCouncilRounds": 5,
+    "councilPassScore": 9.5,
+    "councilMembers": null,
+    "orchestrator": {
+      "model": null,
+      "effort": null
+    },
     "timeoutSec": 1200,
-    "codeAgents": ["implementer"],
     "policy": {
       "enabled": true,
       "agent": "architecture-policy/agents/arch_review.py",
       "dir": ".factory/policy",
-      "command": ["python", "{agent}", "review", "-"],
-      "lessonsCommand": ["python", "{agent}", "get_lessons", "-"],
+      "command": [
+        "python",
+        "{agent}",
+        "review",
+        "-"
+      ],
+      "lessonsCommand": [
+        "python",
+        "{agent}",
+        "get_lessons",
+        "-"
+      ],
       "categories": {
         "security": "security",
         "data": "data",
@@ -28,6 +38,10 @@
       "requester": "implementer",
       "semantic": "auto",
       "timeoutSec": 600
-    }
+    },
+    "conventions": [
+      "AGENTS.md",
+      "CONTRIBUTING.md"
+    ]
   }
 }

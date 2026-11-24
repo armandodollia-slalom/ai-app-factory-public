@@ -1,52 +1,98 @@
 {
   "prCheck": {
-    "maxRounds": 6,
-    "debateTurns": 2,
+    "maxCouncilRounds": 3,
+    "councilPassScore": 9.5,
+    "councilMembers": null,
+    "orchestrator": {
+      "model": null,
+      "effort": null
+    },
     "timeoutSec": 1800,
     "fixTimeoutSec": 3600,
     "maxDiffChars": 400000,
     "hook": {
       "enabled": true,
       "requireTests": true,
-      "waitForTestsMin": 1440,
       "pollSec": 20,
-      "maxRuns": 3,
-      "codeAgents": ["implementer"]
+      "waitForTestsSec": 86400
     },
-    "exclude": [".factory/state", ".factory/metrics", "graphify-out"],
-    "frontendPaths": null,
-    "conventions": ["AGENTS.md", "CONTRIBUTING.md", ".editorconfig", ".markdownlint.json", ".factory/agents/implementer.md"],
+    "exclude": [
+      ".factory/state",
+      ".factory/metrics",
+      "graphify-out"
+    ],
+    "conventions": [
+      "AGENTS.md",
+      "CONTRIBUTING.md",
+      ".editorconfig",
+      ".markdownlint.json",
+      ".factory/agents/implementer.md"
+    ],
     "video": {
-      "extensions": [".webm", ".mp4", ".mov", ".mkv"],
-      "defaultDirs": ["artifacts/e2e-videos", "test-results"],
+      "extensions": [
+        ".webm",
+        ".mp4",
+        ".mov",
+        ".mkv"
+      ],
+      "defaultDirs": [
+        "artifacts/e2e-videos",
+        "test-results"
+      ],
       "maxFrames": 48,
       "maxTotalFrames": 60,
       "minFramesPerVideo": 6,
       "minIntervalSec": 1,
-      "width": 1280
+      "width": 1280,
+      "framesPerStep": 1
     },
-    "models": {
-      "claude": {
-        "judge": "opus",
-        "acceptance": "opus",
-        "flow": "opus",
-        "design": "opus",
-        "video": "opus",
-        "style": "sonnet",
-        "defender": "opus",
-        "fixer": "opus"
-      },
-      "copilot": {
-        "judge": "claude-opus-5.5",
-        "acceptance": "claude-opus-5.5",
-        "flow": "claude-opus-5.5",
-        "design": "claude-opus-5.5",
-        "video": "claude-opus-5.5",
-        "style": "claude-sonnet-5.5",
-        "defender": "claude-sonnet-5.5",
-        "fixer": "claude-opus-5.5"
-      },
-      "codex": {}
-    }
+    "infraPaths": [
+      "(^|\\/)[^/]*(Fixture|Collection|TestBase|TestSetup|WebApplicationFactory)[^/]*\\.(cs|ts|js|mjs|py|java|kt)$",
+      "(^|\\/)(xunit\\.runner\\.json|[^/]*\\.runsettings|conftest\\.py|pytest\\.ini|global-setup\\.[jt]s|global-teardown\\.[jt]s)$",
+      "(^|\\/)(playwright|jest|vitest|karma|cypress)[^/]*\\.config\\.[cm]?[jt]s$",
+      "(^|\\/)[^/]*\\.(csproj|fsproj|sln|slnx|props|targets)$",
+      "(^|\\/)(Directory\\.Build\\.[^/]+|Directory\\.Packages\\.props|global\\.json|nuget\\.config|NuGet\\.Config|package\\.json|package-lock\\.json|pnpm-lock\\.yaml|yarn\\.lock|requirements[^/]*\\.txt|pyproject\\.toml|go\\.mod|pom\\.xml|build\\.gradle(\\.kts)?)$",
+      "(^|\\/)(Dockerfile[^/]*|docker-compose[^/]*\\.ya?ml|compose[^/]*\\.ya?ml)$",
+      "^\\.github\\/workflows\\/[^/]+\\.ya?ml$",
+      "(^|\\/)(\\.gitlab-ci\\.yml|azure-pipelines[^/]*\\.ya?ml|Jenkinsfile)$"
+    ],
+    "returnToImplementation": {
+      "maxReturns": 2,
+      "minSeverity": "major",
+      "implementationLenses": [
+        "acceptance",
+        "flow",
+        "design",
+        "correctness",
+        "security",
+        "ui",
+        "rewrite"
+      ],
+      "lightLenses": [
+        "video",
+        "style",
+        "test-value"
+      ],
+      "lightPaths": [
+        "tests/**",
+        "test/**",
+        "e2e/**",
+        "**/*.spec.*",
+        "**/*.test.*",
+        "**/*Tests/**",
+        "**/*.Tests/**",
+        "**/*.md",
+        "docs/**",
+        ".factory/plans/**",
+        ".factory/stack/scenarios/**",
+        ".factory/metrics/**"
+      ],
+      "enabled": true
+    },
+    "maxDebateTurns": 2,
+    "fixMinSeverity": "major",
+    "bugFixMinSeverity": "minor",
+    "mode": "fix",
+    "fixLenses": []
   }
 }

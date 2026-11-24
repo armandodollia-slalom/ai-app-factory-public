@@ -5,6 +5,7 @@
 // in a scenario, pushed for the CI proof, CI red): the fold of the story's own branch with no PR, pushed with a lease,
 // and CI's job green on the result; escalation where the table says so.
 import assert from 'node:assert/strict';
+import { ciFixBudget } from '../../implement/lib/ci-wait.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -91,7 +92,7 @@ function setup(branch = 'feat/hint-1') {
   fs.writeFileSync(scan, SCANNER);
   const leaks = { licence: 'MIT', run: [process.execPath, scan, 'git', '{out}', '{range}'], worktreeRun: [process.execPath, scan, 'dir', '{out}', '{files}'], output: '{out}', parse: 'sarif', scope: 'repo', baseline: 'native', lens: 'security', block: { rules: ['*'] }, okExit: [0], env: { FAKE_ALLOW: 'factoryfake' } };
   const analysis = { tools: { leaks }, stages: { story: ['leaks'] }, ci: { jobs: [{ id: 'secrets', name: 'Secret scan', tools: ['leaks'] }] } };
-  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'origin/main', project: { languages: [] }, precheck: {}, analysis, implement: {} };
+  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'origin/main', project: { languages: [] }, featureVerification: { precheck: {} }, analysis, implement: {} };
   git('init', '-q', '-b', 'main');
   git('remote', 'add', 'origin', origin);
   write(root, '.gitignore', '.factory/state/\n');
@@ -184,6 +185,7 @@ function hint1(prOpen, { file = SCENARIO } = {}) {
   const tree = s.git('rev-parse', `${fixed}^{tree}`);
   let leases = 0;
   const r = remedyRedBranch(s.config, {
+    budget: ciFixBudget({ ci: { maxFixRounds: 2 } }, {}, {}),
     worktree: s.root,
     branch: 'feat/hint-1',
     base: 'origin/main',
@@ -248,7 +250,7 @@ test('pre-mortem: a job that cannot run here does not hold the push; a non-analy
   const { analysisGateSection } = await import('../../implement/lib/analysis-gate.mjs');
   assert.match(analysisGateSection(g), /could not run here, CI decides: dependencies/);
   // A red Playwright run: the analysis jobs pass here, nothing to do, recorded as agreement on the analysis jobs.
-  const r = await remedyRedBranch(s.config, { worktree: s.root, branch: 'feat/premortem', base: 'origin/main', ci: { failing: ['workflow AI app factory'] }, prOpen: false, keys: ['X-1'], jobs: () => [{ check: 'factory-analysis Secret scan', job: 'secrets', ok: true, findings: [] }], fix: () => assert.fail('no fixing round'), push: () => assert.fail('no push'), pushLease: () => assert.fail('no push'), credentials: [] });
+  const r = await remedyRedBranch(s.config, { worktree: s.root, branch: 'feat/premortem', base: 'origin/main', ci: { failing: ['workflow AI app factory'] }, prOpen: false, keys: ['X-1'], jobs: () => [{ check: 'factory-analysis Secret scan', job: 'secrets', ok: true, findings: [] }], fix: () => assert.fail('no fixing round'), push: () => assert.fail('no push'), pushLease: () => assert.fail('no push'), credentials: [], budget: ciFixBudget({ ci: { maxFixRounds: 2 } }, {}, {}) });
   assert.equal(r.retried, false);
   assert.match(r.reason, /not an analysis job/);
   // The lease is refused (someone pushed meanwhile): the fold is undone locally, nothing half-done.
@@ -260,7 +262,7 @@ test('pre-mortem: a job that cannot run here does not hold the push; a non-analy
     t.git('push', '-q', 'origin', 'feat/hint-1');
     return { s: t, fixed: f };
   })();
-  const refused = await remedyRedBranch(h.config, { worktree: h.root, branch: 'feat/hint-1', base: 'origin/main', ci: { failing: ['workflow factory-analysis'] }, prOpen: false, keys: ['HINT-1'], jobs: runAnalysisJobs, fix: () => assert.fail('history only'), push: () => assert.fail('no plain push'), pushLease: () => ({ pushed: false, reason: 'stale info' }), credentials: [] });
+  const refused = await remedyRedBranch(h.config, { worktree: h.root, branch: 'feat/hint-1', base: 'origin/main', ci: { failing: ['workflow factory-analysis'] }, prOpen: false, keys: ['HINT-1'], jobs: runAnalysisJobs, fix: () => assert.fail('history only'), push: () => assert.fail('no plain push'), pushLease: () => ({ pushed: false, reason: 'stale info' }), credentials: [], budget: ciFixBudget({ ci: { maxFixRounds: 2 } }, {}, {}) });
   assert.equal(refused.retried, false);
   assert.match(refused.reason, /could not be pushed: stale info/);
   assert.equal(h.git('rev-parse', 'HEAD'), fixed, 'the branch is back where the remote has it');

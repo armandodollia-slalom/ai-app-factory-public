@@ -4,6 +4,7 @@
 // everything else itself (severity.mjs, confidence.mjs).
 import { extractResult } from '../../pipeline/lib/util.mjs';
 import { normalizeLevel } from './levels.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 export const TRIAGE_AGENT = 'bug-triage';
 export const FIELDS = ['impact', 'complexity', 'fixRisk'];
@@ -61,13 +62,12 @@ export function parseTriage(raw, keys) {
 // { ratings: Map, errors, usage }. Tickets that are still invalid are left out of `ratings`.
 export function runTriage(config, input, { runAgent, log = () => {} }) {
   const keys = input.tickets.map((t) => t.key);
-  const settings = config.implement?.reviewGate ?? {};
   let task = triageTask(input);
   let last = { tickets: new Map(), errors: ['not run'] };
   for (let attempt = 1; attempt <= 2; attempt++) {
     let res;
     try {
-      res = runAgent(config, { name: TRIAGE_AGENT, task, mode: 'read', model: config.agent?.models?.bugTriage ?? null, timeoutSec: settings.timeoutSec ?? 900, cwd: input.cwd ?? config.root, usage: { stage: 'bug-triage', story: keys[0] ?? null, step: input.pr ?? null } });
+      res = runAgent(config, { name: TRIAGE_AGENT, task, mode: 'read', timeoutSec: setting(config, 'implement.reviewGate.timeoutSec'), cwd: input.cwd ?? config.root, usage: { stage: 'bug-triage', story: keys[0] ?? null, step: input.pr ?? null } });
     } catch (error) {
       log(`triage agent not run: ${error.message.split('\n')[0]}`);
       return { ratings: new Map(), errors: [error.message.split('\n')[0]] };

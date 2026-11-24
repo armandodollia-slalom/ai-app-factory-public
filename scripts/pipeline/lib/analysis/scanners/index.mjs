@@ -2,7 +2,7 @@
 // the client's CI, and the review gate reads its result for the pull request's head. The scanner's check on the host
 // joins the expected evidence of every head, so an asynchronous result never lets a merge through early:
 //   - the check not registered on the head yet, or still running      -> pending
-//   - no result within analysis.commercial.timeoutMin of first asking -> failure (fail closed, said why)
+//   - no result within analysis.commercial.timeoutSec of first asking -> failure (fail closed, said why)
 //   - the check red, the vendor's own gate failed, or a finding the severity map rates blocking and nobody triaged in
 //     the vendor's system                                              -> failure
 //   - a read that fails                                                -> unknown (never green)
@@ -22,6 +22,7 @@ import { createGithubCodeScanning } from './github-code-scanning.mjs';
 import { createSemgrep } from './semgrep.mjs';
 import { createSonarqube } from './sonarqube.mjs';
 import { createCustomAdapter } from '../../providers/custom.mjs';
+import { setting } from '../../settings.mjs';
 
 // A client's own scanner in server mode: analysis.tools.<id>.commercial.server = { adapter: "custom", command, env,
 // timeoutSec } runs the scanner contract's operations (result, checkName) through the custom adapter protocol
@@ -50,7 +51,7 @@ export function scannersFor(config, deps = {}) {
     const create = SCANNER_ADAPTERS[c.server?.adapter ?? 'check-only'] ?? createCheckOnly;
     const raw = config.analysis?.commercial;
     const own = (Array.isArray(raw) ? raw : [raw]).find((x) => x?.scanner === e.scanner) ?? {};
-    const s = { scanner: e.scanner, vendor: c.vendor, check: e.check ?? c.check ?? null, token: e.token, url: e.url ?? c.server?.url ?? null, project: e.project, deployment: own.deployment ?? null, refTemplate: own.refTemplate ?? null, toolName: own.toolName ?? null, repo: config.host?.repo ?? config.board?.repo ?? deps.repo ?? null, timeoutMin: e.timeoutMin, server: c.server ?? null, root: config.root ?? null };
+    const s = { scanner: e.scanner, vendor: c.vendor, check: e.check ?? c.check ?? null, token: e.token, url: e.url ?? c.server?.url ?? null, project: e.project, deployment: own.deployment ?? null, refTemplate: own.refTemplate ?? null, toolName: own.toolName ?? null, repo: config.host?.repo ?? config.board?.repo ?? deps.repo ?? null, timeoutSec: e.timeoutSec, server: c.server ?? null, root: config.root ?? null };
     const adapter = create(s, deps);
     out.push(Object.assign(adapter, { id: e.scanner, settings: s, tool: def ?? { severity: null }, blocked: e.blocked ?? null }));
   }
@@ -72,7 +73,7 @@ const matchesCheck = (name, want) => {
 
 // When the gate first asked for a scanner's result of a head (kept under the state dir), for the timeout.
 function firstAsked(config, id, head, now) {
-  const dir = path.join(config?.mainRoot ?? config?.root ?? '.', config?.stateDir ?? '.factory/state', 'scanners');
+  const dir = path.join(config?.mainRoot ?? config?.root ?? '.', setting(config, 'stateDir'), 'scanners');
   const file = path.join(dir, `${id}-${head}.json`);
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')).since;
@@ -96,10 +97,10 @@ export function scannerEvidence(scanner, { head, pr = null, branch = null, check
   // A result that is not bound to a commit needs the vendor's check on the head; without one nothing proves the result
   // is of this head, and the gate never calls it green.
   if (!check && !scanner.capabilities?.shaBound) return out('unknown', `${scanner.id}: its result is not bound to a commit and no check name is configured (analysis.commercial.check)`);
-  const timeoutMin = scanner.settings?.timeoutMin ?? 60;
+  const timeoutSec = scanner.settings?.timeoutSec;
   const pending = (why) => {
     const since = firstAsked(config, scanner.id, head, now);
-    if (now - since > timeoutMin * 60_000) return out('failure', `${scanner.id}: no result for ${String(head).slice(0, 7)} within ${timeoutMin} min (${why})`);
+    if (now - since > timeoutSec * 1000) return out('failure', `${scanner.id}: no result for ${String(head).slice(0, 7)} within ${timeoutSec} s (${why})`);
     return out('pending', `${scanner.id}: ${why}`);
   };
   if (check) {

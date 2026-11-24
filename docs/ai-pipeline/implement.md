@@ -58,13 +58,13 @@ flowchart TD
 3. **Plan.** The `implementer` agent, as **orchestrator**, plans the ticket in read mode: `self` (it implements the
    ticket itself) or `delegate` (up to `maxSubtasks` subtasks, each owning a set of files). The harness checks
    the plan ([Plan](#plan)); an invalid plan goes back once, then the ticket ends `plan-rejected`.
-4. **Verifier pairs.** Each subtask gets its own worktree and branch. Up to `maxPairRounds` times: the
+4. **Verifier pairs.** Each subtask gets its own worktree and branch. Up to `implement.maxCouncilRounds` times: the
    `pair-implementer` implements and commits; the harness checks that only owned files changed, runs language
    server diagnostics, the repository's `implement.checks` and the unit tests of the affected services, and the
    [static analysis fix loop](#static-analysis-in-the-pair-rounds); then a fresh, read-only `pair-verifier` (or
    `pair-ui-verifier` for UI subtasks, [UI verification](#ui-verification)) returns `APPROVED` or
    `CHANGES_REQUESTED` with findings tied to file and line. Language server errors in changed files block approval
-   whatever the verdict. With `council.stages.pairVerify` or `pairUiVerify`, a [council](council.md) sits instead.
+   whatever the verdict. With `implement.councilMembers` (or `council.members`) above one, a [council](council.md) of that many sits instead.
 5. **Escalation.** A pair that uses its rounds or reports blocked goes back to the orchestrator, which rewrites
    the subtask (a fresh pair runs it once), takes it over (at most `maxTakeovers`) or gives up. A second failure
    ends the ticket `pair-exhausted`.
@@ -73,7 +73,7 @@ flowchart TD
    then integrates: build, unit tests, Implementation Notes.
 7. **Review, tests, PR check.** The runner calls `factory done`: the [architecture review](review.md) loops with
    the orchestrator until approved, [feature verification](feature-verification.md) writes and verifies the test
-   plan and the automated tests (a product bug goes back to the orchestrator, up to `maxBugFixCycles` times), and
+   plan and the automated tests (a product bug goes back to the orchestrator, up to `implement.maxBugFixReturns` times), and
    the [PR check](pr-check.md) holds the change to its ticket. The PR check sends production findings back
    through the whole stack and test gaps to feature verification
    ([routing](pr-check.md#findings-about-the-production-change-go-back-to-implementation)).
@@ -85,8 +85,9 @@ In Progress on a product bug or a PR check return, Pending Review when the PR op
 ([board.md](board.md)). Every ticket that stops carries its outcome, reason and findings to its card
 ([escalations.md](escalations.md#outcomes)).
 
-`IMPLEMENT_ORCHESTRATE=0` (or `implement.orchestrate: false`) runs one implementer agent per ticket instead of
-the orchestrator and pairs, followed by the same review, tests and delivery.
+The orchestrator always leads ([orchestrators](orchestrators.md)): a ticket small enough for one pass it implements
+itself (`self` mode, still checked by the pair verifier council), anything larger it plans into subtasks for pairs. Its
+pool entry and effort are `implement.orchestrator.model` and `.effort`, else `orchestrator.model` and `.effort`.
 
 ## The PR opens finished
 
@@ -106,18 +107,20 @@ A pipeline pull request opens once, when no agent stage has work left on it. Bef
    (`needs-decision`), a PR check that did not complete ends `pr-check-incomplete`, and an epic unit's fix-mode
    check that ended escalated ends `pr-check-escalated`. The branch stays pushed; no PR opens.
 6. **CI proven on the branch.** Every pipeline a push of the branch runs must complete green on this exact SHA (a
-   skipped run is not a pass). A red or retry-only head gets one CI fixing round when `implement.ciFixRounds` is
-   positive (default 1; `0` means none). Still red: an outcome `ci-red`, `ci-flaky`, `ci-conflict`,
+   skipped run is not a pass). A red or retry-only head gets one CI fixing round while `implement.ci.maxFixRounds`
+   has one left (default 2; `0` means none). That count is one for the ticket (or epic group): the parity and
+   analysis-job fixes before the push and the PR, the branch rounds and the rounds after the open all come off it,
+   and each round is recorded in the run record (`ciFixSpent`) when its fixer starts, so a resumed run never gets more. Still red: an outcome `ci-red`, `ci-flaky`, `ci-conflict`,
    `ci-unverified` or `ci-escalated`, the findings on the ticket, no PR. If the base moved meanwhile it is merged
    in and the new head is proven again. A CI system without branch pipelines (capability `branchPipelines`)
    cannot prove the head first: the PR opens as a draft and is marked ready when its own checks are green. The
    draft is confirmed by re-reading the PR; if it cannot be, the work-in-progress label is added as well, and
    both are released once the checks are green. If neither hold is confirmed, the PR counts as ready from the open.
-   With `implement.ciWait: false` nothing is proven or waited for, and the body says so.
+   With `implement.ci.wait.enabled: false` nothing is proven or waited for, and the body says so.
 7. **Bug rating.** For a bug fix, the [review gate](review-gate.md#assessment) runs the `bug-triage` agent and
    saves its assessment: the gate's only model call. If the gate is on and produces no assessment, no new PR
    opens: the outcome is `gate-assessment-failed` and the branch stays pushed (CI-proven, unless the proof was
-   bypassed: draft-first or `ciWait: false`). A delivery whose PR never opened replays from the analysis jobs
+   bypassed: draft-first or `implement.ci.wait.enabled: false`). A delivery whose PR never opened replays from the analysis jobs
    and the push on the next run; a re-delivery leaves its open PR on hold and runs again on hold. With the gate
    off (`implement.reviewGate.enabled: false`, `REVIEW_GATE=0`), nothing is rated or published.
 8. **Evidence.** The delivered head's static analysis report is written, and with the `demoVideo` feature the
@@ -148,14 +151,14 @@ moved and CI broke):
   is not sent again). Not confirmed: the run stops with `hold-failed` before any fixing round, and no agent runs.
   The PR may already be in draft or labelled, so check it;
 - a CI fixing round (`pr-check-fixer`) works on the branch while the PR is on hold; still red with cycles left,
-  another round runs on the same hold. After `implement.preOpen.draftCycles` (1) cycles it stays on hold and a
-  person decides;
+  another round runs on the same hold. Once `implement.ci.maxFixRounds` (2, counted with the rounds before the
+  open) is spent it stays on hold and a person decides;
 - the PR is marked ready again only when every expected check is green on its head, and the release is confirmed
   the same way. Not confirmed: the run ends `release-unconfirmed` and records no ready time. Every hold still
-  recorded is released this way, also on a resume or a re-delivery and with `ciWait: false`.
+  recorded is released this way, also on a resume or a re-delivery and with `implement.ci.wait.enabled: false`.
 
-No hold is made, and a person decides, when `ciFixRounds` is `0` or the checks are not plainly red or flaky (a
-merge conflict, evidence that cannot be verified).
+No hold is made, and a person decides, when `implement.ci.maxFixRounds` is spent (it counts the rounds before the
+open too) or the checks are not plainly red or flaky (a merge conflict, evidence that cannot be verified).
 
 Then the [review gate](review-gate.md) decides a bug fix's merge, and the board and notices follow. A person who
 sends a bug fix back (reopens it, or requests changes) re-runs it: the open PR is held, and the hold confirmed,
@@ -294,9 +297,9 @@ flowchart TD
    Review naming the branch. A failed ticket's dependents are skipped; independent tickets keep going.
 4. **Journeys.** When every ticket of the unit merged, the journeys become a ticket `EPIC-<n>` that feature
    verification plans and automates like a story (`implement.epic.featureVerification: false` skips it).
-5. **PR check.** One run over every ticket and the journeys against the unit's diff; `implement.epic.prCheck`
+5. **PR check.** One run over every ticket and the journeys against the unit's diff; `prCheck.mode`
    is `fix` (default), `report` or `off`. A fix-mode check that ends escalated, or still upholds findings at
-   `fixUntil` or worse, ends the unit `pr-check-escalated`: no PR, the branch pushed, the findings on the tickets.
+   `prCheck.fixMinSeverity` or worse, ends the unit `pr-check-escalated`: no PR, the branch pushed, the findings on the tickets.
 6. **Delivery.** The unit goes through the same delivery as a single ticket and opens one PR with every ticket's
    outcome and `Closes #N` for each; the epic's evidence comment lists it (`board epic-pr`).
 
@@ -319,8 +322,8 @@ The harness picks the shape before the plan is written, in this order (`scripts/
 | --- | --- | --- | --- |
 | one PR | `epic/<slug>` | none | no (a feature PR) |
 | `--pr-split story` | `feat/<slug>--<story>` | the harness, one group per story | no |
-| `--pr-split groups` | `feat/<slug>--<group>` | the orchestrator, at most `implement.epic.maxStoriesPerGroup` per group | no |
-| bug groups | `bugfix/<slug>/<group>` | the orchestrator, at most `implement.maxBugsPerGroup` per group | yes, each group PR |
+| `--pr-split groups` | `feat/<slug>--<group>` | the orchestrator, at most `implement.epic.maxTicketsPerGroup` per group | no |
+| bug groups | `bugfix/<slug>/<group>` | the orchestrator, at most `implement.epic.maxTicketsPerGroup` per group | yes, each group PR |
 
 `--pr-split story` and `groups`, and epics with several groups, are proven by fixture tests only
 ([proof](../../README.md#what-has-been-proven)).
@@ -351,9 +354,8 @@ The grouping and every group's outcome are recorded ([decision log](implement-re
     "goal": "...", "acceptance": ["..."],
     "owns": ["services/orders-api/**"],                // globs: * in a segment, ** across, bare path = subtree
     "dependsOn": [],
-    "modelClass": "small" | "medium" | "large", "modelReason": "...",
-    "model": "<optional allowed alias, e.g. sol on Copilot>",
-    "justification": "...",                             // required for large
+    "model": "sonnet", "modelReason": "...",            // the pool entry its pair implementer runs on (implement.subtaskModels)
+    "justification": "...",                             // optional
     "verify": "code" | "ui", "verifyReason": "...",
     "scenario": "<optional: an existing test stack scenario for ui>",
     "expectedFiles": 3, "expectedLoc": 120, "confidence": 0.8,
@@ -364,7 +366,7 @@ The grouping and every group's outcome are recorded ([decision log](implement-re
 
 The harness enforces (`scripts/implement/lib/plan.mjs`): the schema; at most `maxSubtasks` subtasks (otherwise
 "split the story"); no two subtasks owning the same file, no `owns` covering the whole repository; `dependsOn`
-without cycles; at most `maxLargeSubtasks` large subtasks, each justified; `verify: "ui"` only for **UI stories**
+without cycles; each subtask names a pool entry from `implement.subtaskModels`; `verify: "ui"` only for **UI stories**
 (the story has mockups, a title tag from `implement.uiStory.titleTags`, a frontend component in its title, or
 names a frontend file); and `self` mode with at most one subtask entry. Reasons and expectations feed the
 [decision log](implement-reference.md#decision-log) and never reach a verifier.
@@ -419,7 +421,7 @@ filing them as tickets is not automatic.
 
 With an `analysis` section ([analysis.md](analysis.md)), after each pair-implementer run and before the verifier,
 the harness applies the tools' auto-fix, runs the `pair` slot's tools on what the subtask touched, and hands
-provable findings back to the implementer for up to `analysis.fixLoop.bounces` (2) extra runs. A bounce is not a
+provable findings back to the implementer for up to `analysis.maxFixRounds` (2) extra runs. A bounce is not a
 pair round, but it is an agent run counted against `maxAgentRunsPerStory`. What stays open reaches the verifier as
 harness findings, outside the council's votes; blocking ones send the round back. After the pairs, the `story`
 slot runs once on the whole ticket with the same budget.
@@ -437,7 +439,7 @@ and disk again and waits while they are short ([disk.md](disk.md)). An explicit 
 ## Language servers
 
 The harness reaches the language servers ([code intelligence](../code-intelligence.md)) through
-`scripts/implement/lib/lsp.mjs`. With `implement.lsp.enabled: false`, or a server missing, every call answers "no
+`scripts/implement/lib/lsp.mjs`. With `lsp.client.enabled: false`, or a server missing, every call answers "no
 information" and the run carries on. A daemon starts per worktree (a subtask's scoped to its `owns`) and stops
 before the worktree is removed. Diagnostics run on the changed files after every pair round, merge and
 orchestrator run; errors block approval. Agents get the `lsp` MCP server (read-only tools for verifiers). A pair

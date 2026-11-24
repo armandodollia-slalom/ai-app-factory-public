@@ -17,9 +17,10 @@ import { APP_FILE, appSettingsProblems, OVERLAY_FILE } from './config.mjs';
 import { manifestDirs, readProfile } from './policy-topology.mjs';
 import { touchedPaths } from './story-guard.mjs';
 import { resolveAnalysis } from './analysis/config.mjs';
+import { defaultSettings } from './settings.mjs';
 
-export const PROTECTED_DEFAULT = ['.factory/config.json', '.factory/factory.json', '.factory/manifest.json', '.factory/bin', '.factory/agents', '.factory/lessons', '.factory/policy', '.factory/githooks'];
-export const WRITERS_DEFAULT = ['retro'];
+export const PROTECTED_DEFAULT = defaultSettings().factoryGuard.protected;
+export const WRITERS_DEFAULT = defaultSettings().factoryGuard.writers;
 const WRITE_TOOL = /^(edit|write|multiedit|notebookedit|apply_patch|write_file|replace|create_file|str_replace_editor)$/i;
 const SHELL_TOOL = /^(bash|shell|run_shell_command|execute_command|run_in_terminal|terminal|exec|local_shell|powershell)$/i;
 
@@ -484,7 +485,8 @@ export function factoryGuard(config, payload, env = process.env) {
     if (vendor) return `Factory guard: this command changes a finding's state in ${vendor} (accept, ignore, dismiss, false positive or severity). Only a person triages findings in the scanner's own system. Fix the finding, or suppress it inline with a justification the reviewers see, or report it in your result for a person to decide.`;
   }
   if (!WRITE_TOOL.test(payload.tool_name ?? '') && !shell) return null;
-  const agent = env.PIPELINE_AGENT_NAME ?? '';
+  // The work the run does (PIPELINE_AGENT_WORK): the orchestrator doing an agent's work writes what that agent may.
+  const agent = env.PIPELINE_AGENT_WORK || env.PIPELINE_AGENT_NAME || '';
   if ((settings.writers ?? WRITERS_DEFAULT).includes(agent)) return null;
   const protectedPaths = protectedList(config);
   const fold = caseInsensitive(config.root) ? (p) => p.toLowerCase() : (p) => p;

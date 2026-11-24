@@ -131,3 +131,32 @@ test('commitRecords commits the pipeline records, and only them; openStoryPr com
   });
   assert.equal(order[0], 'commit');
 });
+
+// Council r5 (A4, live path): the records are the repository's own metrics folder (metricsDir), not '.factory/metrics'.
+test('commitRecords commits the records of a custom metricsDir', async () => {
+  const { commitRecords } = await import('../lib/gitops.mjs');
+  const dir = repo();
+  write(dir, '.factory/config.json', `${JSON.stringify({ metricsDir: '.records' })}\n`);
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'config');
+  write(dir, '.records/pr-checks.jsonl', '{"round":1}\n');
+  write(dir, 'src.cs', 'not a record');
+  assert.equal(commitRecords(dir, 'records'), true);
+  assert.deepEqual(git(dir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['.records/pr-checks.jsonl']);
+});
+
+// Council r5 (A4, live path): the policy classes come from the repository's policy folder (architectureReview.policy.dir,
+// ARCH_POLICY_DIR over it), not '.factory/policy'.
+test('the PR\'s derived classes read the repository\'s configured policy folder', async () => {
+  const { derivedClassesSection } = await import('../../pipeline/lib/policy-classes.mjs');
+  const dir = repo();
+  write(dir, '.factory/config.json', `${JSON.stringify({ architectureReview: { policy: { dir: 'arch/policy' } } })}\n`);
+  write(dir, 'arch/policy/policy.yaml', 'version: 1\n');
+  write(dir, 'other/policy.yaml', 'version: 1\n');
+  const seen = [];
+  const runner = (cmd, args) => (seen.push(args[args.indexOf('--policy-dir') + 1]), { status: 0, stdout: '## New projects and their classes' });
+  const python = () => ({ cmd: 'python3' });
+  assert.equal(derivedClassesSection(dir, 'main', { runner, python, env: {} }), '## New projects and their classes');
+  assert.equal(derivedClassesSection(dir, 'main', { runner, python, env: { ARCH_POLICY_DIR: 'other' } }), '## New projects and their classes');
+  assert.deepEqual(seen, ['arch/policy', 'other']);
+});

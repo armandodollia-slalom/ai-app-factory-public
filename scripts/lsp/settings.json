@@ -1,0 +1,18 @@
+{
+  "$comment": "What every setting in the `lsp` section does, its type and allowed values; defaults are in config.json beside this file (the section itself). See scripts/pipeline/lib/settings.mjs.",
+  "lsp.maxLanguageServers": { "does": "The most heavy (leased) code-intelligence servers running at once on the machine.", "type": "integer", "min": 0, "env": "LSP_MAX_SERVERS" },
+  "lsp.idleSec": { "does": "How long the language server daemon may sit unused before it stops.", "type": "integer", "min": 1, "unit": "seconds", "env": "LSP_IDLE_SEC" },
+  "lsp.callTimeoutSec": { "does": "How long one language server call may take.", "type": "integer", "min": 1, "unit": "seconds" },
+  "lsp.diagnosticsTimeoutSec": { "does": "How long the diagnostics of one file may take.", "type": "integer", "min": 1, "unit": "seconds" },
+  "lsp.loadTimeoutSec": { "does": "How long a server that reports its own state may stay loading before calls go through anyway.", "type": "integer", "min": 1, "unit": "seconds" },
+  "lsp.prepareTimeoutSec": { "does": "How long a leased server's `prepare` command may take.", "type": "integer", "min": 1, "unit": "seconds" },
+  "lsp.check": { "does": "Probes `factory lsp check` runs: `[server, file, line, column]`.", "type": "list", "items": "any", "allowed": "`[server, file, line?, column?]` lists" },
+  "lsp.servers": { "does": "The language servers, merged with the engine's and the packs' by `id` ([code intelligence](code-intelligence.md)).", "type": "list", "items": "object" },
+  "lsp.client.enabled": { "does": "Starts code-intelligence servers for implementation runs.", "type": "boolean", "readBy": "scripts/implement/lib/lsp.mjs" },
+  "lsp.client.setupCmd": { "does": "The command that prepares the language servers.", "type": "command", "readBy": "scripts/implement/lib/lsp.mjs" },
+  "lsp.client.lspdCmd": { "does": "The command of the language server daemon.", "type": "command", "readBy": "scripts/implement/lib/lsp.mjs" },
+  "lsp.client.timeoutSec": { "does": "How long preparing the language servers may take.", "type": "integer", "min": 1, "unit": "seconds", "readBy": "scripts/implement/lib/lsp.mjs" },
+  "lsp.client.leaseWaitSec": { "does": "How long a run waits for a free language server slot.", "type": "integer", "min": 0, "unit": "seconds", "readBy": "scripts/implement/lib/lsp.mjs" },
+  "lsp.client.leaseWaitPollSec": { "does": "How often a run waiting for a language server slot asks again.", "type": "integer", "min": 1, "unit": "seconds", "readBy": "scripts/implement/lib/lsp.mjs" },
+  "lsp.client.signaturePattern": { "does": "A pattern of the lines a signature change is recognised by, for the references check.", "type": "string", "defaultText": "the common declaration styles", "readBy": "scripts/implement/lib/lsp.mjs" }
+}

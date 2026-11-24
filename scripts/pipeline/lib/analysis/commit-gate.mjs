@@ -20,12 +20,14 @@ import { classify } from './baseline.mjs';
 import { recordPrefixes, uncommittedInScope } from './runner.mjs';
 import { isSecretTool } from './secrets.mjs';
 import { settleSecretFindings } from './decide.mjs';
+import { setting } from '../settings.mjs';
+import { repoSettings } from '../config.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 export const HELD_FILE = 'analysis-held.json';
 export const HELD_METRICS = 'analysis-held.jsonl';
 
-const heldPath = (cwd, stateDir = '.factory/state') => path.join(cwd, stateDir, HELD_FILE);
+const heldPath = (cwd, stateDir) => path.join(cwd, stateDir, HELD_FILE);
 const short = (f) => ({ tool: f.tool, rule: f.rule, file: f.file, line: f.line ?? null, id: f.id });
 
 function overlayHasAnalysis(cwd) {
@@ -85,7 +87,8 @@ export async function scanStaged(cwd, { files, runTool = null, mergeBase = null,
 
 // Runs the gate on what is staged in `cwd`; unstages the files holding a new secret. Never throws: a gate that cannot
 // run says so in `error` and lets the commit through (the story's scans still read the change).
-export function gateStaged(cwd, { message = '', spawn = spawnSync, stateDir = '.factory/state', metricsDir = '.factory/metrics', log = null } = {}) {
+// The state and metrics folders are the repository's own (stateDir, metricsDir), as heldSecrets reads them (council r5, A4).
+export function gateStaged(cwd, { message = '', spawn = spawnSync, stateDir = setting(repoSettings(cwd), 'stateDir'), metricsDir = setting(repoSettings(cwd), 'metricsDir'), log = null } = {}) {
   const none = { held: [], notes: [], error: null };
   if (process.env.FACTORY_COMMIT_GATE === '0' || !overlayHasAnalysis(cwd)) return none;
   const files = stagedFiles(cwd, stateDir, metricsDir);
@@ -127,7 +130,7 @@ export function gateStaged(cwd, { message = '', spawn = spawnSync, stateDir = '.
 export function heldSecrets(config, cwd) {
   let held;
   try {
-    held = JSON.parse(fs.readFileSync(heldPath(cwd, config?.stateDir ?? '.factory/state'), 'utf8')).held ?? [];
+    held = JSON.parse(fs.readFileSync(heldPath(cwd, setting(config, 'stateDir')), 'utf8')).held ?? [];
   } catch {
     return [];
   }

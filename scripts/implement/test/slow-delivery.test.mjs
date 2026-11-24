@@ -1,7 +1,7 @@
 // The delivery path with every agent 10 times slower (PIPELINE_AGENT_SLOW=10) ends exactly as it does at normal speed
 // (council C12, D-C12-2: slow agents must make a run slower, never change its outcome). `implement run --pr` runs with
 // the Stop hook's PR check on, scripted fake agents, a local origin and a fake gh. The PR check's usual budget
-// (implement.prCheckWaitSec) is 1 second, far shorter than the check takes: the old fixed wait opened the PR with
+// (implement.waitSec.prCheck) is 1 second, far shorter than the check takes: the old fixed wait opened the PR with
 // "PR check: running" (BUG-41); now the run follows the check to its end and the PR states its verdict.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -36,7 +36,7 @@ const rows = [{ ref: 'Rule: a valid coupon gives 10% off', status: 'met', eviden
 const clean = (lens) => ({ result: { lens, score: 10, summary: 'ok', coverage: lens === 'acceptance' ? rows : [], findings: [], sideEffects: lens === 'flow' ? ['Coupons are now applied before tax'] : [] } });
 const SCRIPT = {
   implementer: [{ writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'coupon applied' } }],
-  'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+  'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
   'test-planner': [{ writePlan: [{ title: 'Valid coupon applies', type: 'happy' }, { title: 'Expired coupon rejected', type: 'sad' }] }],
   'test-plan-verifier': [{ result: { score: 10, summary: 'ok', gaps: [] } }],
   'test-automation': [{ writeTests: [1, 2], result: { status: 'done' } }],
@@ -59,12 +59,17 @@ function setup(name) {
   for (const dir of ['scripts/pipeline', 'scripts/review', 'scripts/feature-verification', 'scripts/implement', 'scripts/pr-check', 'scripts/board', 'scripts/models', 'scripts/pr-video', 'scripts/review-gate', 'scripts/retro', 'scripts/factory', 'scripts/stack', 'scripts/teststack'].filter((d) => fs.existsSync(path.join(source, d)))) {
     fs.cpSync(path.join(source, dir), path.join(repo, dir), { recursive: true, filter: (p) => !p.startsWith(path.join(source, dir, 'test')) });
   }
+  // Every section's defaults and descriptions: a stage reads the others' (scripts/pipeline/lib/settings.mjs).
+  for (const d of fs.readdirSync(path.join(source, 'scripts'))) for (const f of ['config.json', 'settings.json']) if (fs.existsSync(path.join(source, 'scripts', d, f)) && !fs.existsSync(path.join(repo, 'scripts', d, f))) {
+    fs.mkdirSync(path.join(repo, 'scripts', d), { recursive: true });
+    fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
+  }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
-  editJson(path.join(repo, 'scripts/feature-verification/config.json'), (j) => (j.precheck.runTests = false));
+  editJson(path.join(repo, 'scripts/feature-verification/config.json'), (j) => (j.featureVerification.precheck.runTests = false));
   // As an installed repository has it: the tests are not the implementation the review and the PR check hash.
   editJson(path.join(repo, 'scripts/pipeline/config.json'), (j) => (j.implExclude = ['.factory', 'graphify-out', 'e2e']));
   editJson(path.join(repo, 'scripts/implement/config.json'), (j) => {
-    Object.assign(j.implement, { fvPollSec: 0.2, parallel: 1, orchestrate: false, ciParity: false, prCheckWaitSec: 1 });
+    Object.assign(j.implement, { pollSec: { featureVerification: 0.2 }, maxParallel: 1, ci: { ...j.implement.ci, parity: { enabled: false } }, waitSec: { ...j.implement.waitSec, prCheck: 1 } });
   });
   editJson(path.join(repo, 'scripts/pr-check/config.json'), (j) => {
     Object.assign(j.prCheck.hook, { enabled: true, pollSec: 0.2 });

@@ -13,6 +13,7 @@ import { loadConfig } from '../../pipeline/lib/config.mjs';
 import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { readReport } from '../../pipeline/lib/analysis/report.mjs';
 import { createContext, orchestrate } from '../lib/orchestrate.mjs';
+import { councilSettings } from '../../pipeline/test/fixtures/pool.mjs';
 
 const sh = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -25,7 +26,7 @@ const write = (root, rel, text) => {
 };
 const result = (o) => `Working...\nAGENT_RESULT: ${JSON.stringify(o)}\n`;
 const done = (extra = {}) => result({ status: 'done', reason: 'ok', ...extra });
-const sub = (id, owns) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], modelClass: 'medium', verify: 'code', modelReason: 'normal', verifyReason: 'code', expectedFiles: 1, expectedLoc: 5, confidence: 0.9, alternatives: [] });
+const sub = (id, owns) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], model: 'opus', verify: 'code', modelReason: 'normal', verifyReason: 'code', expectedFiles: 1, expectedLoc: 5, confidence: 0.9, alternatives: [] });
 const plan = (subtasks) => result({ mode: 'delegate', modeReason: 'several services', splitReason: 'per service', subtasks });
 const verdict = (score, findings = []) => result({ verdict: findings.some((f) => f.severity !== 'minor') ? 'CHANGES_REQUESTED' : 'APPROVED', summary: 's', score, findings });
 
@@ -66,10 +67,12 @@ function makeConfig(env, { council = undefined, bounces = 2, block = ['BAD-RULE'
   const base = loadConfig('implement', env.repo);
   return {
     ...base,
-    agent: { ...base.agent, cmd: null, cli: 'claude', models: { default: null, implementer: null }, modelIds: { ...base.agent.modelIds, codex: { sol: 'gpt-6.1-sol' } } },
-    implement: { ...base.implement, checks: [], unitTests: null, prepareCmd: null, lsp: { enabled: false } },
-    ...(council ? { council } : {}),
-    ...(analysis ? { analysis: { tools: { fake: { licence: 'MIT', run: [process.execPath, env.tool, '{files}'], fix: [process.execPath, env.tool, '--fix', '{files}'], parse: 'sarif', scope: 'changed-lines', block: { rules: block }, lens: 'security', extensions: ['.cs'] } }, stages: { pair: ['fake'] }, fixLoop: { bounces } } } : {}),
+    agent: { ...base.agent, cmd: null },
+    // A council's members are the pool; the pair verifier council seats them all (councilSettings).
+    ...(council ? councilSettings(council) : {}),
+    implement: { ...base.implement, checks: [], unitTests: null, prepareCmd: null, lsp: { enabled: false }, ...(council ? councilSettings(council).implement : {}) },
+    ...(council ? { council: { ...base.council, ...councilSettings(council).council } } : {}),
+    ...(analysis ? { analysis: { tools: { fake: { licence: 'MIT', run: [process.execPath, env.tool, '{files}'], fix: [process.execPath, env.tool, '--fix', '{files}'], parse: 'sarif', scope: 'changed-lines', block: { rules: block }, lens: 'security', extensions: ['.cs'] } }, stages: { pair: ['fake'] }, maxFixRounds: bounces } } : {}),
   };
 }
 
@@ -99,7 +102,7 @@ test('a tool finding goes back to the implementer in a fix bounce that does not 
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [writeIn(API, 'ok\nBAD\n// FIXME\n'), writeIn(API, 'ok\nfine\n')],
-    'pair-verifier': [async (o) => (assert.match(o.task, /### Static analysis \(harness/), assert.match(o.task, /Fixed before this review: 1/), verdict(9))],
+    'pair-verifier': [async (o) => (assert.match(o.task, /### Static analysis \(harness/), assert.match(o.task, /Fixed before this review: 1/), verdict(10))],
   });
   const ctx = context(env, makeConfig(env), agents);
   const r = await orchestrate(ctx);
@@ -124,7 +127,7 @@ test('after the fix budget a blocking tool finding reaches the round as a source
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [writeIn(API, 'BAD\nMEH\n'), writeIn(API, 'BAD\nMEH\n'), writeIn(API, 'good\nMEH\n')],
-    'pair-verifier': [async () => verdict(9), async () => verdict(9)],
+    'pair-verifier': [async () => verdict(10), async () => verdict(10)],
   });
   const ctx = context(env, makeConfig(env, { bounces: 1 }), agents);
   const r = await orchestrate(ctx);
@@ -147,7 +150,7 @@ test('after the fix budget a blocking tool finding reaches the round as a source
 
 test('with a council: a blocking tool finding stands although every member approves, and the implementer cannot dispute it', async () => {
   const env = makeRepo();
-  const council = { members: [{ name: 'opus', cli: 'claude', model: 'opus', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', lens: 'security' }], stages: { pairVerify: {} }, blockOn: 'all' };
+  const council = { members: [{ name: 'opus', cli: 'claude', model: 'opus', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', lens: 'security' }], stages: { pairVerify: {} }, blockQuorum: 'all' };
   let toolId = null;
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
@@ -196,7 +199,7 @@ test('without an analysis section nothing runs: no report, no metrics, the pair 
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [writeIn(API, 'BAD\n')],
-    'pair-verifier': [async (o) => (assert.doesNotMatch(o.task, /Static analysis/), verdict(9))],
+    'pair-verifier': [async (o) => (assert.doesNotMatch(o.task, /Static analysis/), verdict(10))],
   });
   const ctx = context(env, makeConfig(env, { analysis: false }), agents);
   const r = await orchestrate(ctx);

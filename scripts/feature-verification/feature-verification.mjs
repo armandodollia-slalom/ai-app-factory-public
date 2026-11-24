@@ -14,6 +14,7 @@ import { addRequired } from './lib/required.mjs';
 import { computeMetrics, formatMetrics } from './lib/metrics.mjs';
 import { automationFiles, automationStatus, planStatus, tidyPlan } from './lib/plans.mjs';
 import { automationLoop, formatRecovery, hookStop, planLoop, precheckAutomation, recoverAll, requireCases, sessionContext, spawnFv } from './lib/workflows.mjs';
+import { fvEnabled } from './lib/enabled.mjs';
 
 setLogTag('feature-verification');
 
@@ -52,7 +53,7 @@ const parseArgs = (argv) => parse(argv, VALUE_FLAGS);
 function storyForKey(config, key, reader) {
   const ticket = loadTicket(config, key);
   if (ticket) return ['story', 'bug'].includes(ticket.type) ? ticket : null;
-  const dir = reader.list(config.plansDir).find((d) => d === key || d.startsWith(`${key}-`));
+  const dir = reader.list(config.featureVerification.plansDir).find((d) => d === key || d.startsWith(`${key}-`));
   return dir ? storyOf(config, { key, type: 'story', slug: dir }) : null;
 }
 
@@ -76,7 +77,7 @@ function touchedStories(config, paths, reader, texts = []) {
 // Every story with a plan at `reader`'s revision, plus every cached story.
 function allStories(config, reader) {
   const keys = new Set(listStories(config).map((s) => s.key));
-  for (const dir of reader.list(config.plansDir)) {
+  for (const dir of reader.list(config.featureVerification.plansDir)) {
     const key = /^([A-Z][A-Z0-9]*-\d+)(?:-|$)/.exec(dir)?.[1];
     if (key) keys.add(key);
   }
@@ -102,7 +103,7 @@ function checkStories(config, stories, reader, { allowMissing = false } = {}) {
 // Plans and tests for every story touched by the pushed commits must be verified and current. Stories with
 // no plan yet pass: nothing starts work on a new story until someone runs `fv plan` or `implement run`.
 function prePush(config, input) {
-  if (process.env.FV_SKIP === '1') return 0;
+  if (!fvEnabled(config)) return 0;
   let failed = 0;
   for (const line of input.split('\n').filter(Boolean)) {
     const [localRef, localSha, , remoteSha] = line.split(' ');
@@ -124,7 +125,6 @@ async function main() {
     return 0;
   }
   const config = loadConfig('feature-verification');
-  if (process.env.FV_REQUIRED_SCORE) config.loops.requiredScore = Number(process.env.FV_REQUIRED_SCORE);
 
   switch (command) {
     case 'plan': {
@@ -279,7 +279,7 @@ async function main() {
       const payload = await readPayload();
       const story = activeStory(config);
       if (event === 'stop') {
-        const output = story ? hookStop(config, story, payload) : null;
+        const output = story && fvEnabled(config) ? hookStop(config, story, payload) : null;
         if (output) process.stdout.write(JSON.stringify(output));
         return 0;
       }

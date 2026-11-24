@@ -17,7 +17,7 @@ import { INSTALL_ROOT, isDisabled, loadConfig } from '../pipeline/lib/config.mjs
 import { git, git as gitIn } from '../pipeline/lib/git.mjs';
 import { lockFile, metricsFile, readMetricsLocal } from '../pipeline/lib/state.mjs';
 import { activeStory } from '../pipeline/lib/stories.mjs';
-import { acquireLock, appendJsonl, log, lockHolder, nowIso, readJson, readJsonl, releaseLock, selfProcess, setLogTag, sha, writeJson } from '../pipeline/lib/util.mjs';
+import { acquireLock, appendJsonl, log, lockHolder, nowIso, readJson, releaseLock, selfProcess, setLogTag, sha, writeJson } from '../pipeline/lib/util.mjs';
 import { renderMockups } from '../implement/lib/mockups.mjs';
 import { isClean, removeCheckout, resolveTarget } from './lib/context.mjs';
 import { commentOnPullRequest } from './lib/github.mjs';
@@ -27,11 +27,13 @@ import { renderReport } from './lib/report.mjs';
 import { interruptedRuns, readProgress, resumeRuns, writeProgress } from './lib/runs.mjs';
 import { extractVideoFrames, videoSources } from './lib/video.mjs';
 import { fixNote, fixesOf, withFixNote, withNotesUpdate, withSideEffects } from './lib/pr-notes.mjs';
-import { councilFor, councilRecords, councilReviewSection, withCouncilReview } from '../pipeline/lib/council.mjs';
+import { councilRecords, councilReviewSection, withCouncilReview } from '../pipeline/lib/council.mjs';
 import { withCheckVerdict, withDecision, withScopedCheck } from './lib/decision-body.mjs';
 import { commitRecords } from '../implement/lib/gitops.mjs';
 import { loadTicket } from '../pipeline/lib/tickets.mjs';
 import { gateStaged } from '../pipeline/lib/analysis/commit-gate.mjs';
+import { setting } from '../pipeline/lib/settings.mjs';
+import { exportSlots } from '../feature-verification/lib/slots.mjs';
 
 setLogTag('pr-check');
 
@@ -47,7 +49,7 @@ const USAGE = `Usage: node scripts/pr-check/pr-check.mjs <command> [options]
         --lenses runs only those lenses (acceptance, flow, design, style, video).
         --resume continues an interrupted run of the same check from its last saved round.
   resume [KEY|pr-<n>] [--force] restart interrupted checks in the background (manual runs from their
-                                last round, Stop-hook runs from the start), at most recovery.maxAttempts times
+                                last round, Stop-hook runs from the start), at most recovery.maxRetries times
   status [pr-<n>|KEY]           last result of each check (or one)
   metrics [--json] [--since <iso-date>]
 
@@ -55,8 +57,8 @@ Hooks (called by scripts/pipeline/pipeline.mjs; PR_CHECK_SKIP=1 turns them off)
   hook stop | hook session-start | hook story-start <story>
   hook-run <story> --hash <impl-hash>   background half of the Stop hook: waits for feature verification, then checks
 
-Models: PR_CHECK_MODEL_<ROLE> (JUDGE, ACCEPTANCE, FLOW, DESIGN, STYLE, VIDEO, DEFENDER, FIXER)
-overrides scripts/pr-check/config.json.`;
+Models: each role runs on its models.pool entry, named in models.agents (pr-check-judge, pr-check-acceptance,
+pr-check-flow, pr-check-design, pr-check-style, pr-check-video, pr-check-defender, pr-check-fixer).`;
 
 const VALUE_FLAGS = new Set(['pr', 'story', 'stories', 'epic', 'lenses', 'base', 'videos', 'max-rounds', 'until', 'fix-first', 'fix-lenses', 'debate-turns', 'since', 'hash', 'branch', 'fix-rounds']);
 const list = (v) => (typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
@@ -73,13 +75,10 @@ function positiveInt(value, name) {
 async function executeCheck(config, flags) {
   let stopOwnLspd = () => {};
   const fix = !flags['no-fix'];
-  if (flags['max-rounds']) config.prCheck.maxRounds = positiveInt(flags['max-rounds'], 'max-rounds');
-  if (flags['debate-turns']) config.prCheck.debateTurns = Number(flags['debate-turns']);
-  // A council's rounds (council.stages.prCheck.rounds, else council.rounds) take precedence over prCheck.maxRounds; an
-  // explicit --max-rounds (the delivery's fix mode passes its fixRounds) still wins.
-  const council = councilFor(config, 'prCheck');
-  if (council && !flags['max-rounds']) config.prCheck.maxRounds = council.rounds;
-  if (!fix) config.prCheck.maxRounds = 1;
+  // prCheck.maxCouncilRounds in every caller (delivery, epic, CI fix); --max-rounds overrides it for a run by hand.
+  if (flags['max-rounds']) config.prCheck.maxCouncilRounds = positiveInt(flags['max-rounds'], 'max-rounds');
+  if (flags['debate-turns']) config.prCheck.maxDebateTurns = Number(flags['debate-turns']);
+  if (!fix) config.prCheck.maxCouncilRounds = 1;
 
   const only = list(flags.lenses);
   const unknown = only.filter((l) => !LENSES[l]);
@@ -122,7 +121,7 @@ async function executeCheck(config, flags) {
       if (!ctx.mockupRenders.ok) log(`could not render the mockups (${ctx.mockupRenders.error}); the design critic reads the sources`);
     }
 
-    log(`checking ${ctx.id} against ${ctx.story.key} (base ${ctx.baseRef}, ${fix ? `fixing, up to ${config.prCheck.maxRounds} rounds` : 'report only'})`);
+    log(`checking ${ctx.id} against ${ctx.story.key} (base ${ctx.baseRef}, ${fix ? `fixing, up to ${config.prCheck.maxCouncilRounds} rounds` : 'report only'})`);
     const started = Date.now();
     const onProgress = manual ? (loop) => writeProgress(config, ctx.id, { loop }) : undefined;
     const caseIds = (ctx.tickets ?? [ctx.story]).filter(Boolean).map((t) => `tc-${t.key}-`);
@@ -267,7 +266,7 @@ async function executeCheck(config, flags) {
     // cannot merge gets the base merged so its CI runs). The result says whether the PR is delivered.
     let ci = null;
     if (flags['wait-ci'] && ctx.pr && String(prHostOf(config)?.repo ?? '')) {
-      const { waitForCi, ciLine, ciOutcome } = await import('../implement/lib/ci-wait.mjs');
+      const { waitForPrCi } = await import('../implement/lib/ci-wait.mjs');
       const { mergeLatestBase } = await import('../pipeline/lib/base-merge.mjs');
       const target = ciTarget(config);
       const resolveDirty = async () => {
@@ -277,8 +276,7 @@ async function executeCheck(config, flags) {
         return { merged: git(ctx.workRoot, ['push', '--quiet', 'origin', `HEAD:${ctx.branch}`]).status === 0 };
       };
       log(`waiting for the CI of PR #${ctx.pr.number}`);
-      ci = await waitForCi(target, String(target.host.repo), ctx.pr.number, { log, resolveDirty, ciOptions: { ciSettings: config.implement?.reviewGate?.ci ?? {} } });
-      ci = { state: ci.state, outcome: ciOutcome(ci), line: ciLine(ci), failing: ci.failing ?? [] };
+      ci = await waitForPrCi(config, ctx.pr.number, { target, log, resolveDirty });
       log(`PR #${ctx.pr.number}: ${ci.line}`);
     }
     if (flags.comment && ctx.pr) await commentOnPullRequest(config, ctx.pr.number, report);
@@ -481,10 +479,12 @@ function publishFixNote(config, ctx, history, commits) {
   }
 }
 
-// The follow-ups the judge named across the rounds (a finding dismissed as pre-existing or out of scope), once each.
+// The follow-ups across the rounds (a finding the judge dismissed as pre-existing or out of scope, a non-blocking
+// member's feedback), once each: by id, or by what it says when it has none.
 export function followUpsOf(history = []) {
   const seen = new Map();
-  for (const entry of history) for (const u of entry.followUps ?? []) if (!seen.has(u.id)) seen.set(u.id, u);
+  const key = (u) => u.id ?? `${u.lens ?? ''}\u0000${u.title ?? ''}\u0000${u.reason ?? ''}`;
+  for (const entry of history) for (const u of entry.followUps ?? []) if (!seen.has(key(u))) seen.set(key(u), u);
   return [...seen.values()];
 }
 
@@ -536,10 +536,6 @@ function metrics(config, since) {
 }
 
 async function main() {
-  // Every agent and stack run of a PR check leases a test-stack slot, and the stack guard refuses slot 0 to its agents,
-  // as under implement (council C8 proof: a standalone CI gate's fixer ran `teststack up` on slot 0 and left it up).
-  // FV_USE_SLOTS=0 still turns slots off.
-  process.env.FV_USE_SLOTS ??= '1';
   const [command, ...rest] = process.argv.slice(2);
   const { positional, flags } = parseArgs(rest, VALUE_FLAGS);
   if (!command || command === 'help' || flags.help) {
@@ -547,6 +543,11 @@ async function main() {
     return 0;
   }
   const config = loadConfig('pr-check');
+  // Every agent and stack run of a PR check leases a test-stack slot, and the stack guard refuses slot 0 to its agents,
+  // as under implement (council C8 proof: a standalone CI gate's fixer ran `teststack up` on slot 0 and left it up),
+  // while featureVerification.slots.enabled is on; FV_USE_SLOTS (0 or 1) overrides it. Its agents' guards read the
+  // decision from FV_USE_SLOTS.
+  exportSlots(config);
 
   switch (command) {
     case 'run':
@@ -561,7 +562,7 @@ async function main() {
       if (!pr || !branch) throw new Error('usage: pr-check ci-gate --pr <url or number> --branch <head branch> (--story K | --stories A,B) [--base origin/main] [--fix-rounds N]');
       const { ciGate, ciLine, ciOutcome } = await import('../implement/lib/ci-wait.mjs');
       const targetArgs = flags.stories ? ['--stories', String(flags.stories)] : ['--story', String(flags.story ?? '')];
-      const base = String(flags.base ?? config.baseRef ?? 'origin/main');
+      const base = String(flags.base ?? setting(config, 'baseRef'));
       const { ciFixRounds } = await import('../implement/lib/ci-wait.mjs');
       const ci = await ciGate({ config, ciOptions: { ciSettings: config.implement?.reviewGate?.ci ?? {} }, fixRounds: flags['fix-rounds'] != null ? Number(flags['fix-rounds']) : ciFixRounds(config.implement), repo: config.board?.repo, pr, branch, cwd: config.root, prCheckCli: fileURLToPath(import.meta.url), targetArgs, base, seedFile: path.join(config.root, config.stateDir, 'pr-check', `ci-gate-${String(pr).split('/').pop()}.json`), log });
       appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: nowIso(), kind: 'ci', pr, state: ci.state, flaky: ci.flaky ?? [], fixed: ci.fixed ?? false, rounds: ci.rounds ?? 0, ...(ci.fixRun ? { fixVerdict: ci.fixRun.verdict } : {}) }]);
@@ -652,8 +653,8 @@ async function main() {
 
 // The re-verification leases a test-stack slot and holds it for the pass, as under implement (council C7, live #120: a
 // PR check run on its own re-verified the fixer's tests on slot 0, the shared default stack, and rebuilt it).
-// FV_USE_SLOTS=0 still turns slots off.
-export const reverifyEnv = (base, root) => ({ ...base, PIPELINE_ROOT: root, FV_USE_SLOTS: base.FV_USE_SLOTS ?? '1' });
+// featureVerification.slots.enabled (FV_USE_SLOTS) decides, as for every test run.
+export const reverifyEnv = (base, root) => ({ ...base, PIPELINE_ROOT: root });
 
 // Feature verification of every ticket the fixes made stale (`check` fails for it): plan, then automate, each
 // re-verifying with its own verifier, then one commit. Nothing to do when the fixes touched none of it.
@@ -665,7 +666,7 @@ export function reverifyAfterFixes(config, ctx, deps = {}, { scoped = false } = 
   const fv = path.join(INSTALL_ROOT, 'scripts/feature-verification/feature-verification.mjs');
   const env = reverifyEnv(process.env, ctx.workRoot);
   // Each feature verification call's output goes to a log file (council C5/C6: the re-check left no record).
-  const logFile = path.join(ctx.workRoot, config.stateDir ?? '.factory/state', 'logs', `${ctx.id}-reverify-${nowIso().replace(/[:.]/g, '-')}.log`);
+  const logFile = path.join(ctx.workRoot, setting(config, 'stateDir'), 'logs', `${ctx.id}-reverify-${nowIso().replace(/[:.]/g, '-')}.log`);
   const run = deps.run ?? ((...args) => {
     const r = spawnSync(process.execPath, [fv, ...args], { cwd: ctx.workRoot, env, encoding: 'utf8' });
     try {

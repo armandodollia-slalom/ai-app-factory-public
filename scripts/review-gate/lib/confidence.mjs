@@ -1,17 +1,18 @@
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 // Confidence (0-100) in a ticket's fix, computed by the harness from records the pipeline already
 // keeps. The triage agent's own estimate is only one input (`confidence.agentWeight`, 20%).
 //
 // High confidence means all of:
 //   fv       no feature verification bug-fix cycles (bugFixCycles = 0: feature verification's tests passed on the first try)
-//   pairs    every verifier pair approved, in at most `maxPairRounds` (2) rounds
-//   prCheck  the PR check reached 10/10 in at most `maxPrCheckRounds` (2) rounds
+//   pairs    every verifier pair approved, in at most `implementRoundsAtMost` rounds
+//   prCheck  the PR check reached 10/10 in at most `prCheckRoundsAtMost` rounds
 //   owns     no edits outside a subtask's `owns`
 //   ci       the PR's checks are green
-// and a score of at least `highMin`. Each criterion carries an equal share of the non-agent weight; an
+// and a score of at least `highMinScore`. Each criterion carries an equal share of the non-agent weight; an
 // unknown criterion (no record) earns nothing and is not met; pending CI earns half and is not met.
 
 export const CRITERIA = ['fv', 'pairs', 'prCheck', 'owns', 'ci'];
-const DEFAULTS = { highMin: 85, maxPairRounds: 2, maxPrCheckRounds: 2, agentWeight: 0.2 };
+const DEFAULTS = defaultSettings().implement.reviewGate.confidence;
 
 const latest = (records, pred) => records.filter(pred).sort((a, b) => String(a.ts).localeCompare(String(b.ts))).at(-1) ?? null;
 const forTicket = (key) => (r) => r.story === key || (Array.isArray(r.stories) && r.stories.includes(key));
@@ -32,10 +33,13 @@ export function ticketSignals(key, { implementRuns = [], subtaskRuns = [], prChe
   // Critique rounds only: a seeded fix round (a CI or report-round fix, council C7) is not a round of review (council C8:
   // #154's gate said "10/10 in round 3" for a report round and one fixing round).
   const checks = prChecks.filter(forTicket(key)).filter((c) => !c.seeded).sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
-  // Rounds to the 10 the checks end on (council C7): a 10 that a later round undid (a fix round, a question) counts nothing.
-  let trailing10 = 0;
-  while (trailing10 < checks.length && checks[checks.length - 1 - trailing10].score === 10) trailing10++;
-  const prCheckRounds = trailing10 ? checks.length - trailing10 + 1 : null;
+  // Rounds to the pass the checks end on (council C7): a pass that a later round undid (a fix round, a question) counts
+  // nothing. The pass is the round's own recorded decision (pr-check decidePass); a record from before it was kept falls
+  // back to a 10.
+  const passed = (c) => (typeof c.pass === 'boolean' ? c.pass : c.score === 10);
+  let trailing = 0;
+  while (trailing < checks.length && passed(checks[checks.length - 1 - trailing])) trailing++;
+  const prCheckRounds = trailing ? checks.length - trailing + 1 : null;
   // Ticket lines the last PR check left as questions for the ticket's owner (council C6).
   const questions = (checks.at(-1)?.questions ?? []).map((q) => q.question || q.title).filter(Boolean);
   // A 10 counts only on the last check: a later round that left a question undoes it.
@@ -51,8 +55,8 @@ export function criteria(signals, settings = {}) {
   const known = (v, ok) => (v == null ? 'unknown' : ok ? 'met' : 'unmet');
   return {
     fv: known(signals.bugFixCycles, signals.bugFixCycles === 0),
-    pairs: signals.pairRounds == null ? 'unknown' : signals.pairsApproved && signals.pairRounds <= s.maxPairRounds ? 'met' : 'unmet',
-    prCheck: signals.prCheckRounds == null ? (signals.prCheckScore == null ? 'unknown' : 'unmet') : signals.prCheckRounds <= s.maxPrCheckRounds ? 'met' : 'unmet',
+    pairs: signals.pairRounds == null ? 'unknown' : signals.pairsApproved && signals.pairRounds <= s.implementRoundsAtMost ? 'met' : 'unmet',
+    prCheck: signals.prCheckRounds == null ? (signals.prCheckScore == null ? 'unknown' : 'unmet') : signals.prCheckRounds <= s.prCheckRoundsAtMost ? 'met' : 'unmet',
     owns: known(signals.outsideOwns, signals.outsideOwns === 0),
     ci: signals.ci === 'success' ? 'met' : signals.ci === 'pending' ? 'pending' : signals.ci == null ? 'unknown' : 'unmet',
   };
@@ -68,19 +72,20 @@ export function confidence(signals, settings = {}) {
   const score = clamp(earned + s.agentWeight * agent);
   const allMet = CRITERIA.every((k) => c[k] === 'met');
   const reasons = CRITERIA.filter((k) => c[k] !== 'met').map((k) => `${LABELS[k]} ${c[k]}`);
-  if (allMet && score < s.highMin) reasons.push(`score ${score} below ${s.highMin} (agent estimate ${agent})`);
+  if (allMet && score < s.highMinScore) reasons.push(`score ${score} below ${s.highMinScore} (agent estimate ${agent})`);
   if (signals.questions?.length) reasons.unshift(`needs an owner decision: ${signals.questions.join('; ')}`);
-  return { score, high: allMet && score >= s.highMin && !signals.questions?.length, criteria: c, reasons, questions: signals.questions ?? [] };
+  return { score, high: allMet && score >= s.highMinScore && !signals.questions?.length, criteria: c, reasons, questions: signals.questions ?? [] };
 }
 
-export const LABELS = { fv: 'Feature verification first try', pairs: `pair verifier rounds`, prCheck: 'PR check 10/10', owns: 'edits inside owns', ci: 'CI' };
+export const LABELS = { fv: 'Feature verification first try', pairs: `pair verifier rounds`, prCheck: 'PR check passed', owns: 'edits inside owns', ci: 'CI' };
 
 // One line per criterion for the review notice: "Feature verification first try: met (0 bug-fix cycles)".
 export function describeSignals(signals, c) {
   const detail = {
     fv: signals.bugFixCycles == null ? 'no record' : `${signals.bugFixCycles} bug-fix cycle(s)`,
     pairs: signals.pairRounds == null ? 'no pair record' : `${signals.pairsApproved ? 'approved' : 'not approved'}, ${signals.pairRounds} round(s)`,
-    prCheck: signals.prCheckRounds != null ? `10/10 in round ${signals.prCheckRounds}` : signals.prCheckScore != null ? `last score ${signals.prCheckScore}/10` : 'no record',
+    // The pass as recorded: at its actual score (a 9.5 at a pass score of 9.5 is not shown as 10/10).
+    prCheck: signals.prCheckRounds != null ? `passed at ${signals.prCheckScore ?? '?'}/10 in round ${signals.prCheckRounds}` : signals.prCheckScore != null ? `last score ${signals.prCheckScore}/10` : 'no record',
     owns: signals.outsideOwns == null ? 'no pair record' : `${signals.outsideOwns} edit(s) outside owns`,
     ci: signals.ci ?? 'unknown',
   };

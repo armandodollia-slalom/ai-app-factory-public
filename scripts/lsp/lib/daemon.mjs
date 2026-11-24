@@ -87,8 +87,8 @@ export function serverEnv(server, { worktree, sdir, scopes = new Map() }) {
 export function lspMcpConfig(config, worktree, { sdir = worktree, scopes = new Map() } = {}) {
   const vars = { worktree, factory: INSTALL_ROOT, stateDir: sdir };
   return {
-    requestTimeout: (config.callTimeoutSec ?? 60) * 1000,
-    idleTimeout: (config.idleSec ?? 900) * 1000,
+    requestTimeout: (config.callTimeoutSec) * 1000,
+    idleTimeout: (config.idleSec) * 1000,
     minify: 'full',
     logLevel: 'warn',
     servers: config.servers.map((s) => {
@@ -252,7 +252,7 @@ export async function serve({ worktree, owns = [] }) {
       log(`${t.cfg.id}: prepare ${what}`);
       next();
     };
-    const limitSec = prepare.timeoutSec ?? config.prepareTimeoutSec ?? 900;
+    const limitSec = prepare.timeoutSec ?? config.prepareTimeoutSec;
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
       finish(`timed out after ${limitSec}s`);
@@ -304,7 +304,7 @@ export async function serve({ worktree, owns = [] }) {
     if (t.info.status !== 'running') return t.info.reason;
     const state = serverState(t);
     const elapsed = Math.round((Date.now() - t.info.startedAt) / 1000);
-    const loadLimit = t.cfg.loadTimeoutSec ?? config.loadTimeoutSec ?? 900;
+    const loadLimit = t.cfg.loadTimeoutSec ?? config.loadTimeoutSec;
     if (t.info.preparing) return `${t.info.preparing} (${elapsed}s so far)`;
     if (!state || state.state === 'starting' || state.state === 'loading') {
       if (elapsed > loadLimit) return null; // never got the "ready" report; try anyway
@@ -363,7 +363,7 @@ export async function serve({ worktree, owns = [] }) {
   }
 
   let lastActivity = Date.now();
-  const callTimeoutMs = (config.callTimeoutSec ?? 60) * 1000;
+  const callTimeoutMs = (config.callTimeoutSec) * 1000;
 
   async function callTool(name, args) {
     lastActivity = Date.now();
@@ -384,7 +384,7 @@ export async function serve({ worktree, owns = [] }) {
 
   async function diagnostics(files) {
     const out = {};
-    const timeoutMs = (config.diagnosticsTimeoutSec ?? 20) * 1000;
+    const timeoutMs = (config.diagnosticsTimeoutSec) * 1000;
     for (const file of files) {
       const abs = realPath(path.resolve(worktree, file));
       const server = serverForFile(config, abs);
@@ -567,7 +567,7 @@ export async function serve({ worktree, owns = [] }) {
 
   for (const t of tracked.values()) startLeased(t);
 
-  const idleMs = (config.idleSec ?? 900) * 1000;
+  const idleMs = (config.idleSec) * 1000;
   const idleWatch = setInterval(() => {
     if (sessions.size === 0 && Date.now() - lastActivity > idleMs) {
       log(`idle for ${config.idleSec}s with no sessions; stopping`);

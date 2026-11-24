@@ -33,7 +33,7 @@ Or answer the interview's *Commercial scanner* questions (`factory init --interv
 | `severity` | client overrides of the definition's map, from the vendor severities `critical`, `high`, `medium`, `low` and `info` to `blocking`, `major` and `minor` | the definition's |
 | `check` | server mode: the name of the check the scanner reports on a pull request's head | the definition's |
 | `url`, `project`, `deployment` | the server or tenant, and the project, application or deployment name the vendor uses | |
-| `timeoutMin` | server mode: how long the gate waits for the result of a head before failing it | `60` |
+| `timeoutSec` | server mode: how long the gate waits for the result of a head before failing it | `3600` |
 | `stages` | local mode: the fix-loop slots it runs in | `["story", "prCheck"]` |
 
 A list of such objects turns on more than one scanner.
@@ -59,7 +59,7 @@ Without the variable the tool does not run. The CI job fails closed with the mes
 
 - The scanner's check (`check`) joins the head's expected evidence and the branch's required checks. If the check is not on the head yet, or is still running, the head is **pending**: an asynchronous result never lets a merge through early.
 - When the check is green, the gate reads the result: the vendor's quality gate, then the findings with the severity map and the vendor's triage. A failed gate, or an open finding mapped to `blocking`, is a **failure**.
-- With no result after `timeoutMin` minutes, the head is a **failure** that says so (fail closed).
+- With no result after `timeoutSec` seconds, the head is a **failure** that says so (fail closed).
 - If the result cannot be read, the head is **unknown**, which is never green.
 - A result the vendor does not bind to a commit (SonarQube Server, Semgrep, code scanning's merge-ref analyses) counts only together with the scanner's check on the head. Without a check name the head is never green, and doctor says to set one.
 

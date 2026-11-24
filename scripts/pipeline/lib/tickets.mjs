@@ -37,7 +37,7 @@ export function storyOf(config, meta) {
     file: rel(config, ticketFile(config, key)),
     dir: rel(config, ticketDir(config, key)),
     mockupsDir: rel(config, path.join(ticketDir(config, key), 'mockups')),
-    planDir: config.plansDir ? `${config.plansDir}/${slug}` : null,
+    planDir: config.featureVerification.plansDir ? `${config.featureVerification.plansDir}/${slug}` : null,
     scenario: key.toLowerCase(),
     epic: meta.parent ?? null,
     blockedBy: meta.blockedBy ?? [],
@@ -228,13 +228,13 @@ export function keysFromPaths(config, paths) {
       if (k) keys.add(k);
       continue;
     }
-    if (config.plansDir && p.startsWith(`${config.plansDir}/`)) {
-      const k = keyOfArg(p.slice(config.plansDir.length + 1).split('/')[0]);
+    if (config.featureVerification.plansDir && p.startsWith(`${config.featureVerification.plansDir}/`)) {
+      const k = keyOfArg(p.slice(config.featureVerification.plansDir.length + 1).split('/')[0]);
       if (k) keys.add(k);
       continue;
     }
-    if (config.scenariosDir && p.startsWith(`${config.scenariosDir}/`)) {
-      const k = p.slice(config.scenariosDir.length + 1).split('/')[0].toUpperCase();
+    if (config.teststack.scenariosDir && p.startsWith(`${config.teststack.scenariosDir}/`)) {
+      const k = p.slice(config.teststack.scenariosDir.length + 1).split('/')[0].toUpperCase();
       if (STORY_KEY.test(k)) keys.add(k);
       continue;
     }

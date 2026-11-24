@@ -1,7 +1,6 @@
 // Stack slots for the feature verification stage's e2e runs. On slot 0 every story's specs take turns behind one
-// machine-wide lock. Under `implement run` (IMPLEMENT_PARALLEL is set, even to 1: the ticket's worktree
-// is never what slot 0 was built from) and with `useSlots` on (the default), a story's run leases an
-// isolated slot instead (`factory stack lease`), brings that slot's stack up from the story's worktree
+// machine-wide lock. With `featureVerification.slots.enabled` on (the default; FV_USE_SLOTS=0|1 overrides it), a
+// story's run leases an isolated slot instead (`factory stack lease`), brings that slot's stack up from the story's worktree
 // (`factory teststack --slot <n> up`), runs its specs with TESTSTACK_SLOT and TESTSTACK_URL (the stack's
 // base URL) pointing at it, and tears it down. Specs with hard-coded slot-0 ports stay on slot 0, and so
 // does a run that finds no free slot. See docs/ai-pipeline/feature-verification.md#stack-slots.
@@ -11,6 +10,7 @@ import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
 import { appendJsonl, log, nowIso, run, runAsync } from '../../pipeline/lib/util.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { loadConfig, slotPorts } from '../../stack/lib/ports.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // A spec runs on any slot unless it names one of slot 0's host ports literally (the `stack.ports` bases of
 // the repository); e2e/teststack/ports.ts builds the URLs from TESTSTACK_SLOT instead.
@@ -21,8 +21,16 @@ export function slotAware(texts, slot0Ports = []) {
 }
 
 export function wantsSlot(config, env = process.env) {
-  if (config.useSlots === false || env.FV_USE_SLOTS === '0') return false;
-  return Number(env.IMPLEMENT_PARALLEL ?? 0) >= 1 || env.FV_USE_SLOTS === '1';
+  // featureVerification.slots.enabled (FV_USE_SLOTS overrides it): a run borrows its own copy whenever it is on.
+  if (env.FV_USE_SLOTS === '0' || env.FV_USE_SLOTS === '1') return env.FV_USE_SLOTS === '1';
+  return setting(config, 'featureVerification.slots.enabled') !== false;
+}
+
+// A run's agents (the stack guard, teststack) read the slots decision from FV_USE_SLOTS: a run's CLI exports
+// featureVerification.slots.enabled there, unless FV_USE_SLOTS (0 or 1) already overrides it. Returns the value.
+export function exportSlots(config, env = process.env) {
+  if (env.FV_USE_SLOTS !== '0' && env.FV_USE_SLOTS !== '1') env.FV_USE_SLOTS = wantsSlot(config, env) ? '1' : '0';
+  return env.FV_USE_SLOTS;
 }
 
 const slotsCli = () => path.join(INSTALL_ROOT, 'scripts/stack/slots.mjs');
@@ -30,7 +38,7 @@ const teststackCli = () => path.join(INSTALL_ROOT, 'scripts/teststack/teststack.
 
 // How long a run waits for a free slot before it gives up (featureVerification `slotWaitSec`, default 6 h). A ceiling:
 // leases whose owner died are reclaimed, so a run waits only on live runs, which slow agents make slower (council C12).
-export const slotWaitSec = (config) => Number(config.slotWaitSec ?? 21600);
+export const slotWaitSec = (config) => Number(setting(config, 'featureVerification.slotWaitSec'));
 
 // The message a stage stops with when no slot came free in time: tests against a stack running another
 // checkout's code do not count, so nothing runs on slot 0 instead (council C3, D-C6-1).

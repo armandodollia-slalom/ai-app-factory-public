@@ -45,10 +45,9 @@ export const planSchema = (project = null) => {
       "acceptance": ["<checkable criterion>", "..."],
       "owns": [${JSON.stringify(ex.owns)}],           // path globs; no two subtasks may own the same file
       "dependsOn": [],                          // ids that must be merged first
-      "modelClass": "small" | "medium" | "large",
-      "model": "<optional: an allowed model alias for this subtask's pair implementer, overriding modelClass>",
+      "model": "<the models.pool entry this subtask's pair implementer runs on (listed below)>",
       "modelReason": "<one short sentence>",
-      "justification": "<required when modelClass is large>",
+      "justification": "<optional: why this entry rather than a cheaper one>",
       "verify": "code" | "ui",                  // ui only for UI stories
       "verifyReason": "<one short sentence>",
       "scenario": "<optional: the NAME of an existing app-stack scenario the ui verifier loads (listed in the task); leave it out when none fits and say in the goal what data the verifier must set up>",
@@ -91,7 +90,7 @@ export function planTask({ key, storyFile, worktree, uiStory, limits, errors = n
     `- \`mode: "self"\` when the story touches one service or about ${limits.selfModeMaxFiles} files or fewer: you implement it yourself (still checked by a verifier). Give at most one subtask entry for its goal, acceptance and verify (its \`owns\` is ignored).`,
     '- `owns` globs must not overlap between subtasks; every file belongs to exactly one subtask. Shared files (package manifests, app wiring, shared configuration) go to the subtask that needs them first; others depend on it.',
     '- `dependsOn` lists ids that must be merged first; no cycles. Independent subtasks run in parallel.',
-    `- modelClass: small for mechanical changes, medium for normal work, large only for genuinely hard design work (at most ${limits.maxLargeSubtasks}, with a justification).${limits.allowedModels?.length ? ` Optionally name a \`model\` alias for a subtask's pair implementer instead (allowed on this CLI: ${limits.allowedModels.join(', ')}), for example a different model family for a second opinion or a cheaper model for mechanical work; say why in modelReason.` : ''}`,
+    `- \`model\` names the pool entry each subtask's pair implementer runs on, one of: ${(limits.subtaskEntries ?? []).map((e) => `${e.name} (${e.cli}, ${e.model ?? 'custom'}, ${e.family}, effort ${e.effort})`).join('; ') || (limits.subtaskModels ?? []).join(', ')}. Match the entry to the work: a cheaper or faster one for mechanical changes, the strongest for genuinely hard design work; say why in modelReason. A plan that names another entry is refused.`,
     `- verify "ui" makes a verifier drive the running app and take screenshots. ${uiStory ? 'This IS a UI story: use verify "ui" for subtasks that change pages or components.' : `This is NOT a UI story (${uiStoryHint(limits.ui)}): use verify "code" only and uiStory false.`}`,
     ...(uiStory ? [`- \`scenario\` names an existing app-stack scenario the ui verifier loads: ${limits.scenarios?.length ? limits.scenarios.join(', ') : 'this repository has none'}. Nothing else is a scenario; when none fits, leave it out and say in the goal or acceptance what data the verifier must set up itself.`] : []),
     '- Tests are not yours (feature verification writes them later); do not plan test subtasks.',

@@ -23,6 +23,7 @@ import { isSecretTool } from './secrets.mjs';
 import { changedMap, decide, settleSecretFindings } from './decide.mjs';
 import { ruleSetDir } from './fetch.mjs';
 import { matchesAny } from '../../../implement/lib/plan.mjs';
+import { setting } from '../settings.mjs';
 
 // Whether a tool applies: `when` (globs one tracked file must match: a GitHub workflow linter only where workflows
 // exist) and, outside CI, `onChange` (globs a touched file must match: a dependency audit only when a manifest changed).
@@ -38,7 +39,7 @@ export function applies(tool, { cwd, touched, slot }) {
 export const REPORT_VERSION = 1;
 
 // The factory state folder of the main checkout (shared by its worktrees): reports, merge-base caches, pinned tools.
-export const analysisDir = (config) => path.join(config.mainRoot ?? config.root, config.stateDir ?? '.factory/state', 'analysis');
+export const analysisDir = (config) => path.join(config.mainRoot ?? config.root, setting(config, 'stateDir'), 'analysis');
 
 // One cache per machine for pinned tool binaries, rule sources and tool data (an offline vulnerability database):
 // FACTORY_CACHE_DIR, else the platform's user cache folder. `factory prune` removes what no configuration pins.
@@ -271,7 +272,7 @@ export function touchedFiles(cwd, base) {
 }
 
 // The pipeline's own records (metrics shards, run state): never in a scan's scope, so never what makes a tree "dirty".
-export const recordPrefixes = (config) => [config?.metricsDir ?? '.factory/metrics', config?.stateDir ?? '.factory/state'].map((p) => `${String(p).replace(/\/+$/, '')}/`);
+export const recordPrefixes = (config) => [setting(config, 'metricsDir'), setting(config, 'stateDir')].map((p) => `${String(p).replace(/\/+$/, '')}/`);
 
 // Uncommitted files a scan's scope holds: modified tracked files and untracked ones, everything but the pipeline's own
 // records (test plans and scenarios under .factory/ included: they ship with the change, and a secret copied into a plan

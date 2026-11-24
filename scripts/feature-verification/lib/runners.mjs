@@ -88,7 +88,7 @@ function resolveEntry(entry, installRoot) {
 
 // The runners of this configuration, in the order they are tried.
 export function testRunners(config) {
-  const given = config.precheck?.testRunners;
+  const given = config.featureVerification?.precheck?.testRunners;
   const entries = Array.isArray(given) ? given : (config.project?.languages ?? []).filter((id) => packRunners(id, config.installRoot).length);
   const runners = entries.flatMap((e) => resolveEntry(e, config.installRoot));
   for (const r of runners) {
@@ -137,19 +137,19 @@ export function runnerFor(config, file, runners = testRunners(config)) {
 // that is set, else by the runners' `match`; with neither configured, any source file (not Markdown, not
 // the pipeline's own folders), so an unconfigured repository still finds its tests.
 export function isTestFile(config, file, runners = testRunners(config)) {
-  const exts = config.testExtensions ?? [];
+  const exts = config.featureVerification?.testExtensions ?? [];
   if (exts.length) return exts.some((ext) => file.endsWith(ext));
   if (runners.length) return runners.some((r) => runnerMatches(r, file));
   if (file.endsWith('.md')) return false;
   const own = ['.factory/', 'graphify-out/', '.git/'];
-  return file.startsWith(`${config.scenariosDir}/`) || !own.some((dir) => file.startsWith(dir));
+  return file.startsWith(`${config.teststack.scenariosDir}/`) || !own.some((dir) => file.startsWith(dir));
 }
 
 // Where to look for test files: `testRoots`, else the runners' `roots`, else the whole repository.
 export function testRoots(config, runners = testRunners(config)) {
-  if (config.testRoots?.length) return config.testRoots;
+  if (config.project.testRoots?.length) return config.project.testRoots;
   if (!runners.length || runners.some((r) => !r.roots?.length)) return ['.'];
-  return [...new Set([...runners.flatMap((r) => r.roots), config.scenariosDir].filter(Boolean))];
+  return [...new Set([...runners.flatMap((r) => r.roots), config.teststack.scenariosDir].filter(Boolean))];
 }
 
 const holdsTests = (runner, text) => !runner.testFile || new RegExp(runner.testFile).test(text);

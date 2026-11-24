@@ -32,7 +32,7 @@ test('support files: changed files beside the story\'s tests and in its scenario
   write(root, 'scenarios/b-1/seed.sql');
   write(root, 'src/Api/Orders.cs', 'changed\n');
   write(root, 'tests/plans/B-1/_index.md');
-  const config = { root, plansDir: 'tests/plans' };
+  const config = { root, featureVerification: { plansDir: 'tests/plans' } };
   const files = supportFiles(config, ['tests/Api.Tests/OrderTests.cs'], 'scenarios/b-1', base).sort();
   assert.deepEqual(files, ['scenarios/b-1/seed.sql', 'tests/Api.Tests/AssemblyInfo.cs', 'tests/Api.Tests/Existing.cs']);
   assert.deepEqual(supportFiles(config, [], 'scenarios/b-1', base), [], 'no test files: nothing beside them');
@@ -51,7 +51,7 @@ test('stack rule: with a stack runner and functional or e2e cases, a story test 
     { name: 'dotnet', match: ['tests/**/*.cs'] },
     { name: 'playwright', match: ['e2e/teststack/**/*.spec.ts'], stack: true },
   ];
-  const config = { root, precheck: {} };
+  const config = { root, featureVerification: { precheck: {} } };
   const story = { key: 'B-1', scenario: 'b-1' };
   const plan = (layers) => ({ cases: layers.map((layer) => ({ data: { layer } })) });
   const tests = (...files) => new Map(files.map((f) => [f, new Set()]));
@@ -64,7 +64,7 @@ test('stack rule: with a stack runner and functional or e2e cases, a story test 
   assert.deepEqual(stackErrors(config, story, plan(['functional', 'unit']), tests('tests/Api.Tests/OrderTests.cs', 'e2e/teststack/b-1-orders.spec.ts'), runners, true), []);
   assert.deepEqual(stackErrors(config, story, plan(['unit']), tests('tests/Api.Tests/OrderTests.cs'), runners, true), [], 'unit cases only');
   assert.deepEqual(stackErrors(config, story, plan(['functional']), tests('tests/Api.Tests/OrderTests.cs'), runners.slice(0, 1), true), [], 'no stack runner');
-  assert.deepEqual(stackErrors({ root, precheck: { requireStack: false } }, story, plan(['functional']), tests('tests/Api.Tests/OrderTests.cs'), runners, true), [], 'turned off');
+  assert.deepEqual(stackErrors({ root, featureVerification: { precheck: { requireStack: false } } }, story, plan(['functional']), tests('tests/Api.Tests/OrderTests.cs'), runners, true), [], 'turned off');
 });
 
 // Council C1: CAT-1's UI videos never showed the section; the precheck now asks for a state keyframe per UI case.
@@ -86,7 +86,7 @@ test('UI evidence: a passing UI case needs a highlight or absent keyframe; API-o
 // Council C1: the automation verifier skipped two of CAT-1's five UI cases and still scored 10.
 test('automation verdict: a UI case without an evidence entry, or with ok false, caps the score below the pass mark', async () => {
   const { normalizeVerdict } = await import('../lib/verify.mjs');
-  const config = { categories: { automation: ['visual-mismatch', 'other'] }, loops: { requiredScore: 9 } };
+  const config = { featureVerification: { categories: { automation: ['visual-mismatch', 'other'] } }, testAutomation: { councilPassScore: 9 } };
   const raw = (evidence) => ({ score: 10, summary: 's', gaps: [], evidence });
   const seen = { case: 'TC-C-1-13', keyframe: 'k/03-highlight.png', shows: 'four cards in the More from section', ok: true };
   const all = normalizeVerdict(config, 'automation', raw([seen, { ...seen, case: 'TC-C-1-14' }]), { uiCases: ['TC-C-1-13', 'TC-C-1-14'] });

@@ -67,7 +67,7 @@ function setup() {
   write(root, '.factory/metrics/token-usage.jsonl.d/main.jsonl', '{}\n');
   git('add', '-A');
   git('commit', '-qm', 'base');
-  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'main', project: { languages: [] }, precheck: {}, analysis };
+  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'main', project: { languages: [] }, featureVerification: { precheck: {} }, analysis };
   return { root, git, config, analysis, tool };
 }
 const leaked = (obj) => JSON.stringify(obj).includes(ON_MAIN) || JSON.stringify(obj).includes(NEW_ONE);
@@ -269,4 +269,23 @@ test('the delivery does not push while a held secret is still uncommitted', asyn
   assert.equal(pushed, false);
   assert.equal(out.outcome, 'blocked');
   assert.match(out.reason, /TC-EVT-1-10\.md:1 leaks generic-api-key[\s\S]*not pushed/);
+});
+
+// Council r5 (A4, live path): with a custom stateDir, commitAll's gate wrote its held list to the default state folder
+// and heldSecrets read the configured one: a held secret was never reported. Both use the repository's own folders.
+test('with a custom stateDir, a secret the commit gate holds back is reported', async () => {
+  const s = setup();
+  write(s.root, '.gitignore', '.factory/state/\n.custom/\n');
+  write(s.root, '.factory/config.json', `${JSON.stringify({ stateDir: '.custom/state', metricsDir: '.custom/metrics', analysis: s.analysis })}\n`);
+  s.git('add', '-A');
+  s.git('commit', '-qm', 'config');
+  s.git('checkout', '-qb', 'feat/evt-1');
+  const { commitAll } = await import('../../implement/lib/gitops.mjs');
+  const { heldSecrets } = await import('../lib/analysis/commit-gate.mjs');
+  write(s.root, '.factory/plans/EVT-1/TC-EVT-1-10.md', `- token \`${NEW_ONE}\`\n`);
+  write(s.root, 'src/Api/Hooks.cs', 'class Hooks {}\n');
+  assert.equal(commitAll(s.root, 'EVT-1: Implementation'), true);
+  assert.deepEqual(s.git('show', '--name-only', '--format=', 'HEAD').split('\n'), ['src/Api/Hooks.cs']);
+  assert.deepEqual(heldSecrets({ ...s.config, stateDir: '.custom/state', metricsDir: '.custom/metrics' }, s.root).map((h) => h.file), ['.factory/plans/EVT-1/TC-EVT-1-10.md']);
+  assert.match(JSON.stringify(readMetricsLocal({ ...s.config, metricsDir: '.custom/metrics' }, 'analysis-held.jsonl')), /TC-EVT-1-10\.md/);
 });

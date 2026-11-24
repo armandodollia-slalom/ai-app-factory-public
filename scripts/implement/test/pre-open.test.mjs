@@ -42,7 +42,7 @@ const rows = [{ ref: 'Rule: a valid coupon gives 10% off', status: 'met', eviden
 const clean = (lens) => ({ result: { lens, score: 10, summary: 'ok', coverage: lens === 'acceptance' ? rows : [], findings: [], sideEffects: [] } });
 const SCRIPT = {
   implementer: [{ writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'coupon applied' } }],
-  'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+  'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
   'test-planner': [{ writePlan: [{ title: 'Valid coupon applies', type: 'happy' }, { title: 'Expired coupon rejected', type: 'sad' }] }],
   'test-plan-verifier': [{ result: { score: 10, summary: 'ok', gaps: [] } }],
   'test-automation': [{ writeTests: [1, 2], result: { status: 'done' } }],
@@ -146,13 +146,18 @@ function setup(name, scenario, { type = 'story', state = {} } = {}) {
   for (const dir of ['scripts/pipeline', 'scripts/review', 'scripts/feature-verification', 'scripts/implement', 'scripts/pr-check', 'scripts/board', 'scripts/models', 'scripts/pr-video', 'scripts/review-gate', 'scripts/retro', 'scripts/factory', 'scripts/stack', 'scripts/teststack'].filter((d) => fs.existsSync(path.join(source, d)))) {
     fs.cpSync(path.join(source, dir), path.join(repo, dir), { recursive: true, filter: (p) => !p.startsWith(path.join(source, dir, 'test')) });
   }
+  // Every section's defaults and descriptions: a stage reads the others' (scripts/pipeline/lib/settings.mjs).
+  for (const d of fs.readdirSync(path.join(source, 'scripts'))) for (const f of ['config.json', 'settings.json']) if (fs.existsSync(path.join(source, 'scripts', d, f)) && !fs.existsSync(path.join(repo, 'scripts', d, f))) {
+    fs.mkdirSync(path.join(repo, 'scripts', d), { recursive: true });
+    fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
+  }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
   // As an install has it: the CI adapters read the workflow definitions with the yaml package.
   fs.symlinkSync(path.join(source, 'node_modules'), path.join(repo, 'node_modules'), 'dir');
-  editJson(path.join(repo, 'scripts/feature-verification/config.json'), (j) => (j.precheck.runTests = false));
+  editJson(path.join(repo, 'scripts/feature-verification/config.json'), (j) => (j.featureVerification.precheck.runTests = false));
   editJson(path.join(repo, 'scripts/pipeline/config.json'), (j) => (j.implExclude = ['.factory', 'graphify-out', 'e2e']));
   editJson(path.join(repo, 'scripts/implement/config.json'), (j) => {
-    Object.assign(j.implement, { fvPollSec: 0.2, parallel: 1, orchestrate: false, ciParity: false, prCheckWaitSec: 1, ciPollSec: 0.2, ciSettleSec: 0.3, ciWaitSec: 120 });
+    Object.assign(j.implement, { pollSec: { featureVerification: 0.2 }, maxParallel: 1, waitSec: { ...j.implement.waitSec, prCheck: 1 }, ci: { ...j.implement.ci, parity: { enabled: false }, wait: { ...j.implement.ci.wait, pollSec: 0.2, settleSec: 0.3, timeoutSec: 120 } } });
   });
   editJson(path.join(repo, 'scripts/pr-check/config.json'), (j) => Object.assign(j.prCheck.hook, { enabled: true, pollSec: 0.2 }));
   write(repo, '.factory/config.json', JSON.stringify({ host: { type: 'github', repo: 'acme/shop' } }, null, 2));

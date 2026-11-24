@@ -1,4 +1,46 @@
 {
-  "$comment": "Discovery settings only. The model policy (which models the pipeline may call) is agent.allowedModels and agent.modelIds in scripts/pipeline/config.json. See docs/ai-pipeline/models.md.",
-  "cacheTtlHours": 24
+  "$comment": "The model pool and which entry each agent runs on, plus discovery settings. Every agent run takes its CLI, model id, effort and environment from one pool entry. See docs/ai-pipeline/models.md.",
+  "cacheTtlSec": 86400,
+  "pool": [
+    {
+      "name": "opus",
+      "cli": "claude",
+      "model": "claude-opus-5-5",
+      "effort": "high"
+    },
+    {
+      "name": "sonnet",
+      "cli": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "medium"
+    },
+    {
+      "name": "sol",
+      "cli": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    }
+  ],
+  "agents": {
+    "default": "sonnet",
+    "pair-verifier": "sonnet",
+    "pair-ui-verifier": "opus",
+    "architecture-reviewer": "sonnet",
+    "test-planner": "sonnet",
+    "test-plan-verifier": "sonnet",
+    "test-automation": "sonnet",
+    "test-automation-verifier": "sonnet",
+    "pr-check-acceptance": "opus",
+    "pr-check-flow": "opus",
+    "pr-check-design": "opus",
+    "pr-check-style": "sonnet",
+    "pr-check-video": "opus",
+    "pr-check-defender": "opus",
+    "pr-check-judge": "opus",
+    "pr-check-fixer": "opus",
+    "bug-triage": "opus",
+    "escalation-questions": "sonnet",
+    "demo-narrator": "sonnet",
+    "retro": "sonnet"
+  }
 }

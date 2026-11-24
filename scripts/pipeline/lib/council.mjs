@@ -12,13 +12,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COUNCIL_DEFAULTS, COUNCIL_LENSES, COUNCIL_STAGES, resolveIntercom, seatedNames } from './council-config.mjs';
+import { COUNCIL_LENSES, COUNCIL_STAGES, SOLE_LENS, STAGE_LENSES, canDriveBrowser, resolveIntercom } from './council-config.mjs';
+import { agentEnv, entryFor, familyOf, poolOf, subtaskModels } from './pool.mjs';
+import { recordRoundFindings } from './findings.mjs';
+import { setting } from './settings.mjs';
 import { logDecision } from './decisions.mjs';
 import { metricsFile, readMetricsLocal } from './state.mjs';
 import { appendJsonl, log as defaultLog, extractResult, nowIso, parseFrontMatter, readJson, run, sha, writeJson } from './util.mjs';
 import { resolvesGiven, resolvesOf } from './finding-route.mjs';
 
-export { COUNCIL_STAGES, COUNCIL_LENSES };
+export { COUNCIL_STAGES, COUNCIL_LENSES, SOLE_LENS, agentEnv };
 export const COUNCIL_FILE = 'council-rounds.jsonl';
 const INSTALL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export const SKILL_FILE = path.join(INSTALL_ROOT, 'skills', 'council', 'SKILL.md');
@@ -31,29 +34,154 @@ const ACTIONS = ['fix', 'delete-test', 'rewrite'];
 // Configuration
 // ---------------------------------------------------------------------------------------------
 
-// The council a stage seats, or null when it has none (the stage then runs its single verifier, as without a council).
-// Members are resolved to { name, cli, model, effort, lens, blocking, cmd, timeoutSec }.
-export function councilFor(config, stage) {
-  const c = config?.council;
-  if (!c || !c.stages || !Object.hasOwn(c.stages, stage)) return null;
-  const byName = new Map((c.members ?? []).map((m) => [m.name, m]));
-  const lenses = c.stages[stage]?.lenses ?? {};
-  const members = seatedNames(c, stage).map((n) => byName.get(n)).filter(Boolean).map((m) => ({ effort: null, cmd: null, timeoutSec: null, ...m, lens: lenses[m.name] ?? m.lens, blocking: m.blocking !== false }));
-  if (!members.length) return null;
+// The member a stage seats when the council section seats none for it: the stage's own verifier, on the CLI and model
+// its own settings give it (the stage runs it as it runs its verifier). It reviews everything (lens `all`).
+// A council's sole member: the stage's own verifier, on its own agent's pool entry (`models.agents.<agent>`). The PR
+// check's is its critic panel, each critic on its own entry.
+export function soleMember(config = {}, stage = null) {
+  const agent = COUNCIL_STAGES[stage]?.agent;
+  let entry = null;
+  if (agent && !agent.includes(' ')) {
+    try {
+      entry = entryFor(config, { name: agent });
+    } catch {
+      entry = null;
+    }
+  }
+  return { name: 'verifier', entry: entry?.name ?? null, cli: entry?.cli ?? null, model: entry?.model ?? null, effort: entry?.effort ?? null, family: entry?.family ?? null, env: entry?.env ?? null, cmd: null, timeoutSec: null, lens: SOLE_LENS, blocking: true, sole: true };
+}
+
+// How many members a stage's council seats: the stage section's `councilMembers`, else `council.members`.
+export function memberCount(config, stage) {
+  const section = COUNCIL_STAGES[stage]?.section;
+  return setting(config, `${section}.councilMembers`) ?? setting(config, 'council.members');
+}
+
+// The entries a council of `count` seats, before the stage's orchestrator picks (GEN-11): one entry per family in pool
+// order first, then the other entries in pool order; entries repeat once every entry has a seat.
+export function poolSeats(pool, count) {
+  const order = [];
+  const families = new Set();
+  for (const e of pool) {
+    if (families.has(familyOf(e))) continue;
+    families.add(familyOf(e));
+    order.push(e);
+  }
+  for (const e of pool) if (!order.includes(e)) order.push(e);
+  return order.length ? Array.from({ length: count }, (_, i) => order[i % order.length]) : [];
+}
+
+// The lens of each seat: the stage's lenses in order (its core lens first), repeating; the `ui` lens goes to a seat whose
+// CLI can drive a browser, else to nobody.
+export function seatLenses(stage, entries) {
+  const order = STAGE_LENSES[stage] ?? Object.keys(COUNCIL_LENSES);
+  const lenses = entries.map((_, i) => order[i % order.length]);
+  const ui = lenses.indexOf('ui');
+  if (ui >= 0 && !canDriveBrowser(entries[ui])) {
+    const j = entries.findIndex((e, k) => k !== ui && canDriveBrowser(e));
+    if (j >= 0) [lenses[ui], lenses[j]] = [lenses[j], lenses[ui]];
+    else return seatLensesWithout(order, 'ui', entries);
+  }
+  return lenses;
+}
+const seatLensesWithout = (order, lens, entries) => {
+  const rest = order.filter((l) => l !== lens);
+  return entries.map((_, i) => rest[i % rest.length]);
+}
+
+// Seat names unique across one sitting: an entry's first seat is its name, a repeated entry's later seats `<entry>-2`,
+// `<entry>-3`, skipping any name already taken (an entry may itself be named `a-2`). runCouncil and the PR check's lens
+// map key members by name, so two seats never share one. `taken` may hold names seated before (the sole `verifier`).
+// Every entry's own name is kept for its first seat, so a repeat of `a` beside an entry named `a-2` is `a-3`, never
+// `a-2`.
+export function seatNames(entries, taken = []) {
+  const used = new Set([...taken, ...entries]);
+  const first = new Set();
+  return entries.map((entry) => {
+    if (!first.has(entry) && !taken.includes(entry)) {
+      first.add(entry);
+      return entry;
+    }
+    let name;
+    for (let n = 2; used.has((name = `${entry}-${n}`)); n++);
+    used.add(name);
+    return name;
+  });
+}
+
+// A seat resolved from its pool entry: { name, entry, cli, model, effort, family, env, cmd, timeoutSec, lens, blocking }.
+// Names come from seatNames.
+export function seatMembers(stage, entries) {
+  const lenses = seatLenses(stage, entries);
+  const names = seatNames(entries.map((e) => e.name));
+  return entries.map((e, i) => {
+    return { name: names[i], entry: e.name, cli: e.cli, model: e.model ?? null, effort: e.effort ?? null, family: familyOf(e), env: e.env ?? null, cmd: e.cli === 'custom' ? e.cmd : null, timeoutSec: e.timeoutSec ?? null, lens: lenses[i], blocking: true };
+  });
+}
+
+// A stage's seats for one ticket, once chosen, are kept across its rounds and on resume:
+// <stateDir>/council/seats/<stage>--<subject>.json, { members: [{ name, entry, lens, blocking }] }. Each seat runs on its
+// pool entry; a kept pick that names an entry the pool no longer has is not used.
+export const seatsFile = (config, stage, subject) => path.join(config.root, setting(config, 'stateDir'), 'council', 'seats', `${stage}--${String(subject).replace(/[^\w.-]/g, '_')}.json`);
+export function savedSeats(config, stage, subject) {
+  if (!subject || !config?.root) return null;
+  const doc = readJson(seatsFile(config, stage, subject), null);
+  if (!Array.isArray(doc?.members) || !doc.members.length) return null;
+  const seat = (m) => {
+    const e = poolOf(config).find((x) => x?.name === m.entry);
+    return e && { name: m.name ?? e.name, entry: e.name, cli: e.cli, model: e.model ?? null, effort: e.effort ?? null, family: familyOf(e), env: e.env ?? null, cmd: e.cli === 'custom' ? e.cmd : null, timeoutSec: e.timeoutSec ?? null, lens: m.lens, blocking: m.blocking !== false, ...(m.exploration ? { exploration: true } : {}) };
+  };
+  // One seat kept: the stage's own verifier on the entry the orchestrator picked (still in the pool; else its agent's
+  // own, and none for the PR check's critic panel, whose critics then run on their own), with its non-blocking shadow
+  // member when one was seated (selection.mjs shadowEntry) and its entry is still in the pool.
+  const shadow = doc.members.find((m) => m.shadow);
+  if (doc.members.length === 1 || shadow) {
+    const picked = doc.members.find((m) => !m.shadow)?.entry;
+    const own = picked && seat({ entry: picked, lens: SOLE_LENS });
+    const sole = own ? { ...soleMember(config, stage), ...own, name: 'verifier', lens: SOLE_LENS, blocking: true, sole: true } : soleMember(config, stage);
+    const s = shadow && seat(shadow);
+    return s ? [sole, { ...s, lens: SOLE_LENS, blocking: false, shadow: true }] : [sole];
+  }
+  const members = doc.members.map(seat);
+  return members.every(Boolean) ? members : null;
+}
+
+// The council a stage seats: every verifier stage is a council. Its round limit and pass score are the stage section's
+// (`<section>.maxCouncilRounds`, `<section>.councilPassScore`; COUNCIL_STAGES names the section), for any council size.
+// Its size is memberCount; one seat is the stage's own verifier (soleMember), more are filled from `models.pool`
+// (poolSeats, seatMembers). A council of one holds no discussion, has no quorum to apply, and fails its round when the
+// member cannot run.
+export function councilFor(config, stage, { subject = null } = {}) {
+  const c = config?.council ?? {};
+  const section = COUNCIL_STAGES[stage]?.section;
+  if (!section) return null;
+  const count = memberCount(config, stage);
+  const kept = savedSeats(config, stage, subject);
+  const seated = kept ?? (count > 1 ? seatMembers(stage, poolSeats(poolOf(config), count)) : []);
+  const sole = seated.length < 2;
+  // A kept single seat is the stage's own verifier on the entry the orchestrator picked (savedSeats).
+  const members = sole ? (seated.length === 1 ? seated : [soleMember(config, stage)]) : seated;
+  // One deciding member (alone, or beside a shadow): no discussion, no quorum, and a round fails when it cannot run.
+  const alone = members.filter((m) => m.blocking).length < 2;
+  const shadow = members.find((m) => m.shadow)?.name ?? null;
+  const own = { councilIntercom: setting(config, `${section}.councilIntercom`) };
   return {
     stage,
-    rounds: c.stages[stage].rounds ?? c.rounds ?? COUNCIL_DEFAULTS.rounds,
-    passScore: c.passScore ?? COUNCIL_DEFAULTS.passScore,
-    blockOn: c.blockOn ?? COUNCIL_DEFAULTS.blockOn,
-    onUnavailable: c.onUnavailable ?? COUNCIL_DEFAULTS.onUnavailable,
-    intercom: resolveIntercom(c, stage),
+    section,
+    maxCouncilRounds: setting(config, `${section}.maxCouncilRounds`),
+    councilPassScore: setting(config, `${section}.councilPassScore`),
+    blockQuorum: setting(config, 'council.blockQuorum'),
+    onUnavailable: alone ? 'fail' : setting(config, 'council.onUnavailable'),
+    intercom: alone ? { ...resolveIntercom(c, own.councilIntercom), enabled: false } : resolveIntercom(c, own.councilIntercom),
+    sole,
+    // The shadow seat's member name (a non-blocking member beside a council of one), else null.
+    shadow,
     members,
   };
 }
 
-// The round limit of a stage: its council's (council.stages.<stage>.rounds, else council.rounds) when it seats one,
-// otherwise the stage's own setting (`fallback`).
-export const councilRounds = (config, stage, fallback) => councilFor(config, stage)?.rounds ?? fallback;
+// The round limit of a stage (`<section>.maxCouncilRounds`).
+export const councilRounds = (config, stage) => councilFor(config, stage).maxCouncilRounds;
 
 // The model and CLI line of a member, as the PR table and logs show it.
 export const memberLabel = (m) => `${m.name} (${m.cli})`;
@@ -71,17 +199,48 @@ export function skillText(file = SKILL_FILE) {
   }
 }
 
+// The skill's sections a sole member does without: the orchestrator's, the lens table and the discussion (it has no
+// other members to look through a lens for, to work apart from or to talk to), and rule 5 (work alone).
+const SOLE_LEFT_OUT = [/^# Council\n/, /^## Before the council sits/, /^## Seating/, /^## Lenses/, /^## Discussion/, /^## Merging results/, /^## Pull request/, /^## Council review/, /^## By hand/];
+export function soleSkillText(skill) {
+  const sections = String(skill ?? '').split(/^(?=## )/m);
+  return sections
+    .filter((sec) => !SOLE_LEFT_OUT.some((re) => re.test(sec)))
+    // Rule 5 whole: its first line and every line after it up to a blank line or the next numbered rule.
+    .map((sec) => sec.replace(/^5\. \*\*Work alone[^\n]*(?:\n(?!\n|\d+\. )[^\n]*)*\n?/m, '').trimEnd())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 // What a member's task adds to the stage's own task: who it is, its lens, the council's output fields, the disputes it
 // rules on and the skill. The stage's own instructions and AGENT_RESULT contract stay as they are; the lens adds to them.
+// A sole member (a council of one) gets the same rules without the parts that need other members: no seat list, no lens
+// to look through first (it reviews everything), no non-blocking members, no discussion and no orchestrator sections.
+// Beside a shadow seat, the sole member and the shadow both review everything; each is told the other works apart.
 export function memberTask(task, { council, member, round, disputes = '', earlier = '', skill = skillText() }) {
+  const everyLens = member.lens === SOLE_LENS;
+  const sole = council.members.length === 1;
   const seat = council.members.map((m) => `${m.name} (${m.lens}${m.blocking ? '' : ', non-blocking'})`).join(', ');
+  const every = 'the change through every lens (correctness, acceptance, security, test value, a simpler design)';
+  const other = council.members.find((m) => m.name !== member.name)?.name;
+  const who = sole
+    ? `You are the council's only member: you review ${every}.`
+    : everyLens && member.blocking
+      ? `You are the council's only deciding member: you review ${every}. A non-blocking member, ${other}, reviews it apart from you; its findings are feedback only.`
+      : everyLens
+        ? `You are the council's non-blocking shadow member: you review ${every}, apart from its deciding member, ${other}.`
+        : `You are one of ${council.members.length} council members who review this change independently: ${seat}. You are **${member.name}**; your lens is **${member.lens}**: ${COUNCIL_LENSES[member.lens]} Look through it first; report what you find outside it only when it is blocking.`;
+  const pass = sole || (everyLens && member.blocking)
+    ? `Council round ${round} of at most ${council.maxCouncilRounds}. The council passes when you score ${council.councilPassScore}/10 or more and no blocking finding stands.`
+    : `Council round ${round} of at most ${council.maxCouncilRounds}. The council passes when every blocking member scores ${council.councilPassScore}/10 or more and no blocking finding stands.${member.blocking ? '' : ' You are non-blocking: your findings are feedback and your score is not recorded.'}`;
+  const rules = sole || everyLens ? soleSkillText(skill) : skill;
   return [
     task,
     '',
     '## Council member',
     '',
-    `You are one of ${council.members.length} council members who review this change independently: ${seat}. You are **${member.name}**; your lens is **${member.lens}**: ${COUNCIL_LENSES[member.lens]} Look through it first; report what you find outside it only when it is blocking.`,
-    `Council round ${round} of at most ${council.rounds}. The council passes when every blocking member scores ${council.passScore}/10 or more and no blocking finding stands.${member.blocking ? '' : ' You are non-blocking: your findings are feedback and your score is not recorded.'}`,
+    who,
+    pass,
     '',
     // Rule 3 binds the change as much as the review (dogfood C14: a fix added a 9999 per-item quantity limit no line of
     // the ticket asked for, and nothing in the review was charged with noticing).
@@ -90,14 +249,14 @@ export function memberTask(task, { council, member, round, disputes = '', earlie
     '',
     'Keep the instructions and the `AGENT_RESULT` contract above exactly as they are. The council adds these fields to the same JSON object:',
     '',
-    '- `score`: 0-10 for the change against the ticket, through your lens. Leave it out only when you cannot score, and say why in `summary`.',
+    '- `score`: 0-10 for the change against the ticket, through your lens; one decimal place is allowed (for example 9.5). Leave it out only when you cannot score, and say why in `summary`.',
     '- on every finding: `lens`, `severity` (`blocking`, `major` or `minor`; major blocks like blocking where the contract above knows only blocking and minor), `action` (`fix`, `delete-test` or `rewrite`) and `evidence` (file and line, a command and its output, or a screenshot). Keep a finding\'s `id` whenever you raise it again.',
     '- on every finding: `resolves`, what would resolve it: `code` (the production change), `tests` (a missing automated test, or one to remove), `plan` (a test-plan case) or `records` (PR text, records, docs, video); `code and tests` for a finding that needs both. The harness sends it where that work is done: a test gap never goes to the implementer.',
     '- a `delete-test` finding (severity `major`) names the test in `test`, its file in `file`, and in `evidence` the bug that would still be caught without it.',
     '- a `rewrite` finding lists what to delete in `deletes` (files, or `file:start-end` regions the branch added or changed), the new approach in `approach` (five lines or fewer), `why` it is better for this ticket, and the acceptance lines it `covers`.',
     '- `followUps`: `[{"title": "...", "reason": "..."}]` for real problems outside the ticket; they are not findings.',
     ...(disputes ? ['', '### Implementer disputes of findings you raised', '', 'The implementer did not act on these and says why. Rule on each in `disputes: [{"finding": "<id>", "decision": "accepted" | "reasserted", "evidence": "<why>"}]`; re-raise a finding (same id) only with new evidence that the ticket requires it.', '', disputes] : []),
-    ...(skill ? ['', '### The council skill (the rules every member follows)', '', skill.replace(/^#{1,2} /gm, (h) => `#${h}`)] : []),
+    ...(rules ? ['', '### The council skill (the rules every member follows)', '', rules.replace(/^#{1,2} /gm, (h) => `#${h}`)] : []),
   ].join('\n');
 }
 
@@ -130,9 +289,21 @@ export function normalizeFinding(f, member) {
 }
 
 // A score from 0 to 10, or null (the member gave none).
+// A member's score as given: a number (or numeric text) from 0 to 10, to one decimal place. Anything else (missing,
+// empty, not a number, out of range) is no score, which never passes: never read as 0 or as the cap.
+// A stage's verifier time limit: a council member runs this long unless its pool entry sets its own (`timeoutSec`).
+export function stageTimeoutSec(config, stage) {
+  if (stage === 'pairVerify' || stage === 'pairUiVerify') return setting(config, 'implement.timeoutsSec.pairVerifier');
+  if (stage === 'architectureReview') return setting(config, 'architectureReview.timeoutSec');
+  if (stage === 'testPlan' || stage === 'testAutomation') return setting(config, 'featureVerification.timeoutsSec.verifier');
+  return setting(config, 'prCheck.timeoutSec');
+}
+
 export function memberScore(raw) {
-  const n = Number(raw?.score);
-  return raw?.score === undefined || raw?.score === null || raw?.score === '' || !Number.isFinite(n) ? null : Math.max(0, Math.min(10, Math.round(n)));
+  const v = raw?.score;
+  const n = Number(v);
+  if (!((typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(n) && n >= 0 && n <= 10)) return null;
+  return Math.round(n * 10) / 10;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -277,6 +448,8 @@ export async function fillResolves(findings, { member, run: runMember, stage = '
 
 const STOP = new Set('the and for with that this from are was not but can its has have when then given into than any all each only must should will does test tests'.split(' '));
 const words = (t) => new Set((String(t ?? '').toLowerCase().match(/[a-z0-9_]+/g) ?? []).filter((w) => w.length > 2 && !STOP.has(w)));
+// Words close enough that two findings say the same thing (no line or file needed).
+const similarText = (a, b) => similar(a, b, 0.6);
 function similar(a, b, min) {
   const x = words(a);
   const y = words(b);
@@ -319,14 +492,14 @@ export function sameDefect(a, b) {
   return similar(a.text, b.text, 0.6);
 }
 
-const needed = (blockOn, n) => (blockOn === 'all' ? n : blockOn === 'majority' ? Math.floor(n / 2) + 1 : 1);
+const needed = (blockQuorum, n) => (blockQuorum === 'all' ? n : blockQuorum === 'majority' ? Math.floor(n / 2) + 1 : 1);
 
 // Merges the members' results into one council result. Deterministic: findings are clustered in member order;
 // `protect(finding)` (the stage's test protections) returns why a delete-test finding may not be acted on, or null.
 // Returns {
 //   pass, error, score (lowest blocking member score), members (per-member status and score),
 //   findings (merged findings that stand: severity blocking/major; each with `members` and every member's `evidence`),
-//   notes (minor findings, findings blockOn did not uphold, protected and superseded ones, non-blocking feedback),
+//   notes (minor findings, findings blockQuorum did not uphold, protected and superseded ones, non-blocking feedback),
 //   contradictions, rewrites, disputes (merged rulings), followUps, summary }
 // The lines a change added or changed, per file, from `git diff -U0 <base>` (pass it to mergeCouncil as `changed`).
 // changedLines of what a checkout changed since `base` (committed and uncommitted); null when git cannot say.
@@ -410,7 +583,7 @@ export function hasEvidence(f, root = null) {
 
 // `intercom` is a discussion's result (intercom.mjs). A finding it disposed of (by its `<seat>:<n>` key, `intercomId`) is
 // taken out before clustering: dropped, noted or withdrawn, held for the owner, or awaiting a ruling. It never joins a
-// cluster, blockOn or a severity; it stays as a note with its `disposition`, and still explains its member's low score.
+// cluster, blockQuorum or a severity; it stays as a note with its `disposition`, and still explains its member's low score.
 // The earlier disposition wins (a vote, then a later withdrawal: the vote). Revised scores replace round-1 scores. A
 // discussion with a read-only violation fails the council.
 export function mergeCouncil(council, results, { protect = null, feedback = [], violation = null, changed = null, earlier = null, root = null, adjudications = null, intercom = null } = {}) {
@@ -451,44 +624,63 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     error = `council member(s) unavailable: ${unavailable.filter((r) => r.member.blocking).map((r) => `${r.member.name} (${r.member.cli}): ${r.reason}`).join('; ')} (council.onUnavailable is fail; no other model is substituted)`;
   }
   if (!error && !okBlocking.length) error = `no blocking council member gave a result (${results.filter((r) => r.member.blocking).map((r) => `${r.member.name}: ${r.status}${r.reason ? ` (${r.reason})` : ''}`).join('; ')})`;
-  const base = { members, unavailable: unavailable.map((r) => ({ name: r.member.name, cli: r.member.cli, reason: r.reason })), blockOn: council.blockOn, passScore: council.passScore };
+  const base = { members, unavailable: unavailable.map((r) => ({ name: r.member.name, cli: r.member.cli, reason: r.reason })), blockQuorum: council.blockQuorum, passScore: council.councilPassScore };
   if (error) return { ...base, pass: false, error, score: null, findings: [], notes: [], contradictions: [], rewrites: [], disputes: [], followUps: [], summary: error };
 
-  // Cluster same-defect findings across members.
+  // Cluster same-defect findings across members: the blocking members' first, then the non-blocking members'. A
+  // non-blocking member's finding is feedback unless a blocking member raised the same, so it joins a blocking cluster
+  // only on evidence that it is the same defect (the same id, or similar words), never on nearby lines alone: two
+  // different defects on one line would otherwise merge, and the feedback finding would be credited with the blocking
+  // one (and lend it its text).
   const clusters = [];
   const disposed = [];
-  for (const r of ok) {
+  const blockingFirst = [...ok.filter((r) => r.member.blocking), ...ok.filter((r) => !r.member.blocking)];
+  const blockingNames0 = new Set(ok.filter((r) => r.member.blocking).map((r) => r.member.name));
+  const sameAsBlocking = (y, f) => (blockingNames0.has(y.member) && !blockingNames0.has(f.member) ? Boolean(str(y.id) && str(y.id) === str(f.id)) || similarText(y.text, f.text) : sameDefect(y, f));
+  for (const r of blockingFirst) {
     for (const f of r.findings) {
       if (fate.has(f.intercomId)) {
         disposed.push(f);
         continue;
       }
-      const c = clusters.find((x) => x.items.some((y) => sameDefect(y, f)) && !x.items.some((y) => y.member === f.member));
+      const c = clusters.find((x) => x.items.some((y) => sameAsBlocking(y, f)) && !x.items.some((y) => y.member === f.member));
       if (c) c.items.push(f);
       else clusters.push({ items: [f] });
     }
   }
-  const threshold = needed(council.blockOn, okBlocking.length);
+  const threshold = needed(council.blockQuorum, okBlocking.length);
   const blockingNames = new Set(okBlocking.map((r) => r.member.name));
   const merged = clusters.map((c) => {
-    const first = c.items[0];
+    // The deciding (blocking) members' items alone decide the finding: its id, its evidence, whether it has any (rule 4)
+    // and so its severity. A non-blocking member's corroboration is kept in memberEvidence for the record, never as
+    // evidence (council r4, sol-11: a shadow's evidence turned the deciding member's evidence-less finding into a
+    // standing one).
+    const deciding = c.items.filter((f) => blockingNames.has(f.member));
+    const basis = deciding.length ? deciding : c.items;
+    const first = basis[0];
     const raisers = [...new Set(c.items.map((f) => f.member))];
     const backing = [...new Set(c.items.filter((f) => blockingNames.has(f.member) && f.severity !== 'minor').map((f) => f.member))];
     const worst = c.items.filter((f) => blockingNames.has(f.member)).map((f) => f.severity).sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b])[0] ?? 'minor';
-    const actions = [...new Set(c.items.map((f) => f.action))];
+    const actions = [...new Set(basis.map((f) => f.action))];
     const upheld = worst !== 'minor' && backing.length >= threshold;
     const out = {
       ...first,
-      id: c.items.map((f) => str(f.id)).find(Boolean) || undefined,
+      id: basis.map((f) => str(f.id)).find(Boolean) || undefined,
       severity: upheld ? worst : 'minor',
       members: raisers,
       upheldBy: upheld ? backing : [],
-      evidence: c.items.map((f) => (f.evidence ? `${f.member}: ${f.evidence}` : '')).filter(Boolean).join('\n') || first.evidence,
+      evidence: basis.map((f) => (f.evidence ? `${f.member}: ${f.evidence}` : '')).filter(Boolean).join('\n') || first.evidence,
       memberEvidence: c.items.map((f) => ({ member: f.member, evidence: f.evidence, text: f.text, action: f.action, severity: f.severity, file: f.file ?? null, line: f.line ?? null, ...(str(f.kind) ? { kind: str(f.kind) } : {}) })),
     };
-    if (!upheld && worst !== 'minor') out.notUpheld = `raised by ${backing.join(', ')}; council.blockOn "${council.blockOn}" needs ${threshold} blocking member(s)`;
+    if (!upheld && worst !== 'minor') out.notUpheld = `raised by ${backing.join(', ')}; council.blockQuorum "${council.blockQuorum}" needs ${threshold} blocking member(s)`;
+    // Raised by non-blocking members only (the shadow seat): feedback, in every stage. It never enters a verdict, a
+    // severity raise (raiseUserErrors) or a PR check debate and ruling; it is recorded, and reaches a producer as a note.
+    if (!c.items.some((f) => blockingNames0.has(f.member))) {
+      out.feedback = true;
+      delete out.notUpheld;
+    }
     // Rule 4: no member of the cluster gave evidence. A question for the record, never a fix cycle.
-    if (out.severity !== 'minor' && !c.items.some((f) => hasEvidence(f, root))) {
+    if (out.severity !== 'minor' && !basis.some((f) => hasEvidence(f, root))) {
       out.severity = 'minor';
       out.upheldBy = [];
       out.notUpheld = 'evidence or nothing (rule 4): no file and line, command output or screenshot backs it; it is a question, not a blocking finding';
@@ -552,7 +744,7 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     }
     // Two members ask opposite things of the same test: neither position is picked silently.
     if (actions.includes('delete-test') && actions.includes('fix')) {
-      out.contested = c.items.map((f) => ({ member: f.member, action: f.action, evidence: f.evidence || f.text }));
+      out.contested = basis.map((f) => ({ member: f.member, action: f.action, evidence: f.evidence || f.text }));
     }
     return out;
   });
@@ -617,18 +809,19 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
   for (const f of merged) if (f.severity === 'minor' || f.supersededBy) notes.push(f);
   for (const r of feedback) for (const f of r.findings ?? []) notes.push({ ...normalizeFinding(f, r.member), severity: 'minor', feedback: true });
 
-  // Pass: every blocking member scores passScore or more and no blocking finding stands. A blocking member's low score
-  // counts unless every non-minor finding it raised was outvoted by blockOn; a low score with no blocking finding at
-  // all is a finding of its own (the member must say what is wrong).
+  // Pass: every blocking member scores passScore or more and no blocking finding stands. A blocking member with no score
+  // does not pass. A low score counts unless every non-minor finding it raised was ruled not upheld by the merge
+  // (outvoted by blockQuorum, settled by an adjudication or an earlier round, or a question for want of evidence): one
+  // member's score never overturns those rulings. A low score, or no score, with no finding of the member's behind it is
+  // a finding of its own (the member must say what is wrong).
   const low = [];
   for (const r of okBlocking) {
-    const passes = r.score == null ? r.verdict === 'APPROVED' : r.score >= council.passScore;
-    if (passes) continue;
+    if (r.score != null && r.score >= council.councilPassScore) continue;
     const raised = merged.filter((f) => f.members.includes(r.member.name) && f.memberEvidence.some((e) => e.member === r.member.name && e.severity !== 'minor'));
-    if (raised.length && raised.every((f) => f.notUpheld)) continue;
+    if (r.score != null && raised.length && raised.every((f) => f.notUpheld)) continue;
     low.push(r);
-    if (!raised.length) {
-      standing.push({ id: `council-${r.member.name}-score`, member: r.member.name, members: [r.member.name], upheldBy: [r.member.name], lens: r.member.lens, severity: 'blocking', action: 'fix', file: null, line: null, text: `${r.member.name} scored ${r.score ?? 'no score'}/10 (below ${council.passScore}) without a blocking finding`, issue: `${r.member.name} scored ${r.score ?? 'no score'}/10 (below ${council.passScore}) without a blocking finding: ${str(r.summary) || 'no reason given'}`, evidence: str(r.summary), harness: true });
+    if (!raised.some((f) => !f.notUpheld)) {
+      standing.push({ id: `council-${r.member.name}-score`, member: r.member.name, members: [r.member.name], upheldBy: [r.member.name], lens: r.member.lens, severity: 'blocking', action: 'fix', file: null, line: null, text: `${r.member.name} ${r.score == null ? 'gave no score' : `scored ${r.score}/10`} (the pass score is ${council.councilPassScore}) without a standing blocking finding`, issue: `${r.member.name} ${r.score == null ? 'gave no score' : `scored ${r.score}/10`} (the pass score is ${council.councilPassScore}) without a standing blocking finding: ${str(r.summary) || 'no reason given'}`, evidence: str(r.summary), harness: true });
     }
   }
   const missing = results.filter((r) => r.member.blocking && r.status !== 'ok');
@@ -709,7 +902,7 @@ const ANSWER = (a) => {
 // The adjudication of one objection: covered only when every blocking member of the stage's council answered exactly
 // "yes" with evidence, once. A "no", a missing answer (an unavailable or failed member, or no answer for this objection),
 // anything but a plain yes or no, a yes without evidence, or two different answers from one member: the objection stands.
-// blockOn is honoured by asking only the blocking members and needing all of them: a single blocking member can uphold a
+// blockQuorum is honoured by asking only the blocking members and needing all of them: a single blocking member can uphold a
 // finding under "any", so a single one can keep an objection standing; under "majority" or "all" the objection was
 // already upheld by that many, and accepting it as covered still takes every one (the strict side of every rule).
 export function adjudicationOutcome(council, answers = []) {
@@ -815,7 +1008,7 @@ export function recordAdjudication(config, { stage, story, step = null, round, c
     story,
     ...(step ? { step } : {}),
     round,
-    blockOn: council.blockOn,
+    blockQuorum: council.blockQuorum,
     members: results.map((r) => ({ name: r.member.name, cli: r.member.cli, model: r.member.model ?? null, lens: r.member.lens, login: memberLogin(r.member), blocking: true, status: r.status, attempts: r.attempts ?? 1, seconds: r.seconds ?? null, ...(r.reason ? { reason: String(r.reason).slice(0, 300) } : {}) })),
     ...(violation ? { error: String(violation).slice(0, 300) } : {}),
     items: adjudicated.map((a) => ({ file: a.file, line: a.line, earlier: a.earlier, outcome: a.outcome, acceptedBy: a.acceptedBy, rejectedBy: a.rejectedBy, missing: a.missing, ambiguous: a.ambiguous })),
@@ -1130,7 +1323,7 @@ function mergeRulings(ok, merged) {
 
 function summarize(council, members, standing, notes, contradictions, pass) {
   const scores = members.filter((m) => m.blocking).map((m) => `${m.name} ${m.status === 'ok' ? `${m.score ?? 'no score'}${m.score != null ? '/10' : ''}` : m.status}`).join(', ');
-  return `Council (${council.stage}, blockOn ${council.blockOn}, pass ${council.passScore}/10): ${pass ? 'passed' : 'not passed'}; ${scores}; ${standing.length} finding(s) stand, ${notes.length} note(s)${contradictions.length ? `, ${contradictions.length} contradiction(s) between members` : ''}.`;
+  return `Council (${council.stage}, blockQuorum ${council.blockQuorum}, pass ${council.councilPassScore}/10): ${pass ? 'passed' : 'not passed'}; ${scores}; ${standing.length} finding(s) stand, ${notes.length} note(s)${contradictions.length ? `, ${contradictions.length} contradiction(s) between members` : ''}.`;
 }
 
 // The disputes block for one member: only the disputes of findings it raised.
@@ -1160,7 +1353,7 @@ const caseIdsOf = (text) => [...String(text ?? '').matchAll(/\b(TC-[A-Za-z][A-Za
 
 // The plan cases of a story's test plan: { id, covers: [...], keptFor }.
 export function planCases(root, plansDir, key) {
-  const dir = path.join(root, plansDir ?? '.factory/plans', key);
+  const dir = path.join(root, plansDir ?? setting({}, 'featureVerification.plansDir'), key);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((f) => /^TC-.*\.md$/.test(f)).map((f) => {
     const { data } = parseFrontMatter(fs.readFileSync(path.join(dir, f), 'utf8'));
@@ -1194,20 +1387,28 @@ export function testProtection(f, { keys = [], cases = [] } = {}) {
 // ---------------------------------------------------------------------------------------------
 
 // One council round to council-rounds.jsonl and the decision log.
-export function recordCouncilRound(config, { stage, story, step = null, round, council, merged }) {
+// `stories`: every ticket a shared check covers (a PR check of --stories A,B); its council sat on each of them.
+export function recordCouncilRound(config, { stage, story, step = null, check = null, stories = null, round, council, merged, selfRecorded = [] }) {
   const rec = {
     ts: nowIso(),
     stage,
     story,
     ...(step ? { step } : {}),
+    // A PR check's run id: its rounds, findings and usage join on it (ids and round numbers start again in each check).
+    ...(check ? { check } : {}),
+    ...(stories?.length > 1 ? { stories } : {}),
     round,
-    rounds: council.rounds,
-    passScore: council.passScore,
-    blockOn: council.blockOn,
+    rounds: council.maxCouncilRounds,
+    passScore: council.councilPassScore,
+    blockQuorum: council.blockQuorum,
     pass: Boolean(merged.pass),
     ...(merged.error ? { error: String(merged.error).slice(0, 500) } : {}),
     score: merged.score ?? null,
-    members: merged.members,
+    // Each member with its pool entry, model and family (misses count against them; the scorecard keys rows by model).
+    members: (merged.members ?? []).map((m) => {
+      const seat = (council.members ?? []).find((x) => x.name === m.name) ?? {};
+      return { ...m, entry: seat.entry ?? null, model: seat.model ?? null, family: seat.family ?? null };
+    }),
     standing: (merged.findings ?? []).length,
     notes: (merged.notes ?? []).length,
     contradictions: (merged.contradictions ?? []).length,
@@ -1220,6 +1421,9 @@ export function recordCouncilRound(config, { stage, story, step = null, round, c
   };
   try {
     appendJsonl(metricsFile(config, COUNCIL_FILE), rec);
+    // The round's findings and the outcomes it settles (council-findings.jsonl). The PR check records its own, with
+    // the judge's rulings (pr-check loop).
+    if (stage !== 'prCheck') recordRoundFindings(config, { stage, story, step, round, council, merged, selfRecorded });
     logDecision(config, {
       stage: `council-${stage}`,
       story,
@@ -1358,37 +1562,37 @@ export const versionAtLeast = (v, min) => {
 const defaultVersionOf = (cmd, env) => spawnSync(cmd, ['--version'], { env, encoding: 'utf8', timeout: 60_000 }).stdout ?? '';
 
 export function councilDoctorRows(config, { probe, env = process.env, home = env.HOME ?? '', versionOf = defaultVersionOf } = {}) {
-  const c = config?.council;
-  if (!c?.stages) return [];
-  const seated = new Set(Object.keys(c.stages).flatMap((s) => seatedNames(c, s)));
-  const rows = [];
-  for (const m of (c.members ?? []).filter((x) => seated.has(x.name))) {
+  const pool = poolOf(config);
+  // The entries something runs on: an agent's own, the first seats of every stage's council, the planner's choices.
+  const used = new Set([...Object.values(setting(config, 'models.agents') ?? {}), ...subtaskModels(config), ...Object.keys(COUNCIL_STAGES).flatMap((s) => (memberCount(config, s) > 1 ? poolSeats(pool, memberCount(config, s)).map((e) => e.name) : []))]);
+  const rows = [[`council seats per stage`, true, Object.keys(COUNCIL_STAGES).map((s) => `${s} ${memberCount(config, s)}`).join(', ')]];
+  for (const m of pool) {
     const login = memberLogin(m);
-    const label = `council member ${m.name} (${m.cli}${m.model ? `, ${m.model}` : ''}${login === 'default' ? '' : `, ${login}`})`;
+    const label = `pool entry ${m.name} (${m.cli}${m.model ? `, ${m.model}` : ''}, family ${familyOf(m)}${login === 'default' ? '' : `, ${login}`})`;
+    // An entry nothing runs on is listed, never a failure.
+    const row = (what, ok, detail) => rows.push([`${label}: ${what}`, ok || !used.has(m.name), ok || used.has(m.name) ? detail : `${detail} (no agent or council seat uses this entry)`]);
     let menv;
     try {
       menv = { ...env, ...agentEnv(m.env, env) };
     } catch (error) {
-      rows.push([`${label}: environment`, false, error.message]);
+      row('environment', false, error.message);
       continue;
     }
     if (m.cli === 'custom') {
       const bin = String(m.cmd ?? '').trim().split(/\s+/)[0];
-      rows.push([`${label}: command installed`, Boolean(bin) && probe('sh', ['-c', `command -v ${JSON.stringify(bin)}`], menv), m.cmd]);
+      row('command installed', Boolean(bin) && probe('sh', ['-c', `command -v ${JSON.stringify(bin)}`], menv), m.cmd);
       continue;
     }
     const p = CLI_PROBES[m.cli];
     const installed = probe(...p.installed, menv);
-    rows.push([`${label}: CLI installed`, installed, installed ? '' : `\`${p.installed[0]}\` is not on PATH; the council does not substitute another model (council.onUnavailable ${c.onUnavailable ?? 'fail'})`]);
+    row('CLI installed', installed, installed ? '' : `\`${p.installed[0]}\` is not on PATH; the council does not substitute another model (council.onUnavailable ${setting(config, 'council.onUnavailable')})`);
     if (installed && m.cli === 'codex') {
       const v = String(versionOf('codex', menv)).trim();
       const ok = versionAtLeast(v, CODEX_MIN_VERSION);
-      rows.push([`${label}: CLI version runs the factory guard`, ok, ok ? v : `${v || 'unknown version'}: codex ${CODEX_MIN_VERSION} or later is needed for the inline PreToolUse guard (-c hooks.PreToolUse with --dangerously-bypass-hook-trust); update codex`]);
+      row('CLI version runs the factory guard', ok, ok ? v : `${v || 'unknown version'}: codex ${CODEX_MIN_VERSION} or later is needed for the inline PreToolUse guard (-c hooks.PreToolUse with --dangerously-bypass-hook-trust); update codex`);
     }
     const signedIn = !installed ? false : p.signedIn ? probe(...p.signedIn, menv) : Boolean(menv.COPILOT_GITHUB_TOKEN || menv.GH_TOKEN || menv.GITHUB_TOKEN || fs.existsSync(menv.COPILOT_HOME ?? path.join(home, '.copilot')));
-    rows.push([`${label}: signed in`, signedIn, signedIn ? '' : `sign in to ${m.cli}${login === 'default' ? '' : ` with ${login}`} on this machine`]);
-    const id = config.agent?.modelIds?.[m.cli]?.[m.model];
-    rows.push([`${label}: model resolves`, Boolean(id), id ? `${m.model} -> ${id}` : `agent.modelIds.${m.cli}.${m.model} is missing`]);
+    row('signed in', signedIn, signedIn ? '' : `sign in to ${m.cli}${login === 'default' ? '' : ` with ${login}`} on this machine`);
   }
   return rows;
 }
@@ -1468,13 +1672,16 @@ export const COUNCIL_MEMBER_SCRIPT = path.join(path.dirname(fileURLToPath(import
 
 // Starts a member as its own detached process (council-member.mjs) and resolves with its run result when its result file
 // appears. A member still running when the stage's process exits keeps running and leaves the file for the next round.
-// `dir` is the stage's council folder for the story; `stageDir` the stage's config folder (loadConfig).
-export function runDetachedMember({ root, stageDir, dir, round, member, run: runOpts, pollMs = 300, spawnImpl = null }) {
+// `dir` is the stage's council folder for the story; `stageDir` the stage's config folder (loadConfig). `hold: false`
+// when nobody waits for the member (a non-blocking member with no discussion): its poll then never keeps the stage's
+// process alive, so the stage ends with its blocking members.
+// `record`: what its run records its findings under when it finishes (findings.mjs recordFeedback), for a non-blocking member.
+export function runDetachedMember({ root, stageDir, dir, round, member, run: runOpts, pollMs = 300, spawnImpl = null, hold = true, record = null }) {
   fs.mkdirSync(dir, { recursive: true });
   const out = path.join(dir, `r${round}-${member.name}.result.json`);
   const job = path.join(dir, `r${round}-${member.name}.job.json`);
   fs.rmSync(out, { force: true });
-  fs.writeFileSync(job, JSON.stringify({ root, stage: stageDir, round, member: member.name, memberEnv: member.env ?? null, out, run: runOpts }));
+  fs.writeFileSync(job, JSON.stringify({ root, stage: stageDir, round, member: member.name, out, run: runOpts, ...(record ? { record } : {}) }));
   const start = spawnImpl ?? ((cmd, args, opts) => import('node:child_process').then(({ spawn }) => spawn(cmd, args, opts).unref()));
   return Promise.resolve(start(process.execPath, [COUNCIL_MEMBER_SCRIPT, job], { cwd: root, detached: true, stdio: 'ignore', env: process.env, windowsHide: true })).then(
     () =>
@@ -1492,7 +1699,8 @@ export function runDetachedMember({ root, stageDir, dir, round, member, run: run
               // still being renamed into place
             }
           }
-          setTimeout(tick, pollMs);
+          const timer = setTimeout(tick, pollMs);
+          if (!hold) timer.unref?.();
         };
         tick();
       }),
@@ -1525,24 +1733,11 @@ export function takeLate(dir, round, members, parse) {
 // Per-member (and per-role) environment
 // ---------------------------------------------------------------------------------------------
 
-// An `env` map (council member or implement role; validated by council-config.mjs envProblems) as the variables its CLI
-// process gets: `${NAME}` from this process's environment (an unset one stops the run, as the metrics sink does) and a
-// leading `~` as the home folder.
-export function agentEnv(envMap, env = process.env, home = os.homedir()) {
-  const out = {};
-  for (const [k, v] of Object.entries(envMap ?? {})) {
-    const expanded = String(v).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => {
-      if (env[name] == null) throw new Error(`env.${k} needs the environment variable ${name}, which is not set`);
-      return env[name];
-    });
-    out[k] = expanded === '~' || expanded.startsWith('~/') ? path.join(home, expanded.slice(1)) : expanded;
-  }
-  return out;
-}
 
-// The variables a council member's agent run gets: its name (for the guards and fake agents) and its own `env`.
+// The variables a council member's agent run gets: its seat name (for the guards and fake agents) and its login label.
 // The member's name and login label also reach its usage rows (agents.mjs reads them back from the run's environment).
-export const memberRunEnv = (m) => ({ PIPELINE_COUNCIL_MEMBER: m.name, PIPELINE_COUNCIL_LOGIN: memberLogin(m), ...agentEnv(m.env) });
+// The entry's own `env` reaches the run through its pool entry (agents.mjs).
+export const memberRunEnv = (m) => ({ PIPELINE_COUNCIL_MEMBER: m.name, PIPELINE_COUNCIL_LOGIN: memberLogin(m), ...(m.lens ? { PIPELINE_COUNCIL_LENS: m.lens } : {}) });
 
 // Which login a member's CLI used, for the metrics and the PR table: the CLI's home-folder variable as configured (never
 // expanded, so no path or secret is recorded beyond what the settings say), or "default".

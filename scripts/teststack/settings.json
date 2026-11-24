@@ -1,0 +1,13 @@
+{
+  "$comment": "What every setting in the `teststack` section does, its type and allowed values; defaults are in config.json beside this file (the section itself). See scripts/pipeline/lib/settings.mjs.",
+  "teststack.scenariosDir": { "does": "The folder where test data scenarios are written and loaded from.", "type": "string", "allowed": "a folder relative to the repository" },
+  "teststack.baseScenario": { "does": "The scenario loaded before every scenario (`null`: none).", "type": "string", "nullable": true, "readBy": "scripts/teststack/lib/load.mjs" },
+  "teststack.defaultScenario": { "does": "The scenario `teststack up` loads.", "type": "string", "readBy": "scripts/teststack/teststack.mjs" },
+  "teststack.stores": { "does": "The data stores and how a scenario loads into each ([test stack](test-stack.md)).", "type": "map", "items": "object" },
+  "teststack.infrastructureServices": { "does": "Compose services that must run but are not the application.", "type": "list", "items": "service name", "readBy": "scripts/teststack/lib/readiness.mjs" },
+  "teststack.services": { "does": "The application's compose services, with the URL that proves each is ready.", "type": "list", "items": "object" },
+  "teststack.restartAfterLoad": { "does": "Services that cache state a scenario load invalidates.", "type": "list", "items": "any", "allowed": "service names, or `{ service, when, sequences }`" },
+  "teststack.commands": { "does": "Extra test stack commands: name to module.", "type": "map", "items": "string" },
+  "teststack.timeoutSec": { "does": "How long a test stack command, such as loading a scenario, may take.", "type": "integer", "min": 1, "unit": "seconds", "readBy": "scripts/teststack/teststack.mjs" },
+  "teststack.healAfterSec": { "does": "How long a service may stay unready while its stores are healthy before it is restarted once (0: never).", "type": "integer", "min": 0, "unit": "seconds", "readBy": "scripts/teststack/lib/readiness.mjs" }
+}

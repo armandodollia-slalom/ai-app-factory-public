@@ -21,6 +21,7 @@ import { legacyRoot, legacyTicket } from './legacy.mjs';
 import { metaFor, parseBody, parseLegacyBody, sha256 } from './ticket-format.mjs';
 import { withoutNotes } from '../../pipeline/lib/stories.mjs';
 import { resetTrackers, trackerFor } from './trackers/index.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 export class TicketError extends Error {
   constructor(code, message) {
@@ -169,7 +170,7 @@ export function sourceOfIssue(config, issue, key, { run = exec, gh = defaultGh }
   if (!tr.traits?.blockBody) {
     const parsed = tr.format.parse({ ...issue, key, id: issue.number });
     if (parsed.legacy) {
-      const type = issue.labels.includes(config.board?.epicLabel ?? 'epic') ? 'epic' : issue.labels.includes(config.board?.spikeLabel ?? 'spike') ? 'spike' : issue.labels.includes('bug') || key.startsWith('BUG-') ? 'bug' : 'story';
+      const type = issue.labels.includes(setting(config, 'board.epicLabel')) ? 'epic' : issue.labels.includes(setting(config, 'board.spikeLabel')) ? 'spike' : issue.labels.includes('bug') || key.startsWith('BUG-') ? 'bug' : 'story';
       return { content: parsed.content, meta: { ...metaFor({ key, type, title: issue.title, slug: null }, parsed.content), native: true }, legacy: false, edited: false };
     }
     return { content: parsed.content, meta: parsed.meta, legacy: false, edited: parsed.edited };

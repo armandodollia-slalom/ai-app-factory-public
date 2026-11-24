@@ -5,6 +5,7 @@
 import { globsOverlap } from './plan.mjs';
 import { dedupeFollowUps, followUpLine } from './follow-ups.mjs';
 import { sideEffectsSection } from './side-effects.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 const fence = (text, lang = '') => `\`\`\`\`${lang}\n${String(text ?? '').replace(/\r\n/g, '\n').trimEnd()}\n\`\`\`\``;
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -53,10 +54,10 @@ export const isBugTicket = (t) => t?.type === 'bug' || /^BUG-\d+$/i.test(t?.key 
 //
 // A feature epic (not mostly bugs) is split by `prSplit` (implement.epic.prSplit, `--pr-split`): "epic" (default) one PR
 // for the epic; "story" one PR per story; "groups" PRs of stories the orchestrator groups (validated by the harness as
-// bug-epic groups are, at most implement.epic.maxStoriesPerGroup stories each). Its groups are feature units
+// bug-epic groups are, at most implement.epic.maxTicketsPerGroup tickets each). Its groups are feature units
 // (`feature: true`): feature branches, no bug-fix rating, cross-story journeys verified on one group (journeyGroup).
 export const PR_SPLITS = ['epic', 'story', 'groups'];
-export function deliveryShape(tickets, grouping = 'auto', prSplit = 'epic') {
+export function deliveryShape(tickets, grouping = defaultSettings().implement.epic.grouping, prSplit = defaultSettings().implement.epic.prSplit) {
   if (grouping === 'epic') return { kind: 'epic' };
   if (grouping === 'ticket') return { kind: 'groups', planned: false };
   const bugs = tickets.filter(isBugTicket).length;
@@ -109,7 +110,7 @@ const prerequisites = (story, note) => [...new Set([...(story?.blockedBy ?? []),
 // Validates the orchestrator's PR groups: every ticket in exactly one group, at most `maxPerGroup`
 // tickets per group (only when a positive cap is configured; none by default), and a ticket's Blocked-by
 // tickets (and the note's dependsOn) in the same group or an earlier one.
-export function validateGroups(raw, { stories, maxPerGroup = null, note = null, capName = 'maxBugsPerGroup' }) {
+export function validateGroups(raw, { stories, maxPerGroup = null, note = null, capName = 'implement.epic.maxTicketsPerGroup' }) {
   const errors = [];
   const known = new Map(stories.map((s) => [s.key, s]));
   const seen = new Map();
@@ -315,7 +316,7 @@ export function validateNote(raw, { keys, groups = false, stories: tickets = nul
   // back to one PR per ticket instead of failing the epic.
   let groupErrors = [];
   if (groups) {
-    const g = validateGroups(raw.prGroups, { stories: tickets ?? keys.map((key) => ({ key, blockedBy: [] })), maxPerGroup, note, capName: featureGroups ? 'implement.epic.maxStoriesPerGroup' : 'maxBugsPerGroup' });
+    const g = validateGroups(raw.prGroups, { stories: tickets ?? keys.map((key) => ({ key, blockedBy: [] })), maxPerGroup, note, capName: 'implement.epic.maxTicketsPerGroup' });
     note.prGroups = g.groups;
     groupErrors = g.errors;
   }
@@ -374,19 +375,19 @@ export function noteMarkdown(note, { epic }) {
 }
 
 // The decision log record of an epic plan attempt (stage implement-epic-plan).
-export function epicPlanDecision({ epic, attempt, accepted, errors = [], note = null, agent = {}, decisionId = null }) {
+export function epicPlanDecision({ epic, attempt, accepted, errors = [], note = null, agent: run = {}, decisionId = null }) {
   return {
     stage: EPIC_PLAN_STAGE,
     story: epic.key,
     round: attempt,
     agent: 'implementer',
-    agentVer: agent.version ?? null,
+    agentVer: run.version ?? null,
     subject: 'implementer',
     decision: accepted ? 'plan-written' : 'plan-rejected',
     reason: accepted ? note?.summary ?? null : errors[0] ?? null,
     decision_id: decisionId,
     rejection_reasons: accepted ? [] : errors,
-    orchestrator: { cli: agent.cli ?? null, model: agent.model ?? null },
+    orchestrator: { cli: run.cli ?? null, model: run.model ?? null },
     foundation: note?.foundation ? { goal: note.foundation.goal, owns: note.foundation.owns } : null,
     journeys: (note?.journeys ?? []).map((j) => ({ id: j.id, stories: j.stories })),
     items: (note?.stories ?? []).map((s) => ({ id: s.key, owns: s.owns, dependsOn: s.dependsOn, reason: s.notes })),

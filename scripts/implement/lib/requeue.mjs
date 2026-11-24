@@ -9,13 +9,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isProcessAlive, lockHolder, acquireLock, releaseLock, nowIso, readJson, writeJson } from '../../pipeline/lib/util.mjs';
 import { batchFile, runsDir } from './implement.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 export const requeueLockFile = (config) => path.join(runsDir(config), 'requeue.lock');
 export const lastRequeueFile = (config) => path.join(runsDir(config), 'requeue-last.json');
 // The agent provider outage marker of an implement run (D12, scripts/pipeline/lib/outage.mjs).
 export const outageFile = (config) => path.join(runsDir(config), 'agent-outage.json');
 
-const DEFAULTS = { outageCooldownMin: 60 };
+const DEFAULTS = defaultSettings().implement.requeue;
 const settings = (config) => ({ ...DEFAULTS, ...(config.implement?.requeue ?? {}) });
 
 // Why a requeue must not start a batch now, or null.
@@ -29,7 +30,7 @@ export function blockedReason(config, { now = Date.now() } = {}) {
   }
   const outage = readJson(outageFile(config), null);
   const at = Date.parse(outage?.at ?? '');
-  if (outage && (!at || now - at < settings(config).outageCooldownMin * 60_000)) return `the agent provider is unavailable (${outage.cli ?? 'agent'}: ${outage.reason ?? 'outage'}, since ${outage.at ?? '?'})`;
+  if (outage && (!at || now - at < settings(config).outageCooldownSec * 1000)) return `the agent provider is unavailable (${outage.cli ?? 'agent'}: ${outage.reason ?? 'outage'}, since ${outage.at ?? '?'})`;
   return null;
 }
 

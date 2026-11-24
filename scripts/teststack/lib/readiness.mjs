@@ -126,7 +126,7 @@ export const publicCheck = ({ name, ok, detail }) => ({ name, ok, detail });
 
 /**
  * Polls until every check passes or the timeout runs out. A service whose container runs but whose own checks
- * keep failing for `healAfterSeconds` while the stores are healthy is restarted once (a consumer that failed
+ * keep failing for `healAfterSec` while the stores are healthy is restarted once (a consumer that failed
  * to connect at startup and never retries).
  */
 export async function wait(ctx, timeoutSec, { pollMs = 500, now = Date.now } = {}) {
@@ -151,7 +151,7 @@ export async function wait(ctx, timeoutSec, { pollMs = 500, now = Date.now } = {
 }
 
 async function heal(ctx, checks, unreadySince, healed, elapsed) {
-  const after = ctx.config.healAfterSeconds;
+  const after = ctx.config.healAfterSec;
   if (!(after > 0)) return;
   const storesReady = checks.filter(c => c.kind === 'store').every(c => c.ok);
   for (const service of ctx.config.services) {

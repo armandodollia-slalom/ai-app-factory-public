@@ -1,5 +1,5 @@
 // The harness fix loop of a slot (the pair rounds' main use): auto-fix, run the tools on what the change touched, and
-// hand the provable findings back to the implementer, up to `analysis.fixLoop.bounces` times. A bounce is not a pair
+// hand the provable findings back to the implementer, up to `analysis.maxFixRounds` times. A bounce is not a pair
 // or council round. What is open after the budget is the report's `findings`: they reach the members as harness
 // findings (report.mjs toolFindings). One report is written for the final head commit.
 import { appendJsonl, nowIso } from '../util.mjs';
@@ -11,6 +11,7 @@ import { readReport, reportsDir, staticAnalysisSection, writeReport, fixTaskText
 import fs from 'node:fs';
 import { autoFix, recordPrefixes, runSlot, slotHash, touchedFiles, uncommittedInScope } from './runner.mjs';
 import { isTestFile, testRunners } from '../../../feature-verification/lib/runners.mjs';
+import { setting } from '../settings.mjs';
 
 export const FINDINGS_FILE = 'analysis-findings.jsonl';
 export const RUNS_FILE = 'analysis-runs.jsonl';
@@ -182,7 +183,6 @@ export function analysedAncestor(config, cwd, sha, { base = null } = {}) {
 }
 
 // Where feature verification keeps scenarios when the config does not say (scripts/feature-verification/config.json).
-const DEFAULT_SCENARIOS_DIR = '.factory/stack/scenarios';
 
 // Generic test locations and names (any language), for repositories without configured test runners.
 const TEST_PATH = /(^|\/)(tests?|specs?|e2e|__tests__)\/|[Tt]ests?\.(cs|[cm]?[jt]sx?|py|java|kt|go)$|\.(spec|test)\.[cm]?[jt]sx?$|_test\.(go|py)$/;
@@ -197,9 +197,9 @@ export function classifyChanged(config, cwd, files, { base = null, sha = 'HEAD' 
     if (r.status === 0) own = new Set(r.stdout.split('\n').filter(Boolean));
   }
   // Plans and scenarios at their configured places, else their defaults (a worktree's config may not name them).
-  const dirs = [config.plansDir ?? '.factory/plans', config.scenariosDir ?? DEFAULT_SCENARIOS_DIR].filter(Boolean).map((d) => `${String(d).replace(/\/+$/, '')}/`);
+  const dirs = [setting(config, 'featureVerification.plansDir'), setting(config, 'teststack.scenariosDir')].filter(Boolean).map((d) => `${String(d).replace(/\/+$/, '')}/`);
   const runners = testRunners(config);
-  const isTest = (f) => dirs.some((d) => f.startsWith(d)) || TEST_PATH.test(f) || ((config.testExtensions?.length || runners.length) && isTestFile(config, f, runners));
+  const isTest = (f) => dirs.some((d) => f.startsWith(d)) || TEST_PATH.test(f) || ((config.featureVerification?.testExtensions?.length || runners.length) && isTestFile(config, f, runners));
   const out = { production: [], tests: [], fromBase: [] };
   for (const f of files) out[own && !own.has(f) ? 'fromBase' : isTest(f) ? 'tests' : 'production'].push(f);
   // Whether the change's own files were known (with `base`); not enumerable, so the kinds compare as three lists.

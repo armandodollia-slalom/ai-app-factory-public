@@ -87,7 +87,8 @@
         "session-start"
       ],
       "gitHooks": [
-        "post-merge"
+        "post-merge",
+        "pre-push"
       ],
       "commands": [
         "status",

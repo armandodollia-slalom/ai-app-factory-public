@@ -13,20 +13,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ALLOWLIST } from '../../pipeline/lib/analysis/licences.mjs';
 import { toolsDir } from '../../pipeline/lib/analysis/runner.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 const INSTALL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export const PINS = JSON.parse(fs.readFileSync(path.join(INSTALL_ROOT, 'packs/video/tools.json'), 'utf8'));
 
-export const VIDEO_DEFAULTS = {
-  narration: { enabled: true, voice: 'af_heart', speed: 1.0, lang: 'en-us', model: 'int8' },
-  pacing: { stepDelayMs: 700, holdMs: 1500, typeDelayMs: 90, cursorMs: 600, pauseMs: 600 },
-  // The recording size of a demo video (the viewport too).
-  size: { width: 1280, height: 720 },
-  ffmpeg: null,
-  licenceReview: 'default',
-  // The PR check's video critic: frames per narrated step (not per second), and a cap per video.
-  critic: { framesPerStep: 1, maxFrames: 24 },
-};
+// The defaults are in scripts/pr-video/config.json (`video`).
+export const VIDEO_DEFAULTS = defaultSettings().video;
 
 export function videoSettings(config = {}) {
   const v = config.video ?? {};
@@ -35,7 +28,6 @@ export function videoSettings(config = {}) {
     ...v,
     narration: { ...VIDEO_DEFAULTS.narration, ...(v.narration ?? {}) },
     pacing: { ...VIDEO_DEFAULTS.pacing, ...(v.pacing ?? {}) },
-    critic: { ...VIDEO_DEFAULTS.critic, ...(v.critic ?? {}) },
   };
 }
 

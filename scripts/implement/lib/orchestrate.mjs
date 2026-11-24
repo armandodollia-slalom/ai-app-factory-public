@@ -12,7 +12,7 @@ import { git } from '../../pipeline/lib/git.mjs';
 import { readDecisions } from '../../pipeline/lib/human-decisions.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log as defaultLog, nowIso, readJson, runAsync, tail, writeJson } from '../../pipeline/lib/util.mjs';
-import { agentEnv, changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, memberRunEnv, councilRounds, disputesFor, guardProtectedTests, lateBox, protectedTestFinding, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
+import { changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, memberRunEnv, councilRounds, disputesFor, guardProtectedTests, lateBox, protectedTestFinding, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { ownerQuestionsText, runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { runTags } from '../../pipeline/lib/run-tags.mjs';
@@ -23,7 +23,9 @@ import { disputeCounts, formatDisputes, openDisputes, parseImplementerReport, ru
 import { diagnosticFindings, formatDiagnostics, lspAdapter, signatureChanges } from './lsp.mjs';
 import { matchesAny } from './plan.mjs';
 import { pairHandoff } from '../../pipeline/lib/finding-route.mjs';
-import { isUiStory, parsePlanOutput, uiRules, parseVerdict, resolveModelForRole, roleCli, scopeViolations, topoOrder, validatePlan, validateRewrite } from './plan.mjs';
+import { isUiStory, parsePlanOutput, uiRules, parseVerdict, scopeViolations, topoOrder, validatePlan, validateRewrite } from './plan.mjs';
+import { entryFor, poolEntry, subtaskModels, withFamily } from '../../pipeline/lib/pool.mjs';
+import { selectCouncil, ticketShape } from '../../pipeline/lib/selection.mjs';
 import { pathLikeRegex, servicesOf, servicesOfFile } from './project.mjs';
 import { waitForMemory } from './resources.mjs';
 import { formatMockups, formatRenders, hasMockups, mockupFilesOf, renderMockups, storyMockups } from './mockups.mjs';
@@ -33,6 +35,7 @@ import { fixLoop, recordAnalysis } from '../../pipeline/lib/analysis/fixloop.mjs
 import { evidenceText, isToolFinding, preexistingFollowUps, toolFindings } from '../../pipeline/lib/analysis/report.mjs';
 import { stackAdapter } from './stack.mjs';
 import { codeVerifierTask, conflictTask, escalationTask, pairImplementerTask, planTask, uiVerifierTask } from './tasks.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
 // A hard stop (agent runs, wall clock): the story ends with `outcome`.
 export class LimitError extends Error {
@@ -42,6 +45,9 @@ export class LimitError extends Error {
   }
 }
 class AbortedError extends Error {}
+
+// What a resumed story's orchestrator is told (implement.mjs gives a later implementer run the same note).
+export const RESUME_NOTE = 'A previous run of this story was interrupted. Its work so far is on this branch (committed, or still uncommitted in the worktree). Review it and continue the implementation rather than starting over.';
 
 export function createContext({ config, key, storyFile, branch, worktree, base, epicNote = null, resume = false, deps = {}, onProgress = () => {}, log = defaultLog }) {
   const s = config.implement;
@@ -117,19 +123,11 @@ function limit(ctx, outcome, message) {
   return new LimitError(outcome, message);
 }
 
-// The model and CLI a role runs with.
-export function agentSettings(config, role, modelClass, explicitModel = null) {
-  const s = config.implement;
-  const cli = s.roles?.[role]?.cli || null;
-  const model = resolveModelForRole(config, role, modelClass, explicitModel);
-  return { cli, model, cliName: config.agent.cmd ? 'custom' : roleCli(config, role) };
-}
-
 // Token usage is attributed to a stage per role; `step` is the plan, the merge or the subtask id.
 const USAGE_STAGE = { orchestrator: 'implement', pairImplementer: 'implement-pair', verifier: 'implement-verify', uiVerifier: 'implement-ui-verify' };
 
 // Runs one agent under the story's budget and the machine-wide agent semaphore.
-export async function callAgent(ctx, { role, name, task, mode, modelClass = 'medium', model: explicitModel = null, cwd, timeoutSec, step = null, round = null, env = {}, member = null, signal = null, intercom = null }) {
+export async function callAgent(ctx, { role, name, task, mode, entry = null, effort = null, cwd, timeoutSec, step = null, round = null, env = {}, member = null, seat = null, signal = null, intercom = null }) {
   checkBudget(ctx);
   const release = await ctx.deps.acquire(`${ctx.key}:${name}`);
   if (!release) throw limit(ctx, 'limit-wall-clock', 'no agent slot (maxConcurrentAgents) before the story deadline');
@@ -137,16 +135,16 @@ export async function callAgent(ctx, { role, name, task, mode, modelClass = 'med
     const left = checkBudget(ctx);
     ctx.metrics.agentRuns++;
     ctx.metrics.byRole[role] = (ctx.metrics.byRole[role] ?? 0) + 1;
-    // A council member runs on its own CLI, model and effort (council.mjs); every other agent on its role's.
-    const { cli, model, cliName } = member ? { cli: member.cli === 'custom' ? null : member.cli, model: member.model ?? null, cliName: ctx.config.agent.cmd ? 'custom' : member.cli } : agentSettings(ctx.config, role, modelClass, explicitModel);
+    // Every run is on a models.pool entry: a council member's seat, a subtask's (the planner's pick), else the agent's
+    // own (models.agents).
+    const own = entryFor(ctx.config, { name, entry: member?.entry ?? entry });
+    const cliName = ctx.config.agent.cmd ? 'custom' : own.cli;
+    const model = own.name;
     const t0 = Date.now();
     // The story's own ticket (story and mockups) is open to every agent of its run, in whichever worktree
     // it works (the story guard matches the key in any checkout's ticket cache); nothing else is added.
-    // A role's own `env` (implement.roles.<role>.env, beside its `cli`), for example a second login's CLI home folder.
-    const roleEnv = member ? {} : agentEnv(ctx.s.roles?.[role]?.env);
-    const extraEnv = { PIPELINE_STORY_SOURCES: [process.env.PIPELINE_STORY_SOURCES, ctx.key].filter(Boolean).join(path.delimiter), ...roleEnv, ...env };
-    const memberOpts = member ? { effort: member.effort ?? null, cmd: member.cli === 'custom' ? member.cmd : null } : {};
-    const res = await ctx.deps.runAgent(ctx.config, { name, task, mode, model, cli, noSubagents: true, cwd, timeoutSec: Math.max(1, Math.min(timeoutSec, left)), signal: signal ? AbortSignal.any([ctx.abort.signal, signal]) : ctx.abort.signal, extraEnv, intercom, usage: { stage: USAGE_STAGE[role] ?? 'implement', story: ctx.key, step: member ? `${step}:${member.name}` : step, round }, ...memberOpts });
+    const extraEnv = { PIPELINE_STORY_SOURCES: [process.env.PIPELINE_STORY_SOURCES, ctx.key].filter(Boolean).join(path.delimiter), ...env };
+    const res = await ctx.deps.runAgent(ctx.config, { name, task, mode, entry: own.name, ...(effort ? { effort } : {}), noSubagents: true, cwd, timeoutSec: Math.max(1, Math.min(timeoutSec, left)), signal: signal ? AbortSignal.any([ctx.abort.signal, signal]) : ctx.abort.signal, extraEnv, intercom, usage: { stage: USAGE_STAGE[role] ?? 'implement', story: ctx.key, step: member ? `${step}:${member.name}` : step, round, ...(seat ? { member: seat.name, lens: seat.lens } : {}) } });
     if (ctx.abort.signal.aborted) throw new AbortedError('aborted');
     if (res.outage && !member) throw limit(ctx, 'agent-unavailable', `the agent provider is unavailable: ${res.outage}`);
     if (res.timedOut && Date.now() >= ctx.deadline) throw limit(ctx, 'limit-wall-clock', `the story ran past its ${ceiling(ctx.config, ctx.s.storyWallClockSec)}s ceiling while ${name} was running`);
@@ -197,7 +195,7 @@ export async function runChecks(ctx, cwd, files) {
   const parts = [];
   let ok = true;
   const exec = async (name, cmd) => {
-    const r = await runAsync('sh', ['-c', cmd], { cwd, timeoutSec: ctx.s.timeouts.checkSec, signal: ctx.abort.signal });
+    const r = await runAsync('sh', ['-c', cmd], { cwd, timeoutSec: ctx.s.timeoutsSec.checks, signal: ctx.abort.signal });
     ok &&= r.status === 0;
     parts.push(`$ ${name}: ${r.status === 0 ? 'passed' : `FAILED (exit ${r.status}${r.timedOut ? ', timed out' : ''})`}\n${tail(`${r.stdout}\n${r.stderr}`.trim(), r.status === 0 ? 400 : 4000)}`);
   };
@@ -220,13 +218,13 @@ function noteOnce(ctx, id, message) {
 // Plan
 // ---------------------------------------------------------------------------------------------
 
-const limitsOf = (s, config = null) => ({ maxSubtasks: s.maxSubtasks, maxLargeSubtasks: s.maxLargeSubtasks, selfModeMaxFiles: s.selfModeMaxFiles, ...(config ? { allowedModels: modelsFor(config), ui: uiRules(config), scenarios: appScenarios(config) } : {}) });
+const limitsOf = (s, config = null) => ({ maxSubtasks: s.maxSubtasks, selfModeMaxFiles: s.selfModeMaxFiles, ...(config ? { subtaskModels: subtaskModels(config), subtaskEntries: subtaskModels(config).map((n) => withFamily(poolEntry(config, n))).filter(Boolean), ui: uiRules(config), scenarios: appScenarios(config) } : {}) });
 
 // The app-stack scenarios a UI verifier can load: the scenario folders of the repository (the base layer, whose
 // name starts with "_", is loaded under every scenario). A plan may name only these (dogfood step 5: a plan put a
 // description of the data it wanted in `scenario`, the load failed, and the verifier never ran).
 function appScenarios(config) {
-  const dir = path.join(config.root, config.teststack?.scenariosDir ?? '.factory/stack/scenarios');
+  const dir = path.join(config.root, setting(config, 'teststack.scenariosDir'));
   try {
     return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('_')).map((e) => e.name).sort();
   } catch {
@@ -234,8 +232,6 @@ function appScenarios(config) {
   }
 }
 
-// The model aliases a pair implementer may run on this run's CLI (allowed and with an id for it).
-export const modelsFor = (config) => (config.agent.allowedModels ?? []).filter((a) => config.agent.cmd || config.agent.modelIds?.[roleCli(config, 'pairImplementer')]?.[a]);
 
 export async function planStory(ctx) {
   // A resumed run keeps the plan the interrupted run had accepted (its subtasks' work is on the branch), so its
@@ -262,8 +258,9 @@ export async function planStory(ctx) {
       step: 'plan',
       round: attempt,
       cwd: ctx.worktree,
-      timeoutSec: ctx.s.timeouts.plannerSec,
-      task: planTask({ key: ctx.key, storyFile: ctx.storyFile, worktree: ctx.worktree, uiStory, limits, project: ctx.config.project, errors, epicNote: ctx.epicNote, mockups: uiStory ? mockupText(ctx) : null, decisions: ctx.decisions }),
+      timeoutSec: ctx.s.timeoutsSec.planner,
+      // A resumed story's orchestrator is told an earlier run was interrupted, with its work on the branch.
+      task: planTask({ key: ctx.key, storyFile: ctx.storyFile, worktree: ctx.worktree, uiStory, limits, project: ctx.config.project, errors, epicNote: ctx.epicNote, mockups: uiStory ? mockupText(ctx) : null, decisions: ctx.decisions }) + (ctx.resume ? `\n\n${RESUME_NOTE}` : ''),
     });
     const raw = parsePlanOutput(res.output);
     const agent = { cli: res.cli, model: res.model, version: res.version };
@@ -275,10 +272,10 @@ export async function planStory(ctx) {
     const decisionId = v.ok ? randomUUID() : null;
     logDecision(ctx.config, planDecisionLog(decisionRecord({ ts: nowIso(), key: ctx.key, decisionId, attempt, accepted: v.ok, errors: v.errors, agent, raw, plan: v.plan, storyText: ctx.storyText, uiStory })));
     if (v.ok) {
-      // Every model the plan needs must pass the model policy before any pair starts.
+      // Every pool entry the plan needs must resolve before any pair starts.
       try {
-        for (const st of v.plan.subtasks) resolveModelForRole(ctx.config, st.self ? 'orchestrator' : 'pairImplementer', st.modelClass, st.model ?? null);
-        for (const role of ['verifier', ...(v.plan.subtasks.some((st) => st.verify === 'ui') ? ['uiVerifier'] : [])]) resolveModelForRole(ctx.config, role);
+        for (const st of v.plan.subtasks) entryFor(ctx.config, { name: st.self ? 'implementer' : 'pair-implementer', entry: st.self ? null : st.model });
+        for (const name of ['pair-verifier', ...(v.plan.subtasks.some((st) => st.verify === 'ui') ? ['pair-ui-verifier'] : [])]) entryFor(ctx.config, { name });
       } catch (error) {
         return { fail: 'model-policy', reason: error.message };
       }
@@ -310,27 +307,18 @@ async function agentFor(ctx, rec, slot, opts) {
 }
 
 
-// The round limit of a subtask's pair: its verifier council's when one sits for it, else implement.maxPairRounds.
+// The round limit of a subtask's pair: implement.maxCouncilRounds (both pair verifiers are the implement stage's).
 export const pairStage = (st) => (st.verify === 'ui' ? 'pairUiVerify' : 'pairVerify');
-export const pairRounds = (ctx, st) => councilRounds(ctx.config, pairStage(st), ctx.s.maxPairRounds);
+export const pairRounds = (ctx, st) => councilRounds(ctx.config, pairStage(st));
 
-async function verifyCode(ctx, st, { worktree, base, round, checks, diagText, rec, disputes, pending }) {
+async function verifyCode(ctx, st, { worktree, base, round, checks, diagText, rec, pending }) {
   const diff = diffSince(worktree, base);
-  const council = councilFor(ctx.config, 'pairVerify');
-  if (council) {
-    const taskFor = (m) => codeVerifierTask({ key: ctx.key, st, round, maxRounds: council.rounds, diff, checks: checks.output, diagnostics: diagText, disputes: disputesFor(m, pending?.open ?? [], (open) => formatDisputes(open, pending?.overruled ?? [])) || null, decisions: ctx.decisions, signatures: signatureChanges(diff) });
-    const v = await councilVerify(ctx, st, council, { worktree, base, round, rec, taskFor, role: 'verifier', name: 'pair-verifier', mode: 'read', timeoutSec: ctx.s.timeouts.codeVerifierSec });
-    discardChanges(worktree, { keep: [ctx.config.metricsDir] });
-    return v;
-  }
-  const task = codeVerifierTask({ key: ctx.key, st, round, maxRounds: ctx.s.maxPairRounds, diff, checks: checks.output, diagnostics: diagText, disputes, decisions: ctx.decisions, signatures: signatureChanges(diff) });
-  for (let attempt = 0; attempt <= ctx.config.agent.resultParseRetries; attempt++) {
-    const res = await agentFor(ctx, rec, 'verifier', { role: 'verifier', name: 'pair-verifier', mode: 'read', modelClass: ctx.s.roles.verifier.modelClass, cwd: worktree, timeoutSec: ctx.s.timeouts.codeVerifierSec, task });
-    discardChanges(worktree, { keep: [ctx.config.metricsDir] });
-    const v = parseVerdict(res.output);
-    if (v) return v;
-  }
-  return null;
+  // The seats kept for the ticket (seatPairCouncil), not a fresh harness seating.
+  const council = councilFor(ctx.config, 'pairVerify', { subject: ctx.key });
+  const taskFor = (m) => codeVerifierTask({ key: ctx.key, st, round, maxRounds: council.maxCouncilRounds, diff, checks: checks.output, diagnostics: diagText, disputes: disputesFor(m, pending?.open ?? [], (open) => formatDisputes(open, pending?.overruled ?? [])) || formatDisputes([], pending?.overruled ?? []) || null, decisions: ctx.decisions, signatures: signatureChanges(diff) });
+  const v = await councilVerify(ctx, st, council, { worktree, base, round, rec, taskFor, role: 'verifier', name: 'pair-verifier', mode: 'read', timeoutSec: ctx.s.timeoutsSec.pairVerifier });
+  discardChanges(worktree, { keep: [ctx.config.metricsDir] });
+  return v;
 }
 
 // The stack slot is leased on the first UI round and kept for the rest of the pair (released by
@@ -349,7 +337,7 @@ async function leaseUi(ctx, st, rec) {
   }
   if (!lease) throw limit(ctx, 'limit-wall-clock', `no app stack slot for subtask ${st.id} before the story deadline`);
   // Keep the lease alive through long builds and verifier runs.
-  const renew = setInterval(() => ctx.deps.stack.renew?.(lease.slot).catch(() => {}), (ctx.s.ui.renewEverySec ?? 1800) * 1000);
+  const renew = setInterval(() => ctx.deps.stack.renew?.(lease.slot).catch(() => {}), ctx.s.ui.renewEverySec * 1000);
   renew.unref?.();
   rec.ui = { lease, renew, up: false };
   return rec.ui;
@@ -365,7 +353,7 @@ async function releaseUi(ctx, rec, worktree) {
   await ctx.deps.stack.release(lease.slot);
 }
 
-async function verifyUi(ctx, st, { worktree, base, round, checks, diagText, rec, disputes, pending }) {
+async function verifyUi(ctx, st, { worktree, base, round, checks, diagText, rec, pending }) {
   const shots = path.join(ctx.worktree, ctx.s.ui.screenshotsDir, ctx.key, st.id, `round-${round}`);
   fs.mkdirSync(shots, { recursive: true });
   const ui = await leaseUi(ctx, st, rec);
@@ -399,28 +387,20 @@ async function verifyUi(ctx, st, { worktree, base, round, checks, diagText, rec,
       renders = { ...r, text: formatRenders(r.entries) };
     }
     const mockupRenders = (renders?.entries ?? []).filter((e) => e.kind === 'screen' && e.png).map((e) => e.png);
-    const council = councilFor(ctx.config, 'pairUiVerify');
-    if (council) {
-      // Every member drives the same leased slot and saves its screenshots in a folder of its own.
-      const taskFor = (m) => {
-        fs.mkdirSync(path.join(shots, m.name), { recursive: true });
-        return uiVerifierTask({ key: ctx.key, st, round, maxRounds: council.rounds, diff: diffSince(worktree, base), checks: checks.output, diagnostics: diagText, webappUrl: lease.webappUrl, screenshotsDir: path.join(shots, m.name), worktree, slot: lease.slot, mockups: mockupText(ctx), renders, implementerScreens: rec.mockupScreens ?? null, disputes: disputesFor(m, pending?.open ?? [], (open) => formatDisputes(open, pending?.overruled ?? [])) || null, decisions: ctx.decisions, browser: m.cli !== 'codex' });
-      };
-      const v = await councilVerify(ctx, st, council, { worktree, base, round, rec, taskFor, role: 'uiVerifier', name: 'pair-ui-verifier', mode: 'verify', ui: true, timeoutSec: ctx.s.timeouts.uiVerifierSec, env: { TESTSTACK_SLOT: String(lease.slot), ...(lease.baseUrl ? { TESTSTACK_URL: lease.baseUrl } : {}) } });
-      const removed = discardChanges(worktree, { keep: [ctx.config.metricsDir] });
-      if (removed.length) ctx.log(`discarded ${removed.length} file(s) the UI council left in ${path.basename(worktree)}`);
-      const files = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() && e.name !== 'mockup' ? files(path.join(dir, e.name)) : e.isFile() ? [path.join(dir, e.name)] : [])) : []);
-      return v && { ...v, screenshots: files(shots), mockupRenders };
-    }
-    const task = uiVerifierTask({ key: ctx.key, st, round, maxRounds: ctx.s.maxPairRounds, diff: diffSince(worktree, base), checks: checks.output, diagnostics: diagText, webappUrl: lease.webappUrl, screenshotsDir: shots, worktree, slot: lease.slot, mockups: mockupText(ctx), renders, implementerScreens: rec.mockupScreens ?? null, disputes, decisions: ctx.decisions, browser: agentSettings(ctx.config, 'uiVerifier', ctx.s.roles.uiVerifier.modelClass).cliName !== 'codex' });
-    for (let attempt = 0; attempt <= ctx.config.agent.resultParseRetries; attempt++) {
-      const res = await agentFor(ctx, rec, 'verifier', { role: 'uiVerifier', name: 'pair-ui-verifier', mode: 'verify', modelClass: ctx.s.roles.uiVerifier.modelClass, cwd: worktree, timeoutSec: ctx.s.timeouts.uiVerifierSec, task, env: { TESTSTACK_SLOT: String(lease.slot), ...(lease.baseUrl ? { TESTSTACK_URL: lease.baseUrl } : {}) } });
-      const removed = discardChanges(worktree, { keep: [ctx.config.metricsDir] });
-      if (removed.length) ctx.log(`discarded ${removed.length} file(s) the UI verifier left in ${path.basename(worktree)}`);
-      const v = parseVerdict(res.output, { ui: true });
-      if (v) return { ...v, screenshots: fs.readdirSync(shots, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => path.join(shots, e.name)), mockupRenders };
-    }
-    return null;
+    await seatPairCouncil(ctx, 'pairUiVerify');
+    const council = councilFor(ctx.config, 'pairUiVerify', { subject: ctx.key });
+    // Every member drives the same leased slot and saves its screenshots in a folder of its own (a council of one, in
+    // the round's folder).
+    const shotsOf = (m) => (m.sole ? shots : path.join(shots, m.name));
+    const taskFor = (m) => {
+      fs.mkdirSync(shotsOf(m), { recursive: true });
+      return uiVerifierTask({ key: ctx.key, st, round, maxRounds: council.maxCouncilRounds, diff: diffSince(worktree, base), checks: checks.output, diagnostics: diagText, webappUrl: lease.webappUrl, screenshotsDir: shotsOf(m), worktree, slot: lease.slot, mockups: mockupText(ctx), renders, implementerScreens: rec.mockupScreens ?? null, disputes: disputesFor(m, pending?.open ?? [], (open) => formatDisputes(open, pending?.overruled ?? [])) || formatDisputes([], pending?.overruled ?? []) || null, decisions: ctx.decisions, browser: m.cli !== 'codex' });
+    };
+    const v = await councilVerify(ctx, st, council, { worktree, base, round, rec, taskFor, role: 'uiVerifier', name: 'pair-ui-verifier', mode: 'verify', ui: true, timeoutSec: ctx.s.timeoutsSec.pairUiVerifier, env: { TESTSTACK_SLOT: String(lease.slot), ...(lease.baseUrl ? { TESTSTACK_URL: lease.baseUrl } : {}) } });
+    const removed = discardChanges(worktree, { keep: [ctx.config.metricsDir] });
+    if (removed.length) ctx.log(`discarded ${removed.length} file(s) the UI council left in ${path.basename(worktree)}`);
+    const files = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() && e.name !== 'mockup' ? files(path.join(dir, e.name)) : e.isFile() ? [path.join(dir, e.name)] : [])) : []);
+    return v && { ...v, screenshots: files(shots), mockupRenders };
   }
 }
 
@@ -433,6 +413,18 @@ export function noVerdictNote(rec) {
   if (!none.length) return '';
   const ok = members.filter((m) => m.status === 'ok').map((m) => `${m.name} ${m.verdict ?? '?'} ${m.score ?? '-'}/10`);
   return `: council member${none.length > 1 ? 's' : ''} ${none.map((m) => `${m.name} (${m.cli}) gave no verdict (${m.status}${m.reason ? `: ${m.reason}` : ''})`).join('; ')}${ok.length ? `, while ${ok.join(', ')}` : ''} in the last round`;
+}
+
+// The pair councils' seats for the ticket, picked once per stage by the implement stage's orchestrator under the
+// selection rules (selection.mjs) and kept: every subtask's pair, every round and a resume see the same seats.
+function seatPairCouncil(ctx, stage) {
+  ctx.selections ??= {};
+  ctx.selections[stage] ??= selectCouncil(ctx.config, stage, {
+    subject: ctx.key,
+    shape: ticketShape({ key: ctx.key, ui: stage === 'pairUiVerify' || Boolean(ctx.plan?.uiStory) }),
+    run: (o) => callAgent(ctx, { role: 'orchestrator', name: o.name, entry: o.entry, effort: o.effort, task: o.task, mode: 'read', cwd: ctx.worktree, timeoutSec: 300, step: `select-${stage}` }),
+  });
+  return ctx.selections[stage];
 }
 
 // One council round of a pair: the members run in parallel (each an agent run under the story's budget and the agent
@@ -450,7 +442,10 @@ async function councilVerify(ctx, st, council, { worktree, base = null, round, r
     taskFor: (m) => memberTask(taskFor(m), { council, member: m, round, earlier: memory.text }),
     run: (m, task) => {
       const abort = new AbortController();
-      return agentFor(ctx, rec, 'verifier', { role, name, mode, member: m, signal: abort.signal, cwd: worktree, timeoutSec: m.timeoutSec ?? timeoutSec, task, env: { ...env, ...memberRunEnv(m) } });
+      // A council of one is the pair's own verifier, on the entry the orchestrator picked for the seat (else its agent's
+      // own, models.agents); its usage rows still name its seat and lens, as the scorecard counts every seat.
+      const own = m.sole ? { member: null, ...(m.entry ? { entry: m.entry } : {}) } : { member: m };
+      return agentFor(ctx, rec, 'verifier', { role, name, mode, ...own, signal: abort.signal, cwd: worktree, timeoutSec: m.timeoutSec ?? timeoutSec, task, env: { ...env, ...(m.sole ? {} : memberRunEnv(m)) }, ...(m.sole ? { seat: { name: m.name, lens: m.lens } } : {}) });
     },
     parse: (output) => {
       const v = parseVerdict(output, { ui });
@@ -466,7 +461,7 @@ async function councilVerify(ctx, st, council, { worktree, base = null, round, r
     log: ctx.log,
   });
   const keys = [ctx.key];
-  const cases = planCases(ctx.worktree, ctx.config.plansDir, ctx.key);
+  const cases = planCases(ctx.worktree, ctx.config.featureVerification.plansDir, ctx.key);
   // A split is ruled by the implement orchestrator in one bounded read-only turn that sees only the escalation record.
   const intercom = await runIntercomDiscussion({
     config: ctx.config,
@@ -555,7 +550,8 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
   };
 
   let sigNoRefsRound = [];
-  const council = councilFor(ctx.config, pairStage(st));
+  await seatPairCouncil(ctx, pairStage(st));
+  const council = councilFor(ctx.config, pairStage(st), { subject: ctx.key });
   let protectedRound = [];
   for (let round = 1; round <= max; round++) {
     ctx.metrics.pairRounds++;
@@ -566,17 +562,16 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
         role,
         name: implementer,
         mode: 'implement',
-        modelClass: st.modelClass,
-        // The planner may name a model alias (e.g. sol) for a pair implementer; the orchestrator keeps its own.
-        model: role === 'pairImplementer' ? st.model ?? null : null,
+        // A pair implementer runs on the pool entry the planner named for the subtask; the orchestrator on its own.
+        entry: role === 'pairImplementer' ? st.model ?? null : null,
         cwd: worktree,
-        timeoutSec: ctx.s.timeouts.pairImplementerSec,
+        timeoutSec: ctx.s.timeoutsSec.pairImplementer,
         // route: pairHandoff (findings = the last round's handoff.mine)
-        task: pairImplementerTask({ key: ctx.key, storyFile: path.join(worktree, path.relative(ctx.worktree, ctx.storyFile)), st, worktree, branch, base, round, maxRounds: max, findings, screenshots, diagnostics: diagText, self: Boolean(st.self), mockups: st.verify === 'ui' ? mockupText(ctx) : null, mockupRenders, decisions: ctx.decisions }) + (council ? `\n\n${councilActionsText()}` : '') + (council && findings?.length ? `\n\n${fixDeclarationText(fixesFile(worktree, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }), findings)}` : ''),
+        task: pairImplementerTask({ key: ctx.key, storyFile: path.join(worktree, path.relative(ctx.worktree, ctx.storyFile)), st, worktree, branch, base, round, maxRounds: max, findings, screenshots, diagnostics: diagText, self: Boolean(st.self), mockups: st.verify === 'ui' ? mockupText(ctx) : null, mockupRenders, decisions: ctx.decisions }) + (ctx.resume && st.self && round === 1 ? `\n\n${RESUME_NOTE}` : '') + (council ? `\n\n${councilActionsText()}` : '') + (council && findings?.length ? `\n\n${fixDeclarationText(fixesFile(worktree, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }), findings)}` : ''),
       });
       commitAll(worktree, `${ctx.key}: ${st.id} (round ${round})`);
       // With a council (which can ask for tests to be deleted), a protected test the round deleted is put back.
-      protectedRound = council ? guardProtectedTests({ cwd: worktree, from: before, keys: [ctx.key], cases: planCases(ctx.worktree, ctx.config.plansDir, ctx.key) }) : [];
+      protectedRound = council ? guardProtectedTests({ cwd: worktree, from: before, keys: [ctx.key], cases: planCases(ctx.worktree, ctx.config.featureVerification.plansDir, ctx.key) }) : [];
       if (protectedRound.length) {
         ctx.log(`${st.id} round ${round}: restored ${protectedRound.length} protected test file(s) the implementer changed: ${protectedRound.map((v) => v.file).join(', ')}`);
         commitAll(worktree, `${ctx.key}: ${st.id} restore protected tests (round ${round})`);
@@ -646,10 +641,9 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
           role,
           name: implementer,
           mode: 'implement',
-          modelClass: st.modelClass,
-          model: role === 'pairImplementer' ? st.model ?? null : null,
+          entry: role === 'pairImplementer' ? st.model ?? null : null,
           cwd: worktree,
-          timeoutSec: ctx.s.timeouts.pairImplementerSec,
+          timeoutSec: ctx.s.timeoutsSec.pairImplementer,
           task: `Story ${ctx.key}, subtask ${st.id}. You own: ${st.owns.join(', ')}.\n\n${finding.issue}\n\n${finding.fix} Commit any change.\n\nEnd with one line: AGENT_RESULT: {"status":"done","reason":"<what you checked and changed, or why no caller exists>"}`,
         });
         commitAll(worktree, `${ctx.key}: ${st.id} callers of changed signatures (round ${round})`);
@@ -669,8 +663,7 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
       if (!checks.ok) {
         verdict = { verdict: 'CHANGES_REQUESTED', findings: [...diagnosticFindings(diag), ...blockingTool, { severity: 'blocking', category: 'build', file: null, issue: 'a harness check (the build, or the generated test stack drift check) or the existing unit tests failed', detail: checks.output }] };
       } else {
-        const disputes = formatDisputes(pending.open, pending.overruled) || null;
-        const raw = st.verify === 'ui' ? await verifyUi(ctx, st, { worktree, base, round, checks, diagText, rec, disputes, pending }) : await verifyCode(ctx, st, { worktree, base, round, checks, diagText, rec, disputes, pending });
+        const raw = st.verify === 'ui' ? await verifyUi(ctx, st, { worktree, base, round, checks, diagText, rec, pending }) : await verifyCode(ctx, st, { worktree, base, round, checks, diagText, rec, pending });
         let v = raw;
         // Disputes are ruled on by a verifier. When the harness itself failed (the stack did not come up), no
         // verifier ran: its finding stands, and the open disputes wait for the next verifier.
@@ -710,7 +703,7 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
         }
         const blockingDiag = diagnosticFindings(diag);
         // Harness findings (compiler errors, blocking tool findings) are added after the council's merge: they are
-        // outside its votes (blockOn) and its disputes. Non-blocking tool findings are notes.
+        // outside its votes (blockQuorum) and its disputes. Non-blocking tool findings are notes.
         const blockingHarness = [...blockingDiag, ...blockingTool];
         verdict = blockingHarness.length ? { ...v, verdict: 'CHANGES_REQUESTED', findings: [...blockingHarness, ...v.findings, ...minorTool] } : { ...v, findings: [...v.findings, ...minorTool] };
         // A verifier or council that passed, sent back by a harness fact it does not vote on: the record names it, so a
@@ -779,10 +772,9 @@ async function pairAnalysis(ctx, st, { worktree, base, round, rec, implementer, 
           role,
           name: implementer,
           mode: 'implement',
-          modelClass: st.modelClass,
-          model: role === 'pairImplementer' ? st.model ?? null : null,
+          entry: role === 'pairImplementer' ? st.model ?? null : null,
           cwd: worktree,
-          timeoutSec: ctx.s.timeouts.pairImplementerSec,
+          timeoutSec: ctx.s.timeoutsSec.pairImplementer,
           task: `Story ${ctx.key}, subtask ${st.id}. You own: ${st.owns.join(', ')}.\n\n${task}\n\nEnd with one line: AGENT_RESULT: {"status":"done","reason":"<what you fixed>"}`,
         });
       },
@@ -828,7 +820,7 @@ async function openWorktree(ctx, st) {
   const rel = path.relative(ctx.worktree, ticket);
   if (fs.existsSync(ticket) && !rel.startsWith('..') && !fs.existsSync(path.join(wt.path, rel))) fs.cpSync(ticket, path.join(wt.path, rel), { recursive: true });
   if (ctx.s.prepareCmd) {
-    const r = await runAsync('sh', ['-c', ctx.s.prepareCmd], { cwd: wt.path, timeoutSec: ctx.s.timeouts.checkSec, signal: ctx.abort.signal });
+    const r = await runAsync('sh', ['-c', ctx.s.prepareCmd], { cwd: wt.path, timeoutSec: ctx.s.timeoutsSec.checks, signal: ctx.abort.signal });
     if (r.status !== 0) ctx.log(`prepareCmd failed in ${path.basename(wt.path)} (exit ${r.status}); continuing`);
   }
   await ctx.deps.lsp.start(wt.path, { owns: st.owns, key: ctx.key });
@@ -863,7 +855,7 @@ export async function runSubtask(ctx, st, others) {
       name: 'implementer',
       mode: 'implement',
       cwd: wt.path,
-      timeoutSec: ctx.s.timeouts.orchestratorSec,
+      timeoutSec: ctx.s.timeoutsSec.orchestrator,
       // route: pairHandoff (r.findings are the rounds' handoff.mine)
       task: escalationTask({ key: ctx.key, storyFile: path.join(wt.path, path.relative(ctx.worktree, ctx.storyFile)), st, worktree: wt.path, branch: wt.branch, outcome: r.status, findings: r.findings, takeoverAllowed, otherOwns: others.flatMap((o) => o.owns) }),
     });
@@ -921,7 +913,8 @@ function writeSubtaskRun(ctx, rec) {
       subtaskId: st.id,
       implementer: rec.implementer,
       verifier: rec.verifier,
-      modelClass: st.modelClass,
+      model: st.self ? entryFor(ctx.config, { name: 'implementer' }).name : st.model ?? null,
+      effort: entryFor(ctx.config, { name: st.self ? 'implementer' : 'pair-implementer', entry: st.self ? null : st.model }).effort,
       verify: st.verify,
       maxRounds: pairRounds(ctx, st),
       rounds: rec.rounds,
@@ -956,7 +949,7 @@ export async function mergeSubtask(ctx, st, wt, rec) {
       return { ok: false, reason: `merging ${wt.branch} failed: ${tail(r.stderr || r.stdout, 300)}` };
     }
     ctx.log(`merging ${st.id} conflicts in ${files.join(', ')}; asking the orchestrator to resolve them`);
-    await callAgent(ctx, { role: 'orchestrator', name: 'implementer', mode: 'implement', step: `merge ${st.id}`, cwd: ctx.worktree, timeoutSec: ctx.s.timeouts.orchestratorSec, task: conflictTask({ key: ctx.key, worktree: ctx.worktree, branch: ctx.branch, subtaskBranch: wt.branch, st, files }) });
+    await callAgent(ctx, { role: 'orchestrator', name: 'implementer', mode: 'implement', step: `merge ${st.id}`, cwd: ctx.worktree, timeoutSec: ctx.s.timeoutsSec.orchestrator, task: conflictTask({ key: ctx.key, worktree: ctx.worktree, branch: ctx.branch, subtaskBranch: wt.branch, st, files }) });
     const left = unmergedFiles(ctx.worktree);
     if (left.length || /<<<<<<< /.test(git(ctx.worktree, ['diff', 'HEAD', '--', ...files]).stdout)) {
       git(ctx.worktree, ['merge', '--abort']);
@@ -986,7 +979,7 @@ export async function orchestrate(ctx) {
     if (planned.fail) return failure(planned.fail, planned.reason, (planned.findings ?? []).map((e) => ({ issue: e })));
     const plan = planned.plan;
     ctx.metrics.mode = plan.mode;
-    ctx.log(`plan ${ctx.decisionId.slice(0, 8)}: ${plan.mode}${plan.mode === 'delegate' ? ` (${plan.subtasks.map((s) => `${s.id}:${s.modelClass}/${s.verify}`).join(', ')})` : ''}`);
+    ctx.log(`plan ${ctx.decisionId.slice(0, 8)}: ${plan.mode}${plan.mode === 'delegate' ? ` (${plan.subtasks.map((s) => `${s.id}:${s.model}/${s.verify}`).join(', ')})` : ''}`);
     ctx.progress();
     return plan.mode === 'self' ? await runSelf(ctx, plan) : await runDelegated(ctx, plan);
   } catch (error) {
@@ -1132,6 +1125,6 @@ async function runDelegated(ctx, plan) {
 }
 
 // The folders a UI verifier may write into (screenshots, recordings, test reports): implement.ui.artifactDirs.
-export const UI_ARTIFACT_DIRS = ['artifacts', 'test-results', 'playwright-report', 'blob-report'];
+export const UI_ARTIFACT_DIRS = defaultSettings().implement.ui.artifactDirs;
 export const uiArtifactDirs = (config) => (Array.isArray(config.implement?.ui?.artifactDirs) ? config.implement.ui.artifactDirs : UI_ARTIFACT_DIRS);
 

@@ -1,4 +1,4 @@
-// Lint the lines a change touches, with the repository's own linters (`precheck.lint`, by file extension).
+// Lint the lines a change touches, with the repository's own linters (`featureVerification.precheck.lint`, by file extension).
 // A codebase often has files that already fail its formatter; a gate that linted whole files would block
 // every change that touches them. So a linter's findings count only on lines the change added or modified
 // (a new or untracked file counts whole). Used by the pre-commit hook (`--staged`), CI (`--base <ref>`) and
@@ -10,6 +10,7 @@ import { INSTALL_ROOT, repoOverlay } from './config.mjs';
 import { matchesAny } from '../../implement/lib/plan.mjs';
 import { git } from './git.mjs';
 import { run, tail } from './util.mjs';
+import { setting } from './settings.mjs';
 
 // The repository's own settings (an invalid app.json is reported by the commands that load it, not here).
 const safeOverlay = (root) => {
@@ -25,9 +26,8 @@ const safeOverlay = (root) => {
 const expand = (template, files) => template.flatMap((a) => (a === '{files}' ? files : [a.replace(/\{files\}/g, files.join(' ')).replace(/\{packs\}/g, path.join(INSTALL_ROOT, 'packs')).replace(/\{factoryBin\}/g, path.join(INSTALL_ROOT, 'node_modules', '.bin'))]));
 
 // Vendored, minified and generated code is never linted: it is not the application's to fix
-// (precheck.lintExclude; these are the defaults when it is not set).
-export const LINT_EXCLUDE_DEFAULT = ['**/node_modules/**', '**/bin/**', '**/obj/**', '**/dist/**', '**/wwwroot/lib/**', '**/*.min.js', '**/*.min.css', '**/*.bundle.js', '.factory/bin/**', 'graphify-out/**'];
-export const lintable = (config, files) => files.filter((f) => !matchesAny(f, config.precheck?.lintExclude ?? LINT_EXCLUDE_DEFAULT));
+// (featureVerification.precheck.lintExclude).
+export const lintable = (config, files) => files.filter((f) => !matchesAny(f, setting(config, 'featureVerification.precheck.lintExclude')));
 
 // The new-side line numbers a diff adds or changes in `file`, or null when the file is new (all of it counts).
 export function changedLines(root, file, { staged = false, base = null } = {}) {
@@ -88,14 +88,14 @@ export const linterName = (argv) => {
 // repository never configured goes to `notes`: said, but not a failure.
 export function lintChanged(config, files, { staged = false, base = null, runner = run, skipped = [], notes = [] } = {}) {
   const errors = [];
-  for (const [ext, template] of Object.entries(config.precheck?.lint ?? {})) {
+  for (const [ext, template] of Object.entries(config.featureVerification?.precheck?.lint ?? {})) {
     const matching = lintable(config, files).filter((f) => f.endsWith(ext) && fs.existsSync(path.join(config.root, f)));
     if (!matching.length || !template?.length) continue;
     const head = expand([template[0]], [])[0];
     if (head.includes('/') && !fs.existsSync(path.resolve(config.root, head))) {
       // A linter the repository configured itself is reported; the engine's default one is not expected.
-      if (!(ext in (safeOverlay(config.root).precheck?.lint ?? {}))) {
-        notes.push(`${template[0]} (engine default for ${ext}) is not installed: ${matching.length} file(s) not linted; configure precheck.lint.${ext} to lint them`);
+      if (!(ext in (safeOverlay(config.root).featureVerification?.precheck?.lint ?? {}))) {
+        notes.push(`${template[0]} (engine default for ${ext}) is not installed: ${matching.length} file(s) not linted; configure featureVerification.precheck.lint.${ext} to lint them`);
         continue;
       }
       skipped.push(`${template[0]} is not installed (${ext}: ${matching.length} file(s) not linted; run the repository's install, e.g. npm ci)`);

@@ -31,7 +31,7 @@ function story() {
   git('add', '-A');
   git('commit', '-qm', 'base');
   const commit = (rel, text, msg) => (write(root, rel, text), git('add', '-A'), git('commit', '-qm', msg), git('rev-parse', 'HEAD'));
-  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', project: { languages: [] }, precheck: {}, analysis: ANALYSIS };
+  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', project: { languages: [] }, featureVerification: { precheck: {} }, analysis: ANALYSIS };
   return { root, git, commit, config };
 }
 const report = (sha, findings = []) => ({ sha, slot: 'prCheck', ts: '2026-11-18T11:00:00Z', tools: [{ id: 't', status: findings.length ? 'findings' : 'ok' }], findings });

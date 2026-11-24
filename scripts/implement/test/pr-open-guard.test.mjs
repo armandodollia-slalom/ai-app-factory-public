@@ -81,7 +81,8 @@ test('a PR is marked ready only by afterOpen, once its checks are green', () => 
 test('no setting brings back an open before the work and CI are done', async () => {
   const { preOpenProblems, preOpenSettings } = await import('../lib/pre-open.mjs');
   const off = { implement: { preOpen: { enabled: false, failedStory: 'draft-pr' } } };
-  assert.deepEqual([preOpenSettings(off).enabled, preOpenSettings(off).failedStory], [undefined, undefined]);
+  // The removed keys stop every loader (the renamed-settings table); the delivery order never reads them.
+  assert.equal(preOpenSettings({}).afterOpen, 'draft');
   const problems = preOpenProblems(off).join('\n');
   assert.match(problems, /preOpen\.enabled was removed: every pipeline PR now opens finished[\s\S]*preOpen\.failedStory was removed: a story whose PR check or CI never passes now always escalates/);
   assert.doesNotMatch(problems, /is not a setting/);

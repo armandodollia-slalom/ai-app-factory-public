@@ -52,7 +52,7 @@ export function runAnalysisJobs(root, base, { run = defaultRun, cacheDir = machi
       const box = toolSandbox({ ...process.env, FACTORY_CACHE_DIR: cacheDir });
       let r;
       try {
-        r = run(process.execPath, [JOBS_SCRIPT, '--job', j.id, '--base', base, '--json', json], { cwd: wt, env: box.env, timeoutSec: (j.timeoutMin ?? 30) * 60 });
+        r = run(process.execPath, [JOBS_SCRIPT, '--job', j.id, '--base', base, '--json', json], { cwd: wt, env: box.env, timeoutSec: j.timeoutSec * 60 });
       } finally {
         const left = box.cleanup(root);
         if (left.length) log(`${j.id}: removed ${left.length} git worktree(s) a tool left behind`);
@@ -132,11 +132,11 @@ export function gateChecks(config, { branch, base, held = () => [], jobs = runAn
   };
 }
 
-// The pre-push gate: { ok, results, fixRun }. No analysis jobs (or implement.ciParity false): ok with no results.
-export function analysisGate(config, { cwd, branch, base, targetArgs, seedFile, prCheckCli, env, keys = [], held = () => [], jobs = runAnalysisJobs, fix = parityGate, run = defaultRun, log = () => {} }) {
-  if (config.implement?.ciParity === false || !committedJobs(cwd).length) return { ok: true, results: [], fixRun: null };
+// The pre-push gate: { ok, results, fixRun }. No analysis jobs (or implement.ci.parity.enabled false): ok with no results.
+export function analysisGate(config, { cwd, branch, base, targetArgs, seedFile, prCheckCli, env, budget, keys = [], held = () => [], jobs = runAnalysisJobs, fix = parityGate, run = defaultRun, log = () => {} }) {
+  if (config.implement?.ci?.parity?.enabled === false || !committedJobs(cwd).length) return { ok: true, results: [], fixRun: null };
   const checks = gateChecks(config, { branch, base, held, jobs, log });
-  const g = fix({ cwd, base, targetArgs, seedFile, prCheckCli, env, run, checks, findingsOf: analysisFindings, log });
+  const g = fix({ cwd, base, targetArgs, seedFile, prCheckCli, env, budget, run, checks, findingsOf: analysisFindings, log });
   recordGate(config, { cwd, branch, base, keys, results: g.results, fixRun: g.fixRun });
   return { ok: g.results.every((r) => r.ok), results: g.results, fixRun: g.fixRun };
 }
@@ -168,37 +168,43 @@ export function analysisGateSection(gate) {
 //     when it is still in the files), the branch's commits fold into one, CI's jobs pass here on the fold, and it is
 //     pushed with a lease; then CI proves the new head.
 //   - any other blocking analysis finding still in the files: one fixing round here, nothing pushed until the jobs pass.
+//     It is one of the ticket's CI fixing rounds (implement.ci.maxFixRounds): with none left (`budget`, ciFixBudget), it does
+//     not run and a person decides; when it runs, the result says so (`fixRounds: 1`).
 //   - anything else (a value that may be real, an open PR): escalate, as before.
-export async function remedyRedBranch(config, { worktree, branch, base, ci, prOpen, keys = [], targetArgs, seedFile, prCheckCli, env, push, pushLease, jobs = runAnalysisJobs, fix = parityGate, credentials = null, run = defaultRun, log = () => {} }) {
+export async function remedyRedBranch(config, { worktree, branch, base, ci, prOpen, keys = [], targetArgs, seedFile, prCheckCli, env, push, pushLease, jobs = runAnalysisJobs, fix = parityGate, credentials = null, run = defaultRun, log = () => {}, budget }) {
+  if (!budget) throw new Error('remedyRedBranch needs the ticket\'s CI fixing budget (ciFixBudget)');
+  let spent = 0;
   const analysisRed = (ci?.failing ?? []).some((n) => /factory-analysis|Secret scan|Dependency audit|Security patterns|Workflow lint/i.test(n));
   const head = git(worktree, ['rev-parse', 'HEAD']).stdout.trim();
   const results = jobs(worktree, base, { log });
   const failing = results.filter((r) => !r.ok);
   appendJsonl(metricsFile(config, AGREEMENT_METRICS), [{ ts: nowIso(), story: keys[0] ?? null, branch, head, where: 'after-branch-ci', ciFailing: ci?.failing ?? [], analysisRedInCi: analysisRed, localFailing: failing.map((r) => r.job), agree: analysisRed === failing.length > 0 }]);
-  if (!failing.length) return { retried: false, reason: analysisRed ? 'CI\'s analysis jobs pass here on the same head but failed in CI: a disagreement, recorded (analysis-agreement.jsonl)' : 'the red CI is not an analysis job' };
+  if (!failing.length) return { fixRounds: spent, retried: false, reason: analysisRed ? 'CI\'s analysis jobs pass here on the same head but failed in CI: a disagreement, recorded (analysis-agreement.jsonl)' : 'the red CI is not an analysis job' };
   const mergeBase = git(worktree, ['merge-base', 'HEAD', base]).stdout.trim() || null;
   const creds = credentials ?? visibleCredentials();
   const secrets = blockingOf(results).filter((f) => f.secret);
   const decisions = secrets.map((f) => ({ f, d: judgeSecret(worktree, f, { mergeBase, credentials: creds, prOpen }) }));
   appendJsonl(metricsFile(config, DECISIONS_METRICS), decisions.map(({ f, d }) => ({ ts: nowIso(), story: keys[0] ?? null, branch, head, where: 'after-branch-ci', tool: f.tool, rule: f.rule, file: f.file, line: f.line, commit: f.vendorFingerprint ?? null, value: d.value, fake: d.fake, location: d.location, verdict: d.verdict, wayOut: d.wayOut })));
   const summary = decisions.map(({ f, d }) => `${where(f)} ${d.value}${d.fake ? ' (fake)' : ''}, ${d.location}: ${d.wayOut.join(' + ') || 'none'}`);
-  if (decisions.some(({ d }) => d.wayOut.includes('escalate'))) return { retried: false, reason: `the secret decision table says escalate (${summary.join('; ')})`, decisions: summary };
+  if (decisions.some(({ d }) => d.wayOut.includes('escalate'))) return { fixRounds: spent, retried: false, reason: `the secret decision table says escalate (${summary.join('; ')})`, decisions: summary };
   // One fixing round here for what is still in the files (a secret's value, another finding, a job that could not run);
   // nothing is pushed by it, and the jobs run again on the fixed head.
   let now = results;
   const inFiles = secrets.some((f) => onlyInHistory(worktree, f) !== true) || blockingOf(results).some((f) => !f.secret) || failing.some((r) => !(r.findings ?? []).some((f) => f.verdict === 'blocking'));
+  if (inFiles && budget.left() < 1) return { fixRounds: spent, retried: false, reason: 'a fixing round is needed, but implement.ci.maxFixRounds has none left: a person decides', decisions: summary };
   if (inFiles) {
-    const g = fix({ cwd: worktree, base, targetArgs, seedFile, prCheckCli, env, run, checks: gateChecks(config, { branch, base, jobs, log }), findingsOf: analysisFindings, log });
+    spent = 1;
+    const g = fix({ cwd: worktree, base, targetArgs, seedFile, prCheckCli, env, budget, run, checks: gateChecks(config, { branch, base, jobs, log }), findingsOf: analysisFindings, log });
     now = g.results;
     if (now.every((r) => r.ok)) {
       const s = await push();
-      return { retried: Boolean(s?.pushed), reason: s?.pushed ? 'fixed here; CI\'s analysis jobs pass on this machine; pushed' : `the fix could not be pushed: ${s?.reason ?? 'unknown'}`, decisions: summary };
+      return { fixRounds: spent, retried: Boolean(s?.pushed), reason: s?.pushed ? 'fixed here; CI\'s analysis jobs pass on this machine; pushed' : `the fix could not be pushed: ${s?.reason ?? 'unknown'}`, decisions: summary };
     }
   }
   // What is left: secrets only in the pushed branch's history. The table's fold-branch, when every one allows it.
   const left = blockingOf(now);
   const judgedLeft = left.map((f) => ({ f, d: f.secret ? judgeSecret(worktree, f, { mergeBase, credentials: creds, prOpen }) : null }));
-  if (!left.length || judgedLeft.some(({ f, d }) => !d || !d.wayOut.includes('fold-branch') || onlyInHistory(worktree, f) !== true)) return { retried: false, reason: `CI's analysis jobs still fail here (${now.filter((r) => !r.ok).map((r) => r.job).join(', ')}) and the decision table has no harness way out for them`, decisions: summary };
+  if (!left.length || judgedLeft.some(({ f, d }) => !d || !d.wayOut.includes('fold-branch') || onlyInHistory(worktree, f) !== true)) return { fixRounds: spent, retried: false, reason: `CI's analysis jobs still fail here (${now.filter((r) => !r.ok).map((r) => r.job).join(', ')}) and the decision table has no harness way out for them`, decisions: summary };
   const r = foldStoryBranch(config, worktree, left, {
     branch,
     base,
@@ -212,5 +218,5 @@ export async function remedyRedBranch(config, { worktree, branch, base, ci, prOp
     },
   });
   if (r.pushed) appendJsonl(metricsFile(config, DECISIONS_METRICS), [{ ts: nowIso(), story: keys[0] ?? null, branch, head: r.record.to, where: 'fold-branch', from: r.record.from, dropped: r.record.dropped.length }]);
-  return { retried: Boolean(r.pushed), reason: r.pushed ? `folded the story branch into ${r.record.to.slice(0, 7)} (same tree) and pushed it with a lease` : r.reason, decisions: summary, fold: r.record ?? null };
+  return { fixRounds: spent, retried: Boolean(r.pushed), reason: r.pushed ? `folded the story branch into ${r.record.to.slice(0, 7)} (same tree) and pushed it with a lease` : r.reason, decisions: summary, fold: r.record ?? null };
 }

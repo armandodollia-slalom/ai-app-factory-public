@@ -24,23 +24,26 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'models-test-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-// The pipeline config's agent section is the policy (scripts/pipeline/config.json).
-const AGENT = {
-  cli: 'claude',
-  allowedModels: ['opus', 'sonnet'],
-  modelIds: { claude: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' }, copilot: { opus: 'claude-opus-5.5', sonnet: 'claude-sonnet-5.5' } },
-  strictModels: true,
-  models: { default: 'sonnet' },
+// The models section is the policy: the pool's entries per CLI (scripts/models/config.json).
+const MODELS = {
+  cacheTtlSec: 86400,
+  pool: [
+    { name: 'opus', cli: 'claude', model: 'claude-opus-5-5', effort: 'high' },
+    { name: 'sonnet', cli: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+    { name: 'copilot-opus', cli: 'copilot', model: 'claude-opus-5.5', effort: 'high' },
+    { name: 'copilot-sonnet', cli: 'copilot', model: 'claude-sonnet-5.5', effort: 'medium' },
+  ],
+  agents: { default: 'sonnet' },
 };
 
 let n = 0;
 function configDir() {
   const dir = path.join(tmp, `cfg-${n++}`);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ cacheTtlHours: 24 }));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ cacheTtlSec: 86400 }));
   return dir;
 }
-const base = (agent = AGENT) => ({ configDir: configDir(), pipelineConfig: { agent } });
+const base = (models = MODELS) => ({ configDir: configDir(), models });
 const cacheFile = () => path.join(tmp, `cache-${n++}.json`);
 
 // A fake command runner: maps "cmd arg arg" to {status, stdout}; anything else is "not installed".
@@ -79,51 +82,44 @@ const CODEX_JSON = JSON.stringify({
 
 // --- policy ---------------------------------------------------------------------------------------
 
-test('the policy per CLI: agent.allowedModels mapped through agent.modelIds, default from agent.models.default', () => {
+test('the policy per CLI: the ids of the pool\'s entries on that CLI, default from models.agents.default in the CLI\'s own spelling', () => {
   const opts = base();
   assert.deepEqual(allowedModels('claude', opts), ['claude-opus-5-5', 'claude-sonnet-5-5']);
   assert.deepEqual(allowedModels('copilot', opts), ['claude-opus-5.5', 'claude-sonnet-5.5']);
-  assert.deepEqual(allowedModels('codex', opts), [], 'no ids for codex: nothing allowed');
+  assert.deepEqual(allowedModels('codex', opts), [], 'no entry on codex: nothing allowed');
   assert.equal(resolveModel('claude', null, opts), 'claude-sonnet-5-5');
   assert.equal(resolveModel('copilot', '', opts), 'claude-sonnet-5.5');
   assert.equal(resolveModel('copilot', 'default', opts), 'claude-sonnet-5.5');
 });
 
-test('the checked-in policy allows Opus 5.5 and Sonnet 5.5 (plus Sol 6.1 on Copilot), and Sol 6.1 only on codex (a council member on codex)', () => {
-  const opts = { configDir: path.join(here, '..') };
-  assert.deepEqual(allowedModels('claude', opts), ['claude-opus-5-5', 'claude-sonnet-5-5']);
-  assert.deepEqual(allowedModels('copilot', opts), ['claude-opus-5.5', 'claude-sonnet-5.5', 'gpt-6.1-sol']);
-  assert.deepEqual(allowedModels('codex', opts), ['gpt-6.1-sol']);
-  assert.equal(resolveModel('codex', 'sol', opts), 'gpt-6.1-sol');
-  assert.throws(() => resolveModel('codex', 'opus', opts), ModelNotAllowedError, 'no other model on codex');
-});
-
-test('an id mapped for an alias outside allowedModels is ignored with a warning', () => {
-  const policy = loadPolicy(base({ ...AGENT, modelIds: { ...AGENT.modelIds, claude: { ...AGENT.modelIds.claude, haiku: 'claude-haiku-5-5' } } }));
+test('a one-family pool is a policy with a warning: councils cannot be diverse', () => {
+  const policy = loadPolicy(base({ ...MODELS, pool: MODELS.pool.slice(0, 2) }));
   assert.deepEqual(policy.providers.claude.allowed, ['claude-opus-5-5', 'claude-sonnet-5-5']);
-  assert.match(policy.warnings.join('\n'), /claude: agent.modelIds maps "haiku", which is not in agent.allowedModels/);
+  assert.match(policy.warnings.join('\n'), /models\.pool has one model family \(Anthropic\): councils cannot be diverse/);
+  assert.deepEqual(loadPolicy(base({ ...MODELS, pool: [...MODELS.pool, { name: 'sol', cli: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] })).warnings, []);
 });
 
-test('aliases and the CLI\'s own ids resolve, through the same check as every agent run', () => {
+test('entry names and the CLI\'s own ids resolve', () => {
   const opts = base();
   assert.equal(resolveModel('claude', 'opus', opts), 'claude-opus-5-5');
   assert.equal(resolveModel('claude', 'claude-sonnet-5-5', opts), 'claude-sonnet-5-5');
   assert.equal(resolveModel('copilot', 'claude-opus-5.5', opts), 'claude-opus-5.5');
-  assert.equal(resolveModel('copilot', 'sonnet', opts), 'claude-sonnet-5.5');
+  assert.equal(resolveModel('copilot', 'copilot-sonnet', opts), 'claude-sonnet-5.5');
   assert.throws(() => resolveModel('claude', 'claude-opus-5.5', opts), ModelNotAllowedError, "another CLI's spelling is not this CLI's id");
+  assert.throws(() => resolveModel('claude', 'copilot-opus', opts), ModelNotAllowedError, "another CLI's entry");
 });
 
-test('models outside the policy are rejected with the allowed list', () => {
+test('models outside the pool are rejected with the CLI\'s entries', () => {
   const opts = base();
   for (const [provider, model] of [['claude', 'claude-haiku-5-5'], ['claude', 'haiku'], ['claude', 'claude-opus-5'], ['copilot', 'auto'], ['copilot', 'gpt-6-sol']]) {
     assert.throws(
       () => resolveModel(provider, model, opts),
-      (e) => e instanceof ModelNotAllowedError && e.provider === provider && e.requested === model && e.allowed.length === 2 && /not allowed/.test(e.message),
+      (e) => e instanceof ModelNotAllowedError && e.provider === provider && e.requested === model && e.allowed.length === 2 && /not in models\.pool/.test(e.message),
     );
   }
 });
 
-test('codex is disabled: no allowed models configured', () => {
+test('codex is disabled: no pool entry on it', () => {
   const opts = base();
   assert.throws(() => assertProviderUsable('codex', opts), (e) => e instanceof ProviderDisabledError && /no allowed models configured for codex/.test(e.message));
   assert.throws(() => resolveModel('codex', null, opts), ProviderDisabledError);
@@ -269,67 +265,39 @@ function fixtureRepo(files) {
   return root;
 }
 
-test('check passes when every configured model is allowed', () => {
+test('check passes when every agent names a pool entry', () => {
   const root = fixtureRepo({
-    'scripts/pipeline/config.json': { agent: AGENT },
-    'scripts/review/config.json': { agent: { models: { reviewer: 'opus' } } },
-    'scripts/implement/config.json': {
-      agent: { models: { implementer: 'claude-opus-5-5' } },
-      modelClasses: { small: 'sonnet', medium: 'sonnet', large: 'opus' },
-      implement: { roles: { verifier: { cli: null, modelClass: 'medium' }, uiVerifier: { cli: 'copilot', modelClass: 'large' } } },
-    },
-    'scripts/pr-check/config.json': { prCheck: { models: { claude: { judge: 'opus' }, copilot: { judge: 'claude-opus-5.5' }, codex: {} } } },
-    'agents/reviewer.agent.md': '---\nname: reviewer\nmodel: sonnet\n---\nbody\n',
+    'scripts/models/config.json': { ...MODELS, agents: { default: 'sonnet', 'architecture-reviewer': 'opus', 'pr-check-judge': 'copilot-opus' } },
     'agents/other.agent.md': '---\nname: other\nmodel: inherit\n---\nbody\n',
   });
-  const result = checkConfigs({ root, configDir: configDir() });
+  const result = checkConfigs({ root });
   assert.deepEqual(result.problems, []);
-  assert.equal(result.ok, true);
-  // default + reviewer + implementer + 3 classes x 2 CLIs + 2 pr-check + the agent file for 2 CLIs
-  assert.equal(result.checked.length, 1 + 1 + 1 + 6 + 2 + 2);
+  // The three agents' entries (an agent file that inherits the session's model is not checked).
+  assert.deepEqual(result.checked.slice(0, 3).map((c) => [c.where, c.provider, c.model]), [['models.agents.default', 'claude', 'claude-sonnet-5-5'], ['models.agents.architecture-reviewer', 'claude', 'claude-opus-5-5'], ['models.agents.pr-check-judge', 'copilot', 'claude-opus-5.5']]);
 });
 
-test('check reports models outside the policy and roles on a disabled CLI', () => {
+test('check reports an agent naming no pool entry, a bad entry, and agent files whose model is not in the pool', () => {
   const root = fixtureRepo({
-    'scripts/pipeline/config.json': { agent: { ...AGENT, models: { default: 'haiku' } } },
-    'scripts/implement/config.json': {
-      modelClasses: { small: 'haiku', medium: 'sonnet', large: 'opus' },
-      implement: { roles: { uiVerifier: { cli: 'codex', modelClass: 'large' } } },
-    },
-    'scripts/feature-verification/config.local.json': { agent: { models: { verifier: 'gpt-6-sol' } } },
+    'scripts/models/config.json': { ...MODELS, pool: [...MODELS.pool, { name: 'own', cli: 'custom', effort: 'high' }], agents: { default: 'haiku' } },
     'agents/reviewer.agent.md': '---\nname: reviewer\nmodel: "gpt-6-sol"\n---\n',
     '.claude/agents/x.md': '---\nmodel: haiku\n---\n',
   });
-  const result = checkConfigs({ root, configDir: configDir() });
+  const result = checkConfigs({ root });
   assert.equal(result.ok, false);
   const where = [...new Set(result.problems.map((p) => `${p.file}:${p.where}`))].sort();
-  assert.deepEqual(where, [
-    '.claude/agents/x.md:frontmatter model',
-    'agents/reviewer.agent.md:frontmatter model',
-    'scripts/feature-verification/config.local.json:agent.models.verifier',
-    'scripts/implement/config.json:implement.roles.uiVerifier.cli',
-    'scripts/implement/config.json:modelClasses.large',
-    'scripts/implement/config.json:modelClasses.medium',
-    'scripts/implement/config.json:modelClasses.small',
-    'scripts/pipeline/config.json:agent.models.default',
-  ]);
-  assert.match(result.problems.find((p) => p.where === 'implement.roles.uiVerifier.cli').message, /no allowed models configured for codex/);
+  assert.deepEqual(where, ['.claude/agents/x.md:frontmatter model', 'agents/reviewer.agent.md:frontmatter model', 'scripts/models/config.json:models']);
+  const pool = result.problems.filter((p) => p.where === 'models').map((p) => p.message).join('\n');
+  assert.match(pool, /models\.agents\.default is "haiku", which is not in models\.pool \(entries: opus, sonnet, copilot-opus, copilot-sonnet, own\)/);
+  assert.match(pool, /\("own"\)\.cmd must be the command a custom entry runs/);
 });
 
-test('check fails when the pipeline CLI itself is disabled', () => {
-  const root = fixtureRepo({ 'scripts/pipeline/config.json': { agent: { ...AGENT, cli: 'codex' } } });
-  const result = checkConfigs({ root, configDir: configDir() });
-  assert.equal(result.ok, false);
-  assert.equal(result.problems[0].where, 'agent.cli');
-});
-
-test('this repository only configures allowed models', () => {
+test('this repository\'s pool and every agent\'s entry pass the check', () => {
   const result = checkConfigs({ configDir: path.join(here, '..') });
   assert.deepEqual(result.problems, []);
 });
 
-test('the models CLI rejects a model outside the policy', () => {
+test('the models CLI rejects a model outside the pool', () => {
   const resolve = spawnSync(process.execPath, [path.join(here, '..', 'models.mjs'), 'resolve', '--provider', 'claude', '--model', 'haiku'], { encoding: 'utf8' });
   assert.equal(resolve.status, 1);
-  assert.match(resolve.stderr, /not allowed for claude/);
+  assert.match(resolve.stderr, /not in models\.pool for claude/);
 });

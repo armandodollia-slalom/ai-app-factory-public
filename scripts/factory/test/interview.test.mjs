@@ -51,7 +51,8 @@ test('Jira + Bitbucket + Jenkins: the answers become .factory/config.json with $
   assert.deepEqual([c.tracker.type, c.tracker.url, c.tracker.project, c.tracker.board.id, c.tracker.lanes.review], ['jira', 'https://acme.atlassian.net', 'SHOP', '12', 'In Review']);
   assert.deepEqual(c.tracker.auth, { user: '${JIRA_EMAIL}', token: '${JIRA_API_TOKEN}' });
   assert.deepEqual(c.ci, { provider: 'jenkins', url: 'https://ci.acme.io', job: 'team/shop', user: '${JENKINS_USER}', token: '${JENKINS_API_TOKEN}' });
-  assert.deepEqual(c.council.members.map((m) => [m.cli, m.model]), [['claude', 'opus'], ['codex', 'sol']], 'the council is seated from what is really available');
+  assert.deepEqual(c.models.pool.map((m) => [m.name, m.cli, m.model]), [['opus', 'claude', 'claude-opus-5-5'], ['sol', 'codex', 'gpt-6.1-sol']], 'the pool is what is really available');
+  assert.deepEqual([c.architectureReview.councilMembers, c.prCheck.councilMembers, c.models.agents.default], [2, 2, 'opus'], 'two families: councils of two');
   assert.deepEqual(c.analysis.commercial, { scanner: 'snyk-code', mode: 'server', replaces: [], token: '${SNYK_TOKEN}', check: 'code/snyk' }, 'server mode: the check that binds the result to a head, proposed from the definition');
   assert.equal(c.analysis.acceptLicence[0].by, 'Dana Lee (client CISO), 2026-11-17');
   assert.deepEqual(r.pin.owners, ['@acme/platform']);

@@ -13,6 +13,7 @@ import path from 'node:path';
 import { buildAssetsCommit, downloadAssets, exec, pushAssetsBranch, readAsset } from '../assets.mjs';
 import { blobUrl, parseBody, renderBody, sha256 } from '../ticket-format.mjs';
 import { FIELD_DEFAULTS, LANES, LEVELS, NUMBER_FIELDS, SELECT_FIELDS, STORY_KEY, UnsupportedError, boardItem, fieldNames, laneNames, ticket as normalise } from './shared.mjs';
+import { setting } from '../../../pipeline/lib/settings.mjs';
 
 // The one place the board runs the gh CLI: `ghExec` (binary-safe, no timeout) and `defaultGh`.
 export const ghExec = (args, opts = {}) => exec('gh', args, opts);
@@ -106,7 +107,7 @@ export function githubTracker(config, { gh = defaultGh } = {}) {
 
   function items() {
     const { owner, ownerType, projectNumber, statusField } = board();
-    const severityField = board().fields?.severity ?? 'Severity';
+    const severityField = setting(config, 'board.fields.severity');
     const out = [];
     let after = null;
     for (;;) {
@@ -129,15 +130,14 @@ export function githubTracker(config, { gh = defaultGh } = {}) {
   }
 
   const typeFromLabels = (labels, title) => {
-    const b = board();
-    if (labels.includes(b.epicLabel ?? 'epic')) return 'epic';
-    if (labels.includes(b.spikeLabel ?? 'spike')) return 'spike';
+    if (labels.includes(setting(config, 'board.epicLabel'))) return 'epic';
+    if (labels.includes(setting(config, 'board.spikeLabel'))) return 'spike';
     if (labels.includes('bug') || /^BUG-\d+:/.test(title ?? '')) return 'bug';
     return 'story';
   };
 
   // ------------------------------------------------------------------ tickets
-  const cacheFile = () => path.join(config.root, config.stateDir ?? '.factory/state', 'board.json');
+  const cacheFile = () => path.join(config.root, setting(config, 'stateDir'), 'board.json');
   // The issue of a story key (from its title), remembered in .factory/state/board.json.
   function findIssue(key) {
     const cache = { issues: {}, epics: {}, ...readJson(cacheFile(), {}) };
@@ -406,11 +406,11 @@ export function githubTracker(config, { gh = defaultGh } = {}) {
     return [
       [b.storyLabel, '5319e7', 'A product story run through the AI pipeline'],
       [b.blockedLabel, 'b60205', 'The pipeline could not finish this story; a human needs to look'],
-      [b.resolvedLabel ?? 'escalation-resolved', '0e8a16', 'A human answered the escalation questions; board sync re-queues the ticket'],
+      [setting(config, 'board.resolvedLabel'), '0e8a16', 'A human answered the escalation questions; board sync re-queues the ticket'],
       ['frontend', '1d76db', 'Visible UI work (WebApp)'],
       ['backend', '0e8a16', 'API and service work'],
       [b.epicLabel, '3e4b9e', 'A group of stories; its stories are its sub-issues'],
-      [b.spikeLabel ?? 'spike', 'c5def5', 'A research spike: findings that feed an epic'],
+      [setting(config, 'board.spikeLabel'), 'c5def5', 'A research spike: findings that feed an epic'],
     ];
   };
   const COLUMN_STYLE = {

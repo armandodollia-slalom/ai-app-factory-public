@@ -5,9 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run } from './util.mjs';
 import { policyTopologyProblems } from './policy-topology.mjs';
-import { councilProblems, envProblems } from './council-config.mjs';
+import { councilProblems, intercomProblems } from './council-config.mjs';
+import { ORCHESTRATED, poolProblems, poolWarnings } from './pool.mjs';
 import { configAnalysisProblems } from './analysis/config.mjs';
 import { withAnalysisGate } from './analysis/ci.mjs';
+import { allowedValues, defaultSettings, settingsProblems } from './settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PIPELINE_DIR = path.resolve(here, '..');
@@ -40,15 +42,14 @@ export function deepMerge(base, extra) {
   return out;
 }
 
-const readConfig = (file) => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
 
 // The app repository's own settings: <root>/.factory/config.json. Everything the engine knows about the
 // codebase it works on (project model, commands, paths, per-stage overrides) comes from this file; the
 // config.json files beside the code hold only language-neutral defaults.
 export const FACTORY_DIR = '.factory';
 export const OVERLAY_FILE = `${FACTORY_DIR}/config.json`;
-// Sections of the overlay that belong to tools with their own config loader, not to the stages.
-const TOOL_SECTIONS = ['lsp', 'stack', 'teststack'];
+// Sections that are off unless the repository's settings name them.
+const OPT_IN = ['analysis'];
 
 // The application's topology: the services, how the test stack reaches them and when they are ready. It is
 // the application's own description, so the agents that change the application may change it (a story that
@@ -130,6 +131,17 @@ export function repoOverlay(root, { check = true } = {}) {
   const { policy: _policy, ...topology } = app;
   return checked(deepMerge(config, topology));
 }
+// The repository's own settings at `root`, unchecked, for code that has a checkout but no loaded config (the commit
+// gate, the records commit, render): read them with setting(repoSettings(root), '<name>'), which falls back to the
+// defaults. An unreadable overlay is none.
+export function repoSettings(root) {
+  try {
+    return repoOverlay(root, { check: false }) ?? {};
+  } catch {
+    return {};
+  }
+}
+
 function checkedOverlay(overlay) {
   const problems = overlayProblems(overlay);
   if (problems.length) throw new ConfigError(`${OVERLAY_FILE}: ${problems.join('; ')}`);
@@ -173,7 +185,7 @@ const slug = (text) => String(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').re
 export function projectModel(root, overlay = repoOverlay(root)) {
   const project = overlay.project ?? {};
   const name = slug(project.name ?? path.basename(mainCheckout(root)));
-  return { languages: [], services: [], toolPaths: [], frontendPaths: [], ...project, name };
+  return { ...defaultSettings().project, ...project, name };
 }
 
 // A worktree's folder name is not the repository's: name the project after the main checkout.
@@ -199,64 +211,38 @@ export function ensureToolPath(toolPaths = [], env = process.env) {
   if (extra.length) env.PATH = [...extra, env.PATH].join(path.delimiter);
 }
 
-export const VIDEO_SCRIPT_SCOPES = ['headline', 'all', 'none'];
+// The problems of one part of the settings (doctor reports each part on its own row): settingsProblems, which checks
+// every name and value against the settings descriptions (scripts/<dir>/settings.json), filtered to that part.
+const partProblems = (doc, prefix) => settingsProblems(isObject(doc) ? doc : {}).filter((p) => p.startsWith(prefix));
+export const VIDEO_SCRIPT_SCOPES = allowedValues('video.script.scope');
 // `video.apiEvidence.paymentBodies`: a payment exchange's headers and bodies withheld (the default) or masked.
-export const PAYMENT_BODIES = ['withhold', 'mask'];
-export function apiEvidenceProblems(config) {
-  const v = config?.video?.apiEvidence?.paymentBodies;
-  if (v === undefined || PAYMENT_BODIES.includes(v)) return [];
-  return [`video.apiEvidence.paymentBodies must be one of ${PAYMENT_BODIES.join(', ')} (got ${JSON.stringify(v)})`];
-}
-
-export function videoScriptProblems(config) {
-  const scope = config?.video?.script?.scope;
-  if (scope === undefined) return [];
-  if (typeof scope !== 'string' || !VIDEO_SCRIPT_SCOPES.includes(scope)) {
-    return [`video.script.scope must be one of ${VIDEO_SCRIPT_SCOPES.join(', ')} (got ${JSON.stringify(scope)})`];
-  }
-  return [];
-}
+export const PAYMENT_BODIES = allowedValues('video.apiEvidence.paymentBodies');
+export const apiEvidenceProblems = (config) => partProblems(config, 'video.apiEvidence.');
+export const videoScriptProblems = (config) => partProblems(config, 'video.script.');
 
 const cache = new Map();
 const warned = new Set();
 
 // The `prune` settings' problems (scripts/factory/lib/prune.mjs reads them; a config that has problems does not load).
-export function pruneProblems(prune) {
-  if (prune === undefined) return [];
-  if (!prune || typeof prune !== 'object' || Array.isArray(prune)) return ['prune must be an object'];
-  return ['keepLocal', 'afterDelivery'].filter((k) => prune[k] !== undefined && typeof prune[k] !== 'boolean').map((k) => `prune.${k} must be true or false`);
-}
+export const pruneProblems = (prune) => partProblems({ prune }, 'prune');
 
 // The PR delivery settings (implement.preOpen; scripts/implement/lib/pre-open.mjs reads them).
-export const PRE_OPEN_DEFAULTS = { branches: null, afterOpen: 'draft', wipLabel: 'work-in-progress', draftCycles: 1 };
-export const AFTER_OPEN = ['draft', 'label', 'close-reopen'];
-export const PRE_OPEN_REMOVED = {
-  enabled: 'implement.preOpen.enabled was removed: every pipeline PR now opens finished (all agent work done, CI proven on its head), and an open PR that agents work on again is held (implement.preOpen.afterOpen); remove the setting',
-  failedStory: 'implement.preOpen.failedStory was removed: a story whose PR check or CI never passes now always escalates on its ticket, with its branch pushed, the findings on the ticket and no PR; remove the setting',
-};
-export function preOpenProblems(config) {
-  const raw = config?.implement?.preOpen;
-  if (raw === undefined) return [];
-  const p = [];
-  const known = Object.keys(PRE_OPEN_DEFAULTS);
-  for (const k of Object.keys(raw ?? {})) if (PRE_OPEN_REMOVED[k]) p.push(PRE_OPEN_REMOVED[k]);
-  for (const k of Object.keys(raw ?? {})) if (!known.includes(k) && !PRE_OPEN_REMOVED[k]) p.push(`implement.preOpen.${k} is not a setting (${known.join(', ')})`);
-  if (raw?.afterOpen !== undefined && !AFTER_OPEN.includes(raw.afterOpen)) p.push(`implement.preOpen.afterOpen must be one of ${AFTER_OPEN.join(', ')}`);
-  if (raw?.branches !== undefined && raw.branches !== null && !(Array.isArray(raw.branches) && raw.branches.every((b) => typeof b === 'string' && b))) p.push('implement.preOpen.branches must be a list of branch patterns');
-  if (raw?.draftCycles !== undefined && !(Number.isInteger(raw.draftCycles) && raw.draftCycles >= 0)) p.push('implement.preOpen.draftCycles must be a whole number');
-  return p;
-}
+export const PRE_OPEN_DEFAULTS = defaultSettings().implement.preOpen;
+export const AFTER_OPEN = allowedValues('implement.preOpen.afterOpen');
+export const preOpenProblems = (config) => partProblems(config, 'implement.preOpen.');
 
 // The problems of the repository's own settings that every loader reports the same way (repoOverlay: a stage's config,
-// a tool's section, doctor): a config with any of them does not load, whichever command reads it first.
-export const overlayProblems = (overlay) => [...pruneProblems(overlay?.prune), ...preOpenProblems(overlay), ...videoScriptProblems(overlay), ...apiEvidenceProblems(overlay), ...modelProblems(overlay)];
-// A role's model that is not an allowed one (the repository's agent.allowedModels, else the factory's): every loader, a
-// tool's section included, refuses it (not only the stage dispatcher).
-function modelProblems(overlay) {
-  const models = overlay?.agent?.models;
-  if (!models || typeof models !== 'object') return [];
-  const allowed = overlay.agent.allowedModels ?? readConfig(path.join(PIPELINE_DIR, 'config.json')).agent?.allowedModels ?? [];
-  return Object.entries(models).filter(([, alias]) => alias && !allowed.includes(alias)).map(([role, alias]) => `agent.models.${role} is "${alias}", which is not in agent.allowedModels (${allowed.join(', ')})`);
+// a tool's section, doctor): a config with any of them does not load, whichever command reads it first. Old and
+// misspelt names and values outside a setting's allowed ones come from the settings descriptions (settings.mjs).
+export const overlayProblems = (overlay) => [...settingsProblems(overlay ?? {}), ...listedMembers(overlay), ...poolOverlayProblems(overlay)];
+// A council written the old way, as a list of members: say where its members went (the pool) besides the type error.
+const listedMembers = (overlay) => (Array.isArray(overlay?.council?.members) ? councilProblems({ members: overlay.council.members }) : []);
+// The pool and every setting that names one of its entries, on the defaults with the repository's settings on top:
+// every loader, a tool's section included, refuses an entry name that is not in the pool.
+function poolOverlayProblems(overlay) {
+  const names = (o) => o && typeof o === 'object' && (o.models || o.orchestrator || o.implement?.subtaskModels || ORCHESTRATED.some((s) => o[s]?.orchestrator));
+  if (!names(overlay)) return [];
+  return poolProblems(deepMerge(defaultSettings(), overlay));
 }
 
 // Settings the run honours only with a fallback: a warning when the config loads, never a failure. The modules that know
@@ -274,15 +260,16 @@ export function configWarnings(config) {
   });
 }
 
-// Shared defaults come from scripts/pipeline/config.json; a stage's scripts/<stage>/config.json is merged
-// on top, then the repository's own .factory/config.json, so the app repo overrides anything.
+// The defaults of every section (scripts/<dir>/config.json), then the repository's own .factory/config.json, so the app
+// repo overrides anything. `stage` names the stage that loads them (config.stage).
 export function loadConfig(stage = null, root = repoRoot()) {
   const cacheKey = `${root}\0${stage ?? ''}`;
   if (cache.has(cacheKey)) return cache.get(cacheKey);
-  let config = readConfig(path.join(PIPELINE_DIR, 'config.json'));
-  if (stage) config = deepMerge(config, readConfig(path.join(SCRIPTS_DIR, stage, 'config.json')));
+  // Every section's defaults (scripts/<dir>/config.json; settings.mjs), whichever stage loads them.
+  // An opt-in section's defaults apply only when the repository names the section (its presence turns it on).
   const overlay = repoOverlay(root);
-  config = deepMerge(config, Object.fromEntries(Object.entries(overlay).filter(([k]) => !TOOL_SECTIONS.includes(k))));
+  let config = Object.fromEntries(Object.entries(defaultSettings()).filter(([k]) => !(OPT_IN.includes(k) && (overlay[k] === undefined || overlay[k] === null))));
+  config = deepMerge(config, overlay);
   config.project = projectModel(root, overlay);
   config.installRoot = INSTALL_ROOT;
   // The ticket repository defaults to this checkout's GitHub origin.
@@ -297,30 +284,19 @@ export function loadConfig(stage = null, root = repoRoot()) {
   ensureToolPath(config.project.toolPaths);
   config.root = root;
   config.stage = stage;
-  config.agent.cli = process.env.PIPELINE_AGENT_CLI || config.agent.cli;
   config.agent.cmd = process.env.PIPELINE_AGENT_CMD || null;
   config.baseRef = process.env.PIPELINE_BASE_REF || config.baseRef;
   config.abs = (rel) => path.join(root, rel);
-  // Fail on a mistyped model at load time, not halfway through a run.
-  const allowed = config.agent.allowedModels ?? [];
-  for (const [role, alias] of Object.entries(config.agent.models ?? {})) {
-    if (alias && !allowed.includes(alias)) {
-      throw new ConfigError(`agent.models.${role} is "${alias}", which is not in agent.allowedModels (${allowed.join(', ')}).`);
-    }
-  }
-  // The same for the council's members: a bad member, lens, stage or a model without an id for its CLI fails here.
-  const council = councilProblems(config.council, config.agent);
+  // The pool, and every setting that names one of its entries, fails here, not halfway through a run.
+  const pool = poolProblems(config);
+  if (pool.length) throw new ConfigError(`${OVERLAY_FILE}: ${pool.join('; ')}`);
+  const council = [...councilProblems(config.council), ...['implement', 'architectureReview', 'testPlan', 'testAutomation', 'prCheck'].flatMap((s) => (config[s]?.councilIntercom !== undefined ? intercomProblems(config[s].councilIntercom, `${s}.councilIntercom`, config.council?.intercom) : []))];
   if (council.length) throw new ConfigError(`${OVERLAY_FILE}: ${council.join('; ')}`);
-  // An implement role's own `env` (beside its `cli`), under the same rules as a council member's.
-  const roleEnv = Object.entries(config.implement?.roles ?? {}).flatMap(([role, r]) => (r?.env !== undefined ? envProblems(r.env, `implement.roles.${role}.env`) : []));
-  if (roleEnv.length) throw new ConfigError(`${OVERLAY_FILE}: ${roleEnv.join('; ')}`);
   // Static analysis (opt-in): a bad tool, parser, scope, slot or pin fails here, not halfway through a pair round.
   const analysis = configAnalysisProblems(config);
   if (analysis.length) throw new ConfigError(`${OVERLAY_FILE}: ${analysis.join('; ')}`);
-  const videoScript = videoScriptProblems(config);
-  if (videoScript.length) throw new ConfigError(`${OVERLAY_FILE}: ${videoScript.join('; ')}`);
   // Settings that work but not as written: a warning, once per process, never a failure.
-  config.warnings = configWarnings(config);
+  config.warnings = [...poolWarnings(config), ...configWarnings(config)];
   for (const w of config.warnings) {
     if (warned.has(`${root}\0${w}`)) continue;
     warned.add(`${root}\0${w}`);

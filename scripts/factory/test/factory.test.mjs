@@ -100,8 +100,8 @@ test('init draft on a .NET solution with a root e2e harness: no "." test root, t
   assert.equal(config.project.services[0].unitTests, 'tests/Basket.UnitTests', 'unit tests are preferred over functional tests');
   assert.equal(config.implement.checks.find((c) => c.name === 'build').cmd, 'dotnet build App.Web.slnf -nologo -v q -clp:ErrorsOnly');
   assert.ok(!config.implement.checks.some((c) => c.name === 'typecheck'), 'no tsconfig.json: no tsc check');
-  assert.deepEqual(config.precheck.lint['.ts'], ['node', '{packs}/typescript/lint/eslint.mjs', '{files}'], "no ESLint in the repo: the TypeScript pack's own ESLint lints the specs agents touch");
-  assert.ok(config.precheck.lint['.cs'] && config.precheck.fix['.ts']);
+  assert.deepEqual(config.featureVerification.precheck.lint['.ts'], ['node', '{packs}/typescript/lint/eslint.mjs', '{files}'], "no ESLint in the repo: the TypeScript pack's own ESLint lints the specs agents touch");
+  assert.ok(config.featureVerification.precheck.lint['.cs'] && config.featureVerification.precheck.fix['.ts']);
   assert.deepEqual(unfilledPlaceholders(config, packs), []);
   assert.equal(config.stack?.resolver, 'pack:dotnet/stack/services.mjs', "the pack's stack fragment reaches the draft");
   assert.equal(config.teststack?.commands?.['hash-password'], 'pack:dotnet/stack/hash-password.mjs');
@@ -406,7 +406,7 @@ test('pre-commit: lints only the lines a commit touches, and keeps the shared gr
   // A linter that flags every line containing BAD, in path:line form.
   fs.writeFileSync(path.join(root, 'lint.sh'), '#!/bin/sh\nfor f in "$@"; do grep -n BAD "$f" | sed "s#^#$f:#"; done | grep . && exit 1; exit 0\n', { mode: 0o755 });
   const config = JSON.parse(read(root, '.factory/config.json'));
-  config.precheck = { ...(config.precheck ?? {}), lint: { '.txt': ['./lint.sh', '{files}'] } };
+  config.featureVerification.precheck = { ...(config.featureVerification.precheck ?? {}), lint: { '.txt': ['./lint.sh', '{files}'] } };
   fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify(config));
   fs.mkdirSync(path.join(root, 'graphify-out/cache/semantic'), { recursive: true });
   fs.writeFileSync(path.join(root, 'graphify-out/cache/semantic/x.json'), '{}');
@@ -448,7 +448,7 @@ test('agent instruction files the factory creates pass markdownlint (first line 
 test("the TypeScript pack's ESLint lints a repository without ESLint, on changed lines", async () => {
   const { lintChanged } = await import('../../pipeline/lib/lint.mjs');
   const root = repo({ ...DOTNET_E2E, 'e2e/cart.spec.ts': "import { test } from '@playwright/test';\ntest('a', async () => {});\n" });
-  const config = { root, precheck: { lint: { '.ts': ['node', '{packs}/typescript/lint/eslint.mjs', '{files}'] } } };
+  const config = { root, featureVerification: { precheck: { lint: { '.ts': ['node', '{packs}/typescript/lint/eslint.mjs', '{files}'] } } } };
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: root, encoding: 'utf8' });
   git('add', '-A');
   git('commit', '-qm', 'base', '--no-verify');
@@ -495,9 +495,9 @@ test("doctor: a language the packs can lint but precheck.lint leaves out is MISS
   spawnSync('git', ['add', '-A'], { cwd: root });
   assert.equal(factory(root, ['init', '--tools', 'claude']).status, 0);
   const config = JSON.parse(read(root, '.factory/config.json'));
-  for (const ext of ['.ts', '.tsx', '.js', '.mjs', '.cjs', '.jsx']) assert.ok(config.precheck.lint[ext], ext);
+  for (const ext of ['.ts', '.tsx', '.js', '.mjs', '.cjs', '.jsx']) assert.ok(config.featureVerification.precheck.lint[ext], ext);
   assert.match(factory(root, ['doctor']).stdout, /ok +linters cover every language the packs can lint/);
-  delete config.precheck.lint['.js'];
+  delete config.featureVerification.precheck.lint['.js'];
   fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify(config));
   assert.match(factory(root, ['doctor']).stdout, /MISSING +linters cover every language the packs can lint +\(\.js file\(s\) are tracked/);
 });
@@ -609,4 +609,16 @@ test('upgrade --install fetches the pinned version and completes the install: Py
   assert.ok(!fs.existsSync(path.join(dest2, 'node_modules')), 'no packages were needed to run it');
   assert.deepEqual(fs.readFileSync(path.join(dest2, 'calls.txt'), 'utf8').trim().split('\n'), ['python setup', 'lsp setup']);
   for (const d of [src, home]) fs.rmSync(d, { recursive: true, force: true });
+});
+
+// Council r5 (A4, live path): render reads the addenda from the repository's agentOverlayDir, not '.factory/agents'.
+test('an addendum in a custom agentOverlayDir reaches the generated agent file', () => {
+  const root = repo(JAVA);
+  assert.equal(factory(root, ['init', '--tools', 'claude']).status, 0);
+  const file = path.join(root, '.factory/config.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), agentOverlayDir: 'team/agents' }));
+  fs.mkdirSync(path.join(root, 'team/agents'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'team/agents/implementer.md'), 'Build with `gradle check`.\n');
+  render(root, INSTALL);
+  assert.match(read(root, '.claude/agents/implementer.md'), /## Project context\n\nBuild with `gradle check`\./);
 });

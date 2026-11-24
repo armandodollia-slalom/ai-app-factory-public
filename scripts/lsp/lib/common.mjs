@@ -36,8 +36,12 @@ export function loadConfig(root = worktreeOf(process.cwd())) {
     s.extensions = s.extensions.map((e) => e.toLowerCase());
     s.args ??= [];
   }
+  // lsp.maxLanguageServers (LSP_MAX_SERVERS overrides it) is an upper limit on the number an implement run worked out from
+  // free memory (LSP_SIZED_SERVERS).
   const max = Number.parseInt(process.env.LSP_MAX_SERVERS ?? '', 10);
   if (Number.isInteger(max) && max >= 0) config.maxLanguageServers = max;
+  const sized = Number.parseInt(process.env.LSP_SIZED_SERVERS ?? '', 10);
+  if (Number.isInteger(sized) && sized >= 0) config.maxLanguageServers = Math.min(config.maxLanguageServers, sized);
   const idle = Number.parseInt(process.env.LSP_IDLE_SEC ?? '', 10);
   if (Number.isInteger(idle) && idle > 0) config.idleSec = idle;
   return config;

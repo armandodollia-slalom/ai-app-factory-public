@@ -165,7 +165,12 @@ function fakeDeps(note, extra = {}) {
       return { url: `https://github.com/example/repo/pull/${100 + prs.length}`, pushed: true, draft: Boolean(draft) };
     },
     shipMetrics: async (wt) => ships.push(wt?.root ?? null),
-    parityGate: (o) => (parities.push(o.targetArgs.join(' ')), { results: [{ check: 'gate.yml lint', ok: true, output: '' }], fixRun: null }),
+    // As the real gate: refused without the unit's CI fixing budget (council r3, sol-06).
+    parityGate: (o) => {
+      if (typeof o.budget?.left !== 'function' || typeof o.budget?.charge !== 'function') throw new Error('parityGate needs the unit\'s CI fixing budget');
+      parities.push(o.targetArgs.join(' '));
+      return { results: [{ check: 'gate.yml lint', ok: true, output: '' }], fixRun: null };
+    },
     // The remote's head of a unit branch with an open PR (no remote in these repositories): unchanged, unless a test says.
     remoteHead: (wt, branch) => extra.remote?.(branch) ?? { head: null, moved: false },
     ...extra,
@@ -204,7 +209,7 @@ test('validateGroups: coverage, duplicates, Blocked-by order; no cap by default,
   const one = [{ id: 'all', tickets: ['BUG-1', 'BUG-2', 'BUG-3'] }];
   assert.equal(validateGroups(one, { stories }).ok, true, 'no cap by default');
   assert.equal(validateGroups(one, { stories, maxPerGroup: 0 }).ok, true, '0 means no cap');
-  assert.match(validateGroups(one, { stories, maxPerGroup: 2 }).errors.join(), /more than maxBugsPerGroup \(2\)/);
+  assert.match(validateGroups(one, { stories, maxPerGroup: 2 }).errors.join(), /more than implement\.epic\.maxTicketsPerGroup \(2\)/);
   const errors = validateGroups([{ id: 'b', tickets: ['BUG-2', 'BUG-3'] }, { id: 'a', tickets: ['BUG-1', 'BUG-3'] }], { stories }).errors.join('\n');
   assert.match(errors, /BUG-3 is in both b and a/);
   assert.match(errors, /BUG-2 is blocked by \(or dependsOn\) BUG-1, which is in the later group a/);
@@ -990,10 +995,10 @@ test('feature epic delivery: the epic PR opens finished too (no gate rating for 
   assert.match(f.prs[0].body, /CI checks run before this PR: all 1 passed \(lint\)/);
 });
 
-test('epic delivery: implement.ciParity false turns a feature epic\'s parity run off, as for a single ticket; a bug group runs it always', async () => {
+test('epic delivery: implement.ci.parity.enabled false turns a feature epic\'s parity run off, as for a single ticket; a bug group runs it always', async () => {
   for (const bugs of [false, true]) {
     const env = makeRepo({ bugs });
-    env.config.implement.ciParity = false;
+    env.config.implement.ci = { ...env.config.implement.ci, parity: { enabled: false } };
     const f = fakeDeps(bugs ? twoGroups() : featureNote, { startWorker: fakeWorker().startWorker });
     const r = await epicRun(env, f);
     assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
@@ -1010,7 +1015,7 @@ test('openPr never opens or pushes to a PR that is already open', async () => {
 
 // ---------------------------------------------------------------------------------------------
 // A feature epic's PR split (implement.epic.prSplit, --pr-split): one PR for the epic (default), one per story, or
-// groups the orchestrator chooses (validated like bug-epic groups, capped by implement.epic.maxStoriesPerGroup). Every
+// groups the orchestrator chooses (validated like bug-epic groups, capped by implement.epic.maxTicketsPerGroup). Every
 // PR still opens once, after every agent stage, on a CI-proven head (the same delivery); the cross-story journeys are
 // verified on one group, stacked on the others that hold a journey story.
 // ---------------------------------------------------------------------------------------------
@@ -1078,11 +1083,11 @@ test('feature epic, prSplit groups: a group over the cap, or a foundation, is re
   const stories = keys.map((key) => ({ key, blockedBy: key === 'DEMO-2' ? ['DEMO-1'] : [] }));
   const big = { stories: [], prGroups: [{ id: 'all', title: 'All', tickets: keys }] };
   const v = validateNote(big, { keys, groups: true, stories, maxPerGroup: 2, featureGroups: true });
-  assert.ok(v.groupErrors.some((e) => /more than implement\.epic\.maxStoriesPerGroup \(2\)/.test(e)), v.errors.join('; '));
+  assert.ok(v.groupErrors.some((e) => /more than implement\.epic\.maxTicketsPerGroup \(2\)/.test(e)), v.errors.join('; '));
   const withFoundation = validateNote({ ...big, prGroups: [{ id: 'a', title: 'A', tickets: keys }], foundation: { goal: 'g', owns: ['src/x/**'] } }, { keys, groups: true, stories, featureGroups: true });
   assert.ok(withFoundation.noteErrors.some((e) => /foundation must be null/.test(e)));
   const env = makeRepo();
-  env.config.implement.epic = { ...env.config.implement.epic, maxStoriesPerGroup: 2 };
+  env.config.implement.epic = { ...env.config.implement.epic, maxTicketsPerGroup: 2 };
   const f = fakeDeps({ ...featureNote, prGroups: big.prGroups }, { startWorker: fakeWorker().startWorker });
   const r = await epicRun(env, f, { prSplit: 'groups' });
   assert.equal(r.epic.outcome, 'done', JSON.stringify(r.epic));
@@ -1135,11 +1140,13 @@ test('featureGroupTitle: the epic title is never repeated', () => {
 // findings go on the tickets, and the run says why.
 test('epic delivery: a unit PR check that ends escalated in fix mode opens no PR; the branch is pushed and the findings stay on the tickets', async () => {
   const env = makeRepo();
-  env.config.implement.epic = { ...env.config.implement.epic, prCheck: 'fix' };
+  env.config.prCheck = { ...env.config.prCheck, mode: 'fix' };
   const note = { ...featureNote, journeys: [], prGroups: [{ id: 'all', title: 'Everything', tickets: ['DEMO-1', 'DEMO-2', 'DEMO-3'], reason: 'one feature', risk: 'low' }] };
   const escalated = { status: 'done', mode: 'fix', verdict: 'ESCALATED', score: 8, openFindings: [{ id: 'VID-1', severity: 'major', title: 'UI cases without videos' }, { id: 'VID-4', severity: 'minor', title: 'a caption is terse' }] };
-  const f = fakeDeps(note, { startWorker: fakeWorker().startWorker, prCheck: async () => escalated });
+  const fixFlags = [];
+  const f = fakeDeps(note, { startWorker: fakeWorker().startWorker, prCheck: async (e, keys, o) => (fixFlags.push(o?.fix), escalated) });
   const r = await epicRun(env, f, { prSplit: 'groups' });
+  assert.deepEqual([...new Set(fixFlags)], [true], 'the unit check follows prCheck.mode (fix)');
   assert.equal(f.prs.length, 0, 'no PR opens');
   assert.ok(!f.order.some((o) => o[0] === 'open'));
   assert.ok(f.order.some((o) => o[0] === 'push'), 'the branch is pushed');

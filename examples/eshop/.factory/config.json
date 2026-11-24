@@ -146,6 +146,11 @@
       "src/**/Views/**",
       "src/**/Pages/**",
       "src/**/wwwroot/**"
+    ],
+    "testRoots": [
+      "e2e",
+      "tests",
+      ".factory/stack/scenarios"
     ]
   },
   "tickets": {
@@ -184,9 +189,6 @@
         "WebApp",
         "WebAppComponents",
         "Blazor"
-      ],
-      "filePatterns": [
-        ".razor"
       ]
     },
     "pathHints": {
@@ -217,7 +219,6 @@
         "testing/teststack"
       ]
     },
-    "lsp": {},
     "reviewGate": {
       "systems": [
         {
@@ -356,93 +357,7 @@
       }
     }
   },
-  "testRoots": [
-    "e2e",
-    "tests",
-    ".factory/stack/scenarios"
-  ],
-  "testExtensions": [
-    ".ts",
-    ".cs"
-  ],
-  "precheck": {
-    "fix": {
-      ".md": [
-        "node_modules/.bin/markdownlint",
-        "--fix",
-        "{files}"
-      ],
-      ".ts": [
-        "node_modules/.bin/eslint",
-        "--fix",
-        "--no-warn-ignored",
-        "{files}"
-      ],
-      ".cs": [
-        "dotnet",
-        "format",
-        "eShop.Web.slnf",
-        "--include",
-        "{files}"
-      ]
-    },
-    "lint": {
-      ".md": [
-        "node_modules/.bin/markdownlint",
-        "{files}"
-      ],
-      ".ts": [
-        "node_modules/.bin/eslint",
-        "--no-warn-ignored",
-        "{files}"
-      ],
-      ".cs": [
-        "dotnet",
-        "format",
-        "eShop.Web.slnf",
-        "--verify-no-changes",
-        "--include",
-        "{files}"
-      ]
-    },
-    "scenarioFile": "scenario.yaml",
-    "validateScenario": [
-      "testing/teststack",
-      "validate",
-      "{scenario}"
-    ],
-    "testRunners": [
-      {
-        "use": "playwright/playwright",
-        "match": [
-          ".ts"
-        ],
-        "run": [
-          "npx",
-          "playwright",
-          "test",
-          "-c",
-          "playwright.teststack.config.ts",
-          "--grep",
-          "{casePrefix}",
-          "{files}"
-        ]
-      },
-      "dotnet/mstest",
-      "dotnet/xunit"
-    ],
-    "automationNotes": [
-      "Playwright specs under e2e/teststack/ build every URL from e2e/teststack/ports.ts (WEBAPP_URL, IDENTITY_URL, CATALOG_URL, port(name)); never hard-code 18xxx ports, so the specs run on whichever stack slot the run leased."
-    ]
-  },
   "prCheck": {
-    "frontendPaths": [
-      "src/WebApp/",
-      "src/WebAppComponents/",
-      ".razor",
-      ".razor.css",
-      ".css"
-    ],
     "conventions": [
       "AGENTS.md",
       "CONTRIBUTING.md",
@@ -509,44 +424,6 @@
   },
   "resources": {
     "lspServerGb": 0.8
-  },
-  "review": {
-    "maxRounds": 5,
-    "timeoutSec": 1200,
-    "codeAgents": [
-      "implementer"
-    ],
-    "policy": {
-      "enabled": true,
-      "agent": "architecture-policy/agents/arch_review.py",
-      "dir": ".factory/policy",
-      "command": [
-        "python",
-        "{agent}",
-        "review",
-        "-"
-      ],
-      "lessonsCommand": [
-        "python",
-        "{agent}",
-        "get_lessons",
-        "-"
-      ],
-      "categories": {
-        "security": "security",
-        "data": "data",
-        "resiliency": "resilience",
-        "observability": "resilience",
-        "error_handling": "correctness",
-        "api": "fit",
-        "architecture": "fit",
-        "testing": "maintainability"
-      },
-      "maxLessons": 5,
-      "requester": "implementer",
-      "semantic": "auto",
-      "timeoutSec": 600
-    }
   },
   "lsp": {
     "maxLanguageServers": 6,
@@ -1026,64 +903,45 @@
     }
   },
   "$councilSample": {
-    "$comment": "A documented sample, not enabled: rename this key to \"council\" to seat council verifiers (docs/ai-pipeline/council.md). The codex member needs agent.modelIds.codex.sol.",
-    "rounds": 3,
-    "passScore": 9,
-    "blockOn": "any",
-    "onUnavailable": "fail",
-    "members": [
-      {
-        "name": "opus",
-        "cli": "claude",
-        "model": "opus",
-        "effort": "high",
-        "lens": "correctness"
-      },
-      {
-        "name": "sol",
-        "cli": "codex",
-        "model": "sol",
-        "effort": "high",
-        "lens": "correctness"
-      },
-      {
-        "name": "tests",
-        "cli": "copilot",
-        "model": "sonnet",
-        "lens": "test-value"
-      },
-      {
-        "name": "rewrite",
-        "cli": "claude",
-        "model": "opus",
-        "lens": "rewrite",
-        "blocking": false
-      }
-    ],
-    "stages": {
-      "pairVerify": {
-        "members": [
-          "opus",
-          "tests"
-        ]
-      },
-      "review": {
-        "members": [
-          "opus",
-          "sol",
-          "rewrite"
-        ]
-      },
-      "testAutomation": {
-        "members": [
-          "tests",
-          "sol"
-        ],
-        "rounds": 5
-      },
-      "prCheck": {
-        "rounds": 6
-      }
+    "$comment": "A documented sample, not enabled: rename the keys inside it to \"models\", \"council\", \"architectureReview\" and \"prCheck\" to seat councils of three from the pool (docs/ai-pipeline/council.md). Every agent's entry stays as the defaults name it (opus, sonnet), so the pool keeps those names.",
+    "models": {
+      "pool": [
+        {
+          "name": "opus",
+          "cli": "claude",
+          "model": "claude-opus-5-5",
+          "effort": "high"
+        },
+        {
+          "name": "sonnet",
+          "cli": "claude",
+          "model": "claude-sonnet-5-5",
+          "effort": "medium"
+        },
+        {
+          "name": "sol",
+          "cli": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "high"
+        },
+        {
+          "name": "copilot-sonnet",
+          "cli": "copilot",
+          "model": "claude-sonnet-5.5",
+          "effort": "medium"
+        }
+      ]
+    },
+    "council": {
+      "members": 1,
+      "blockQuorum": "any",
+      "onUnavailable": "fail"
+    },
+    "architectureReview": {
+      "councilMembers": 3
+    },
+    "prCheck": {
+      "councilMembers": 3
     }
   },
   "$analysisSample": {
@@ -1091,14 +949,128 @@
     "vars": {
       "solution": "eShop.slnx"
     },
-    "fixLoop": {
-      "bounces": 2
-    },
+    "maxFixRounds": 2,
     "tools": {
       "roslyn-security": {
         "timeoutSec": 2400
       }
     },
     "licenceReview": "default"
+  },
+  "hooks": {
+    "codeAgents": [
+      "implementer"
+    ]
+  },
+  "featureVerification": {
+    "precheck": {
+      "fix": {
+        ".md": [
+          "node_modules/.bin/markdownlint",
+          "--fix",
+          "{files}"
+        ],
+        ".ts": [
+          "node_modules/.bin/eslint",
+          "--fix",
+          "--no-warn-ignored",
+          "{files}"
+        ],
+        ".cs": [
+          "dotnet",
+          "format",
+          "eShop.Web.slnf",
+          "--include",
+          "{files}"
+        ]
+      },
+      "lint": {
+        ".md": [
+          "node_modules/.bin/markdownlint",
+          "{files}"
+        ],
+        ".ts": [
+          "node_modules/.bin/eslint",
+          "--no-warn-ignored",
+          "{files}"
+        ],
+        ".cs": [
+          "dotnet",
+          "format",
+          "eShop.Web.slnf",
+          "--verify-no-changes",
+          "--include",
+          "{files}"
+        ]
+      },
+      "scenarioFile": "scenario.yaml",
+      "validateScenario": [
+        "testing/teststack",
+        "validate",
+        "{scenario}"
+      ],
+      "testRunners": [
+        {
+          "use": "playwright/playwright",
+          "match": [
+            ".ts"
+          ],
+          "run": [
+            "npx",
+            "playwright",
+            "test",
+            "-c",
+            "playwright.teststack.config.ts",
+            "--grep",
+            "{casePrefix}",
+            "{files}"
+          ]
+        },
+        "dotnet/mstest",
+        "dotnet/xunit"
+      ],
+      "automationNotes": [
+        "Playwright specs under e2e/teststack/ build every URL from e2e/teststack/ports.ts (WEBAPP_URL, IDENTITY_URL, CATALOG_URL, port(name)); never hard-code 18xxx ports, so the specs run on whichever stack slot the run leased."
+      ]
+    },
+    "testExtensions": [
+      ".ts",
+      ".cs"
+    ]
+  },
+  "architectureReview": {
+    "timeoutSec": 1200,
+    "policy": {
+      "enabled": true,
+      "agent": "architecture-policy/agents/arch_review.py",
+      "dir": ".factory/policy",
+      "command": [
+        "python",
+        "{agent}",
+        "review",
+        "-"
+      ],
+      "lessonsCommand": [
+        "python",
+        "{agent}",
+        "get_lessons",
+        "-"
+      ],
+      "categories": {
+        "security": "security",
+        "data": "data",
+        "resiliency": "resilience",
+        "observability": "resilience",
+        "error_handling": "correctness",
+        "api": "fit",
+        "architecture": "fit",
+        "testing": "maintainability"
+      },
+      "maxLessons": 5,
+      "requester": "implementer",
+      "semantic": "auto",
+      "timeoutSec": 600
+    },
+    "maxCouncilRounds": 5
   }
 }

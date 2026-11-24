@@ -13,9 +13,9 @@ import { attributedAgent, normalizeVerdict } from '../lib/verify.mjs';
 import { automationUpToDate, fixFiles, lintFiles } from '../lib/workflows.mjs';
 
 const config = {
-  loops: { requiredScore: 10 },
-  categories: { plan: ['missing-sad-path', 'other'], automation: ['missing-assertion', 'other'] },
-  lessons: { storyThreshold: 3, retireAfterStories: 3, revertMinRounds: 4, examplesPerCategory: 2 },
+  testPlan: { councilPassScore: 10 }, testAutomation: { councilPassScore: 10 },
+  featureVerification: { categories: { plan: ['missing-sad-path', 'other'], automation: ['missing-assertion', 'other'] } },
+  retro: { lessons: { storyThreshold: 3, retireAfterStories: 3, revertMinRounds: 4, examplesPerCategory: 2 } },
 };
 
 test('extractResult takes the last balanced AGENT_RESULT object, even with braces in strings', () => {
@@ -33,7 +33,7 @@ test('front matter round-trips lists with commas and drops undefined fields', ()
 });
 
 test('normalizeVerdict passes at the required score even with minor gaps, and never lets a low score go unexplained', () => {
-  const at9 = { ...config, loops: { requiredScore: 9 } };
+  const at9 = { ...config, testPlan: { councilPassScore: 9 } };
   assert.equal(normalizeVerdict(at9, 'plan', { score: 10, gaps: [] }).passed, true);
   const minorAt9 = normalizeVerdict(at9, 'plan', { score: 9, gaps: [{ category: 'missing-sad-path', detail: 'pick one command' }] });
   assert.equal(minorAt9.passed, true);
@@ -116,7 +116,7 @@ test('lessons for the implementer come from blocking architecture review finding
       review('A-1', [sec, { severity: 'minor', category: 'fit', file: 'src/A.cs' }]),
       review('B-1', [sec], { reviewer: 'arch-review-agent' }),
       review('C-1', [sec]),
-      review('D-1', [sec], { verdict: 'APPROVED' }),
+      review('D-1', [sec], { score: 10, verdict: 'APPROVED' }),
       review('E-1', [{ severity: 'blocking', category: 'fit', file: 'src/E.cs' }]),
     ],
   };
@@ -176,7 +176,7 @@ test('the retro digest ties later findings back to why each case was written', (
     d('review', 'changes-requested', { agent: 'arch-review-agent', reason: 'secret in code', items: [{ severity: 'blocking', category: 'security', rule: 'SEC-001', file: 'src/A.cs', line: 3, reason: 'literal password', fix: 'use options' }] }),
     d('review', 'approved', { agent: 'architecture-reviewer', reason: 'fits the Apis/ layout' }),
   ];
-  const digest = retroDigest({ lessons: { examplesPerCategory: 5 } }, decisions, '2026-01-01');
+  const digest = retroDigest({ retro: { lessons: { examplesPerCategory: 5 } } }, decisions, '2026-01-01');
   assert.deepEqual(digest.counts, { 'plan:plan-written': 1, 'automation-verify:denied': 1, 'automation:product-bug': 1, 'review:changes-requested': 1, 'review:approved': 1 });
   assert.deepEqual(digest.plans.stories, [{ story: 'A-1', rounds: 1, cases: 2, summary: 'split by rule', excluded: [{ item: 'rate limits', reason: 'out of scope' }] }]);
   assert.equal(digest.plans.casesTracedBackToPlan[0].why_written, 'auth sad path');
@@ -189,13 +189,13 @@ test('the retro digest ties later findings back to why each case was written', (
 test('the factory retro shows the implement orchestrator\'s plans, escalations and pair verifier findings', () => {
   const d = (stage, decision, extra = {}) => ({ ts: '2026-02-01', stage, story: 'A-1', agent: 'implementer', decision, ...extra });
   const decisions = [
-    d('implement-plan', 'plan-written', { mode: 'delegate', reason: 'two services', items: [{ id: 'api', modelClass: 'large', modelReason: 'new aggregate', verify: 'code', verifyReason: 'api only', confidence: 0.6 }] }),
+    d('implement-plan', 'plan-written', { mode: 'delegate', reason: 'two services', items: [{ id: 'api', model: 'opus', modelReason: 'new aggregate', verify: 'code', verifyReason: 'api only', confidence: 0.6 }] }),
     d('implement-plan', 'escalation-takeover', { subtask: 'api', pair_outcome: 'exhausted', reason: 'the spec was ambiguous' }),
     d('implement-verify', 'changes-requested', { agent: 'pair-verifier', items: [{ severity: 'blocking', category: 'logic', file: 'src/A.cs', line: 2, reason: 'no owner check' }] }),
     d('implement-verify', 'approved', { agent: 'pair-verifier' }),
   ];
-  const digest = retroDigest({ lessons: { examplesPerCategory: 5 } }, decisions, '2026-01-01');
-  assert.deepEqual(digest.implement.plans, [{ story: 'A-1', decision: 'plan-written', mode: 'delegate', reason: 'two services', subtasks: [{ id: 'api', modelClass: 'large', modelReason: 'new aggregate', verify: 'code', verifyReason: 'api only', confidence: 0.6 }] }]);
+  const digest = retroDigest({ retro: { lessons: { examplesPerCategory: 5 } } }, decisions, '2026-01-01');
+  assert.deepEqual(digest.implement.plans, [{ story: 'A-1', decision: 'plan-written', mode: 'delegate', reason: 'two services', subtasks: [{ id: 'api', model: 'opus', modelReason: 'new aggregate', verify: 'code', verifyReason: 'api only', confidence: 0.6 }] }]);
   assert.deepEqual(digest.implement.escalations, [{ story: 'A-1', subtask: 'api', decision: 'escalation-takeover', pairOutcome: 'exhausted', reason: 'the spec was ambiguous' }]);
   assert.equal(digest.implement.verifierFindings.length, 1);
   assert.equal(digest.implement.verifierFindings[0].examples[0].reason, 'no owner check');
@@ -223,7 +223,7 @@ test('computeMetrics summarizes loops per stage and categories per attributed ag
 
 test('readEvidence ignores manifests from older runs and formats failed tests with absolute keyframe paths', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-evidence-'));
-  const cfg = { root, evidence: { manifest: 'out/manifest.json' } };
+  const cfg = { root, featureVerification: { evidence: { manifest: 'out/manifest.json' } } };
   fs.mkdirSync(path.join(root, 'out'));
   const startedAt = '2026-01-01T10:00:00.000Z';
   fs.writeFileSync(path.join(root, 'out/manifest.json'), JSON.stringify({
@@ -264,10 +264,10 @@ test("lintFiles runs the commit hook's linters on the agent's files and skips li
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-lint-'));
   fs.mkdirSync(path.join(root, 'bin'));
   fs.writeFileSync(path.join(root, 'bin/mdlint'), '');
-  const config = { root, precheck: { lint: { '.md': ['bin/mdlint', '{files}'], '.ts': ['node_modules/.bin/eslint', '{files}'], '.cs': ['dotnet', 'format', '{files}'], '.yaml': ['node_modules/.bin/yamllint', '{files}'] } } };
+  const config = { root, featureVerification: { precheck: { lint: { '.md': ['bin/mdlint', '{files}'], '.ts': ['node_modules/.bin/eslint', '{files}'], '.cs': ['dotnet', 'format', '{files}'], '.yaml': ['node_modules/.bin/yamllint', '{files}'] } } } };
   // The repository configured .ts itself; .yaml is only an engine default, so its absence is not an error.
   fs.mkdirSync(path.join(root, '.factory'));
-  fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({ precheck: { lint: { '.ts': ['node_modules/.bin/eslint', '{files}'] } } }));
+  fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({ featureVerification: { precheck: { lint: { '.ts': ['node_modules/.bin/eslint', '{files}'] } } } }));
   const calls = [];
   const runner = (cmd, args) => {
     calls.push([cmd, ...args]);
@@ -293,7 +293,7 @@ test('automationUpToDate: an unchanged implementation is not automated again, un
 
 test('fixFiles auto-fixes the agent files by extension, ignores exit codes and skips fixers that are not installed', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-fix-'));
-  const config = { root, precheck: { fix: { '.ts': ['node_modules/.bin/eslint', '--fix', '{files}'], '.cs': ['dotnet', 'format', 'whitespace', '--include', '{files}'] } } };
+  const config = { root, featureVerification: { precheck: { fix: { '.ts': ['node_modules/.bin/eslint', '--fix', '{files}'], '.cs': ['dotnet', 'format', 'whitespace', '--include', '{files}'] } } } };
   const calls = [];
   const runner = (cmd, args) => {
     calls.push([cmd, ...args]);
@@ -315,7 +315,7 @@ test('a case title is its heading only: a front-matter title is refused (markdow
   write('TC-BUG-7-01-home.md', '', 'TC-BUG-7-01');
   write('TC-BUG-7-02-cart.md', 'title: Cart renders\n', 'TC-BUG-7-02');
   fs.writeFileSync(path.join(root, dir, '_index.md'), '---\nstory: BUG-7\n---\n\n# Test plan: BUG-7\n\n| ID | Title |\n| --- | --- |\n| TC-BUG-7-01 | a |\n| TC-BUG-7-02 | b |\n');
-  const config = { root, categories: { sadPathSubtypes: ['validation'] } };
+  const config = { root, featureVerification: { categories: { sadPathSubtypes: ['validation'] } } };
   const { plan, errors } = precheckPlan(config, { key: 'BUG-7', planDir: dir });
   assert.ok(errors.some((e) => /TC-BUG-7-02-cart\.md: remove `title` from the front matter/.test(e)), errors.join('\n'));
   assert.ok(!errors.some((e) => /TC-BUG-7-01-home\.md/.test(e)), errors.join('\n'));
@@ -324,7 +324,7 @@ test('a case title is its heading only: a front-matter title is refused (markdow
 });
 
 test('the retro digest shows what did not go through on its own: escalations, failed outcomes, first verifier scores, PR checks (dogfood step 5)', () => {
-  const config = { lessons: { examplesPerCategory: 5 } };
+  const config = { retro: { lessons: { examplesPerCategory: 5 } } };
   const d = retroDigest(config, [], '2026-11-01T00:00:00Z', {
     escalations: [{ ts: '2026-11-13T06:38:03Z', story: 'BUG-7', stage: 'plan', title: 'plan did not reach 9/10 in 5 rounds' }],
     implementRuns: [{ ts: '2026-11-13T06:38:30Z', story: 'BUG-7', outcome: 'fv-blocked-on-plan', reason: 'Feature verification ended blocked-on-plan' }, { ts: '2026-11-13T07:47:00Z', story: 'BUG-7', outcome: 'done' }],
@@ -363,7 +363,7 @@ test('a plan with no sad case passes the precheck only when its index says why u
   const kase = '---\nid: TC-TYPE-1-01\ntype: happy\ncovers: AC1\nlayer: e2e\n---\n# TC-TYPE-1-01: shows the category\n\n## Why\nAC1\n\n## Preconditions\nstack\n\n## Steps\nopen item 1\n\n## Expected result\nCategory: Footwear\n';
   const index = (extra) => `---\nstory: TYPE-1\n---\n# Test plan: TYPE-1\n\n| ID | Title | Type | Layer | Covers |\n| --- | --- | --- | --- | --- |\n| TC-TYPE-1-01 | shows the category | happy | e2e | AC1 |\n${extra}`;
   const reader = (idx) => ({ read: (p) => (p.endsWith('_index.md') ? idx : p.endsWith('TC-TYPE-1-01-category.md') ? kase : null), list: () => ['TC-TYPE-1-01-category.md'] });
-  const config = { root: '/r', categories: { sadPathSubtypes: ['validation', 'not-found'] } };
+  const config = { root: '/r', featureVerification: { categories: { sadPathSubtypes: ['validation', 'not-found'] } } };
   const without = precheckPlan(config, story, reader(index(''))).errors;
   assert.ok(without.some((e) => /no sad-path case\. Add one only where the story states or directly implies an error outcome/.test(e)), without.join('\n'));
   const declared = precheckPlan(config, story, reader(index('\n## No sad path\n\nThe story only adds a field to a page; it names no error and changes no existing one.\n'))).errors;
@@ -373,7 +373,7 @@ test('a plan with no sad case passes the precheck only when its index says why u
 
 test('a verifier loop that ends without a pass says why: the last lowest score and the open gaps, not "did not reach" a score it reached', async () => {
   const { notPassed } = await import('../lib/workflows.mjs');
-  const config = { loops: { requiredScore: 9 } };
+  const config = { testPlan: { councilPassScore: 9 } };
   assert.equal(notPassed(config, 9, [{ id: 'g1' }]), 'last round: lowest score 9/10, 1 open gap(s); passing needs 9/10 and no open gap');
   assert.match(notPassed(config, null, []), /lowest score none\/10, 0 open gap/);
 });

@@ -2,11 +2,11 @@
   "scenariosDir": ".factory/stack/scenarios",
   "baseScenario": "_base",
   "defaultScenario": "default",
-  "timeoutSeconds": 300,
-  "healAfterSeconds": 60,
-  "stores": {},
   "infrastructureServices": [],
   "services": [],
   "restartAfterLoad": [],
+  "timeoutSec": 300,
+  "healAfterSec": 60,
+  "stores": {},
   "commands": {}
 }

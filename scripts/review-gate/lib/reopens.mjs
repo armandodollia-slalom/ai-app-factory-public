@@ -17,16 +17,19 @@
 // for good. Before its PR merges, the PR's gate goes to review and the ticket re-runs on its branch;
 // after the merge, the ticket re-runs as a follow-up PR through the same gate.
 import { ticketSeverity } from './severity.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 const KEY = /\b([A-Z][A-Z0-9]*-\d+)\b/g;
 
 // The reopen a card shows, or null. `item`: { column, state, stateReason }; `marker`: the last
 // pipeline event marker on the issue ({ event, column }).
-const BACK = { inProgress: 'In Progress', ready: 'Ready', backlog: 'Backlog' };
+// The lanes a card moves back to; named as board.columns' defaults (the detail is the same on every board).
+const BACK = ['inProgress', 'ready', 'backlog'];
+const COLUMN = defaultSettings().board.columns;
 export function cardReopen(item, marker) {
   const left = marker?.column ?? null;
   if (!['review', 'done'].includes(left)) return null;
-  if (BACK[item.column]) return { source: 'card', detail: `card moved from ${left === 'review' ? 'Pending Review' : 'Done'} back to ${BACK[item.column]}` };
+  if (BACK.includes(item.column)) return { source: 'card', detail: `card moved from ${COLUMN[left]} back to ${COLUMN[item.column]}` };
   if (item.state === 'OPEN' && item.stateReason === 'REOPENED') return { source: 'issue', detail: 'issue reopened' };
   return null;
 }

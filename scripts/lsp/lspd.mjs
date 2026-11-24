@@ -236,7 +236,7 @@ async function main(argv) {
       const config = loadConfig(wt);
       const st = opts.noStart ? await daemonStatus(wt) : await ensureDaemon(wt);
       if (!st) return { ok: true, files: Object.fromEntries(opts.files.map((f) => [f, { unavailable: 'lspd is not running' }])) };
-      const timeoutMs = ((config.diagnosticsTimeoutSec ?? 20) * opts.files.length + 10) * 1000;
+      const timeoutMs = ((config.diagnosticsTimeoutSec) * opts.files.length + 10) * 1000;
       // Relative paths are relative to --worktree when given, else to the current directory.
       const abs = opts.files.map((f) => path.resolve(opts.worktree ? wt : process.cwd(), f));
       const res = await control(daemonPaths(wt).socket, { lspd: 'diagnostics', files: abs }, timeoutMs);

@@ -17,7 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 function cfg() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'slow-agents-'));
-  return { root, stateDir: '.factory/state', recovery: { startingGraceSec: 120, maxAttempts: 3, backoffSec: 30 } };
+  return { root, stateDir: '.factory/state', recovery: { startingGraceSec: 120, maxRetries: 3, retryDelaySec: 30 } };
 }
 
 // A fake clock: each wait advances it; the check's state follows a script of (minute -> fields).

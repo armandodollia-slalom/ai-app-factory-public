@@ -1,29 +1,15 @@
 import { fileURLToPath } from 'node:url';
-// How agent CLIs are invoked: modes, subagents, per-call CLI, and the model policy.
+// How agent CLIs are invoked: modes, subagents and each run's CLI (its pool entry's; pool.mjs resolves which).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cliInvocation, resolveModel } from '../lib/agents.mjs';
-import { loadConfig } from '../lib/config.mjs';
+import { cliInvocation } from '../lib/agents.mjs';
 
-const config = (cli = 'claude', cmd = null) => ({ agent: { cli, cmd, models: { default: null } } });
-const config0 = config;
+const config = (cmd = null) => ({ agent: { cmd } });
 const flag = (args, name) => args[args.indexOf(name) + 1];
 
-test('the checked-in policy: opus, sonnet and sol (Copilot only), pinned ids, codex refused, default sonnet', () => {
-  const config = loadConfig();
-  const forCli = (cli) => ({ agent: { ...config.agent, cli, cmd: null } });
-  assert.deepEqual(config.agent.allowedModels, ['opus', 'sonnet', 'sol']);
-  assert.equal(resolveModel(forCli('copilot'), 'sol'), 'gpt-6.1-sol');
-  assert.throws(() => resolveModel(forCli('claude'), 'sol'), /sol/, 'Claude Code has no id for sol');
-  assert.equal(resolveModel(forCli('claude'), 'opus'), 'claude-opus-5-5');
-  assert.equal(resolveModel(forCli('claude'), null), 'claude-sonnet-5-5', 'no model: agent.models.default under strictModels');
-  assert.equal(resolveModel(forCli('copilot'), 'sonnet'), 'claude-sonnet-5.5');
-  assert.equal(resolveModel(forCli('copilot'), 'claude-opus-5.5'), 'claude-opus-5.5', 'a CLI id an allowed alias maps to');
-  assert.throws(() => resolveModel(forCli('claude'), 'haiku'), /not allowed/);
-  assert.throws(() => resolveModel(forCli('copilot'), 'auto'), /not allowed/);
-  assert.throws(() => resolveModel(forCli('codex'), 'sonnet'), /no id for agent CLI "codex"/);
-  assert.throws(() => resolveModel(forCli('claude'), 'opus', 'codex'), /codex/, 'a per-call CLI is checked too');
-  assert.deepEqual(cliInvocation(config0('claude', 'my-agent'), { prompt: 'p', mode: 'read', model: 'anything' }).args, ['-c', 'my-agent'], 'a custom command picks its own model');
+test('a custom command (PIPELINE_AGENT_CMD or a custom pool entry) picks its own model; it gets the model and effort as variables', () => {
+  assert.deepEqual(cliInvocation(config('my-agent'), { prompt: 'p', mode: 'read', model: 'anything' }).args, ['-c', 'my-agent']);
+  assert.deepEqual(cliInvocation(config(), { prompt: 'p', mode: 'read', model: 'm', cli: 'custom', effort: 'low', cmd: 'own' }).env, { PIPELINE_AGENT_MODEL: 'm', PIPELINE_AGENT_EFFORT: 'low' });
 });
 
 test('claude modes: implement and read can forbid subagents; verify has a shell but no edits', () => {
@@ -38,7 +24,7 @@ test('claude modes: implement and read can forbid subagents; verify has a shell 
   assert.doesNotMatch(read, /lsp_rename|lsp_code_actions|lsp_format_document|mcp__lsp,|mcp__lsp$/, 'read-only agents never get mutating lsp tools');
   assert.match(flag(verify, '--disallowedTools'), /^Edit,Write,.*Agent,Task,.*Bash\(git commit:\*\)/);
   assert.ok(!verify.includes('--permission-mode'));
-  const copilot = cliInvocation(config('copilot'), { prompt: 'p', mode: 'verify', model: 'claude-opus-5.5', cwd: '/repo/wt' }).args;
+  const copilot = cliInvocation(config(), { cli: 'copilot', prompt: 'p', mode: 'verify', model: 'claude-opus-5.5', cwd: '/repo/wt' }).args;
   assert.deepEqual(copilot.slice(copilot.indexOf('--allow-tool'), copilot.indexOf('--allow-tool') + 4), ['--allow-tool', 'shell', '--deny-tool', 'write']);
   assert.ok(copilot.includes('lsp(lsp_rename)'));
   assert.ok(copilot.includes('--trust-folder'), 'worktrees are trusted so .mcp.json loads');
@@ -46,9 +32,9 @@ test('claude modes: implement and read can forbid subagents; verify has a shell 
 });
 
 test('codex gets the lsp server inline (untrusted worktrees), read-only modes without mutating tools', () => {
-  const codexConfig = { agent: { cli: 'codex', cmd: null, models: {} } };
+  const codexConfig = { agent: { cmd: null } };
   // cliInvocation builds the command for an already-resolved model; the policy (resolveModel) refuses codex today.
-  const args = (mode) => cliInvocation(codexConfig, { prompt: 'p', mode, model: null, cwd: '/repo/wt' }).args;
+  const args = (mode) => cliInvocation(codexConfig, { cli: 'codex', prompt: 'p', mode, model: null, cwd: '/repo/wt' }).args;
   // The MCP server is the engine's (the install root), not a file of the worktree: an app repository holds no engine code.
   assert.ok(args('read').includes(`mcp_servers.lsp.args=${JSON.stringify([fileURLToPath(new URL('../../lsp/mcp.mjs', import.meta.url))])}`));
   assert.ok(args('read').some((a) => a.startsWith('mcp_servers.lsp.disabled_tools=')));
@@ -67,8 +53,10 @@ test('copilot: the prompt file is written under the agent\'s cwd, which headless
   for (const d of [root, cwd, bin]) fs.mkdirSync(d, { recursive: true });
   // A fake copilot that reads the prompt file it was told about, the way the real one would (from cwd).
   fs.writeFileSync(path.join(bin, 'copilot'), '#!/bin/sh\nf=$(printf "%s" "$2" | sed -E "s/^Read the file ([^ ]+) and.*/\\1/")\ncat "$f"\n', { mode: 0o755 });
+  const { loadConfig } = await import('../lib/config.mjs');
   const base = loadConfig();
-  const cfg = { ...base, root, agent: { ...base.agent, cli: 'copilot', cmd: null } };
+  // The pair implementer runs on a Copilot pool entry.
+  const cfg = { ...base, root, agent: { ...base.agent, cmd: null }, models: { pool: [{ name: 'copilot-sonnet', cli: 'copilot', model: 'claude-sonnet-5.5', effort: 'medium' }], agents: { default: 'copilot-sonnet' } } };
   const oldPath = process.env.PATH;
   process.env.PATH = `${bin}${path.delimiter}${oldPath}`;
   try {
@@ -126,6 +114,6 @@ test('a headless Claude Code agent writes 5-minute prompt caches and sees the MC
   const config = { root: process.cwd(), agent: { cli: 'claude' } };
   const inv = cliInvocation(config, { prompt: 'x', mode: 'read', model: 'sonnet' });
   assert.deepEqual(inv.env, { CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', ENABLE_TOOL_SEARCH: 'false' });
-  const custom = cliInvocation({ ...config, agent: { cli: 'claude', claude: { promptCacheTtl: '1h', toolSearch: true } } }, { prompt: 'x', mode: 'read' });
+  const custom = cliInvocation({ ...config, agent: { cli: 'claude', claude: { promptCacheTtlSec: 3600, toolSearch: true } } }, { prompt: 'x', mode: 'read' });
   assert.deepEqual(custom.env, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h', ENABLE_TOOL_SEARCH: 'true' });
 });

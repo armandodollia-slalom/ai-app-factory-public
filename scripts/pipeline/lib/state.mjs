@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { log, readJson, readJsonl, writeJson } from './util.mjs';
+import { setting } from './settings.mjs';
 
 const emptyState = (key) => ({
   story: key,
@@ -31,12 +32,12 @@ export function spools(config) {
     const dir = git(['rev-parse', '--absolute-git-dir']).stdout.trim();
     const common = path.resolve(root, git(['rev-parse', '--git-common-dir']).stdout.trim());
     const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim();
-    const base = String(config.baseRef ?? 'origin/main').replace(/^origin\//, '');
+    const base = String(setting(config, 'baseRef')).replace(/^origin\//, '');
     spoolMemo.set(root, Boolean(dir) && path.resolve(dir) === common && branch === base);
   }
   return spoolMemo.get(root);
 }
-export const spoolDir = (config) => path.join(config.root, config.stateDir ?? '.factory/state', 'metrics-spool');
+export const spoolDir = (config) => path.join(config.root, setting(config, 'stateDir'), 'metrics-spool');
 export const trackedMetricsFile = (config, name) => path.join(config.root, config.metricsDir, name);
 // A branch writes each stream to a file of its own, `<metricsDir>/<stream>.d/<branch>.jsonl`, that no other
 // branch writes (council C4: every pipeline branch appended to the same `<stream>.jsonl`, so each merge to main

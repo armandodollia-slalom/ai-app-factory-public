@@ -5,6 +5,7 @@
 import { git, revExists } from '../../pipeline/lib/git.mjs';
 import { reviewDigest } from '../../review-gate/lib/review-retro.mjs';
 import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // The factory's own commits since the retro window opened (the installed engine is a git checkout of its
 // release), so the retro can tell a finding a later release already fixed from one still open (council C1:
@@ -31,7 +32,7 @@ function group(items, keyOf) {
 
 // Start of the retro window: the last lessons commit on the base branch, else `windowDays` ago.
 export function retroSince(config, now = Date.now()) {
-  const fallback = new Date(now - (config.lessons.retro?.windowDays ?? config.lessons.intervalDays) * 86_400_000).toISOString();
+  const fallback = new Date(now - setting(config, 'retro.windowDays') * 86_400_000).toISOString();
   if (!revExists(config.root, config.baseRef)) return fallback;
   const last = git(config.root, ['log', '-1', '--format=%cI', '--grep=Update agent lessons', config.baseRef]).stdout.trim();
   return last ? new Date(last).toISOString() : fallback;
@@ -41,7 +42,7 @@ export function retroSince(config, now = Date.now()) {
 // `outcomes` (decision-outcomes.jsonl) and `policy` ({ table, retro }: the review gate's approvals table and
 // its retro settings) add the review section: the review gate's pr-review records grouped by PR class.
 export function retroDigest(config, decisions, since, { outcomes = [], policy = null, prChecks = [], verifierRuns = [], implementRuns = [], escalations = [] } = {}) {
-  const n = config.lessons.examplesPerCategory;
+  const n = setting(config, 'retro.lessons.examplesPerCategory');
   const recent = decisions.filter((d) => !since || d.ts > since);
   const of = (stage) => recent.filter((d) => d.stage === stage);
 
@@ -105,7 +106,7 @@ export function retroDigest(config, decisions, since, { outcomes = [], policy = 
       plans: take(
         of('implement-plan')
           .filter((d) => ['plan-written', 'plan-rejected', 'blocked'].includes(d.decision))
-          .map((d) => ({ story: d.story, decision: d.decision, mode: d.mode ?? null, reason: d.reason, subtasks: (d.items ?? []).map(({ id, modelClass, modelReason, verify, verifyReason, confidence }) => ({ id, modelClass, modelReason, verify, verifyReason, confidence })) })),
+          .map((d) => ({ story: d.story, decision: d.decision, mode: d.mode ?? null, reason: d.reason, subtasks: (d.items ?? []).map(({ id, model, modelReason, verify, verifyReason, confidence }) => ({ id, model, modelReason, verify, verifyReason, confidence })) })),
         n * 2,
       ),
       escalations: take(of('implement-plan').filter((d) => d.decision?.startsWith('escalation-') || d.decision === 'gave-up').map((d) => ({ story: d.story, subtask: d.subtask, decision: d.decision, pairOutcome: d.pair_outcome, reason: d.reason })), n),

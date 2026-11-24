@@ -238,7 +238,7 @@ can be told apart; socket names come from the checkout's path, so they never col
 
 `LSP_OWNS` (comma-separated globs) makes `factory lsp mcp` start a missing daemon with that scope.
 
-The implement stage reaches all of this through `scripts/implement/lib/lsp.mjs` (`implement.lsp.lspdCmd` and
+The implement stage reaches all of this through `scripts/implement/lib/lsp.mjs` (`lsp.client.lspdCmd` and
 `setupCmd` in the config, looked up in the install root first).
 
 ## Memory
@@ -285,4 +285,4 @@ machine-wide. A leased server without `reportsState` adds one small node process
 
 Each leased server's lease records the pipeline run that asked for it (`PIPELINE_RUN_PID`, set by every `implement` story process). When a run dies (a crash, `kill -9`), its daemons can outlive it and keep their slots. The next lease request reclaims a slot whose run is dead, stopping that daemon; `implement resume` stops a dead run's daemons before it resumes; `factory lsp stop --orphans` does the same by hand. Daemons of interactive sessions record no run and are never reaped; they still stop after `idleSec` with no sessions.
 
-Every `implement run` and `implement resume` sets `PIPELINE_RUN_PID` for everything it starts, including the daemons an agent's MCP bridge starts, and stops the daemons leased under it when it ends, whatever the outcome (`lspd stop-run --run <pid>`). A run that finds every slot in use waits for one up to `implement.lsp.leaseWaitSec` (default 300 s, polling every `leaseWaitPollSec`); if it still has to go without, that is recorded with the story (`run-conditions.jsonl`), and every PR body that carries the story, a single ticket's or a bug-epic group's, says which server it went without. A bug epic's planner works in the main checkout; the daemon it started there is released when planning ends (`lspd stop-run --run <pid> --worktree <main checkout>`), not when the whole run ends.
+Every `implement run` and `implement resume` sets `PIPELINE_RUN_PID` for everything it starts, including the daemons an agent's MCP bridge starts, and stops the daemons leased under it when it ends, whatever the outcome (`lspd stop-run --run <pid>`). A run that finds every slot in use waits for one up to `lsp.client.leaseWaitSec` (default 300 s, polling every `leaseWaitPollSec`); if it still has to go without, that is recorded with the story (`run-conditions.jsonl`), and every PR body that carries the story, a single ticket's or a bug-epic group's, says which server it went without. A bug epic's planner works in the main checkout; the daemon it started there is released when planning ends (`lspd stop-run --run <pid> --worktree <main checkout>`), not when the whole run ends.

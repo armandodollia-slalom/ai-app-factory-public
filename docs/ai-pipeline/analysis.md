@@ -8,7 +8,7 @@ Agents are good at judgement and bad at noticing what a tool proves in a second:
 
 | Slot | When | What happens to findings |
 | --- | --- | --- |
-| `pair` | after every pair-implementer run, before the pair verifier or council | auto-fix (committed as the implementer), then the **fix loop**: up to `fixLoop.bounces` (default 2) extra implementer runs with exactly the tool's findings. A bounce is not a pair round or a council round. What is still open then reaches the members as harness findings |
+| `pair` | after every pair-implementer run, before the pair verifier or council | auto-fix (committed as the implementer), then the **fix loop**: up to `analysis.maxFixRounds` (default 2) extra implementer runs with exactly the tool's findings. A bounce is not a pair round or a council round. What is still open then reaches the members as harness findings |
 | `story` | once the pair rounds and the story-level lint pass | blocking findings go back to the implementer (same budget); the report is evidence for the architecture review |
 | `prCheck` | each PR check round | evidence for the critics; read from the commit's report when one exists |
 | `featureVerification` | the automation precheck | blocking findings in the tests the automation wrote fail the precheck, like lint |
@@ -22,7 +22,7 @@ What the fix loop could not clear becomes a harness finding:
 
 - `source: "tool"`, `id: "tool:fp-<fingerprint>:<rule>"` (the fingerprint first and prefixed, so no rule name sits right before a hex string; ids in the older form `tool:<rule>:<fingerprint>` are still read, through `canonicalFindingId`; stable across rounds: the fingerprint is the tool, rule, file and normalised line, not the line number), `lens` from the tool, `action: "fix"`;
 - `severity: "blocking"` only for rules or levels on the tool's `block` list; everything else is a minor note;
-- added after the council's merge, so it is **outside `blockOn`** (members cannot outvote it) and it **cannot be disputed** to a model (the harness drops an implementer's dispute of a `tool:` finding). Only a change that makes the tool stop reporting it ends it.
+- added after the council's merge, so it is **outside `blockQuorum`** (members cannot outvote it) and it **cannot be disputed** to a model (the harness drops an implementer's dispute of a `tool:` finding). Only a change that makes the tool stop reporting it ends it.
 
 A tool is never a council member. Members get the report as evidence (tools run, what was fixed before them, what is open, suppressions, coverage) and are told not to raise the open findings again.
 
@@ -216,7 +216,7 @@ This section describes what the factory does; it is not legal advice.
 
 ## CI
 
-The jobs are declared once, provider-neutral (`{ id, name, tools, required, toolchain, timeoutMin }`, from the packs or `analysis.ci.jobs`), and rendered for the CI system:
+The jobs are declared once, provider-neutral (`{ id, name, tools, required, toolchain, timeoutSec }`, from the packs or `analysis.ci.jobs`), and rendered for the CI system:
 
 | CI system | Rendered file | How a job becomes required | Where |
 | --- | --- | --- | --- |

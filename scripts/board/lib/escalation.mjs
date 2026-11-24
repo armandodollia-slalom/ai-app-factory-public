@@ -14,11 +14,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { extractResult, nowIso, tail } from '../../pipeline/lib/util.mjs';
 import { trackerFor } from './trackers/index.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
-export const RESOLVED_LABEL = 'escalation-resolved';
-export const resolvedLabel = (config) => config.board?.resolvedLabel ?? RESOLVED_LABEL;
+export const resolvedLabel = (config) => setting(config, 'board.resolvedLabel');
 
-const DEFAULTS = { maxQuestions: 3, timeoutSec: 300, logTailChars: 4000, noteChars: 6000, storyChars: 6000 };
+const DEFAULTS = defaultSettings().board.questions;
 export const questionSettings = (config) => ({ ...DEFAULTS, ...(config.board?.questions ?? {}) });
 
 // Outcomes where nothing went wrong that a human must decide: the run crashed, timed out or lost its agent
@@ -42,7 +42,7 @@ export function isMechanical(result) {
 // The escalation notes (`.factory/state/escalations/<KEY>-<stage>.md`, scripts/pipeline/lib/state.mjs) the run
 // left in its worktree and in this checkout.
 export function escalationNotes(config, key, result = {}) {
-  const dirs = [...new Set([result.worktree, config.root].filter(Boolean).map((r) => path.join(r, config.stateDir ?? '.factory/state', 'escalations')))];
+  const dirs = [...new Set([result.worktree, config.root].filter(Boolean).map((r) => path.join(r, setting(config, 'stateDir'), 'escalations')))];
   const notes = [];
   const seen = new Set();
   for (const dir of dirs) {
@@ -60,7 +60,7 @@ export function escalationNotes(config, key, result = {}) {
 export function clearEscalationNotes(config, key, roots = []) {
   const removed = [];
   for (const root of new Set([config.root, ...roots].filter(Boolean))) {
-    const dir = path.join(root, config.stateDir ?? '.factory/state', 'escalations');
+    const dir = path.join(root, setting(config, 'stateDir'), 'escalations');
     if (!fs.existsSync(dir)) continue;
     for (const name of fs.readdirSync(dir)) {
       if (!name.startsWith(`${key}-`) || !name.endsWith('.md')) continue;
@@ -155,7 +155,7 @@ export function generateQuestions(config, key, result, { runAgent, notes = [], s
   const s = questionSettings(config);
   try {
     const task = questionsTask({ key, result, notes, story: story ? tail(story, s.storyChars) : null, log: logTail(config, result, s.logTailChars), maxQuestions: s.maxQuestions });
-    const res = runAgent(config, { name: 'escalation-questions', task, mode: 'read', model: config.agent?.models?.escalationQuestions ?? null, timeoutSec: s.timeoutSec, usage: { stage: 'board', story: key, step: 'escalation questions' } });
+    const res = runAgent(config, { name: 'escalation-questions', task, mode: 'read', timeoutSec: s.timeoutSec, usage: { stage: 'board', story: key, step: 'escalation questions' } });
     const raw = res?.ok ? extractResult(res.output ?? '') : null;
     if (!raw) return { questions: [], mechanical: false, error: res?.ok ? 'the agent returned no AGENT_RESULT' : `the agent ${res?.timedOut ? 'timed out' : `failed (exit ${res?.status})`}` };
     return { questions: normalizeQuestions(raw, { max: s.maxQuestions }), mechanical: false, error: null };

@@ -4,9 +4,11 @@
 // had closed blocked a run for 1h45m).
 //
 // Timeouts (seconds) per kind; FACTORY_EXTERNAL_TIMEOUT_<KIND> overrides one (GH, GIT_NETWORK, GIT, DOCKER,
-// DOCKER_LONG, HTTP), FACTORY_EXTERNAL_RETRIES the number of retries.
+// DOCKER_LONG, HTTP); FACTORY_EXTERNAL_MAX_RETRIES the number of retries and FACTORY_EXTERNAL_RETRY_DELAY_SEC the first
+// pause between tries (it doubles each time).
 export const EXTERNAL_TIMEOUTS = { gh: 120, 'git-network': 1800, git: 900, docker: 120, 'docker-long': 3600, http: 60 };
 export const EXTERNAL_RETRIES = 2;
+export const EXTERNAL_RETRY_DELAY_SEC = 2;
 
 const GIT_NETWORK = new Set(['fetch', 'push', 'pull', 'clone', 'ls-remote']);
 // Local git commands that only read: bounded (a stalled process ends) and repeated after a timeout. Local writes (commit,
@@ -45,8 +47,15 @@ export function externalTimeoutSec(kind, env = process.env) {
 }
 
 export const externalRetries = (env = process.env) => {
-  const v = Number(env.FACTORY_EXTERNAL_RETRIES);
-  return Number.isInteger(v) && v >= 0 ? v : EXTERNAL_RETRIES;
+  const v = Number(env.FACTORY_EXTERNAL_MAX_RETRIES);
+  return env.FACTORY_EXTERNAL_MAX_RETRIES !== undefined && Number.isInteger(v) && v >= 0 ? v : EXTERNAL_RETRIES;
+};
+
+// The pause before retry `attempt` (1, 2, ...), in milliseconds: FACTORY_EXTERNAL_RETRY_DELAY_SEC, doubling.
+export const externalRetryPauseMs = (attempt, env = process.env) => {
+  const v = Number(env.FACTORY_EXTERNAL_RETRY_DELAY_SEC);
+  const sec = env.FACTORY_EXTERNAL_RETRY_DELAY_SEC !== undefined && Number.isFinite(v) && v >= 0 ? v : EXTERNAL_RETRY_DELAY_SEC;
+  return sec * 1000 * 2 ** (attempt - 1);
 };
 
 // gh subcommands that only read (or set something to a value, so a repeat changes nothing). A comment, a PR or an

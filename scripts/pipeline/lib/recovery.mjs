@@ -20,11 +20,11 @@ export function runDied(config, run, { active, lock = null }) {
 // `waiting` (its backoff has not passed) or `crashed` (out of attempts: escalate). `force` starts
 // the count over and skips the wait. `backoff: false` for runs that restart only when an agent stops.
 export function nextAttempt(config, run, { force = false, backoff = true } = {}) {
-  const { maxAttempts, backoffSec } = config.recovery;
+  const { maxRetries, retryDelaySec } = config.recovery;
   const attempts = force ? 0 : run.recoveries ?? 0;
   if (backoff && !force && run.retryAt && Date.now() < Date.parse(run.retryAt)) return { action: 'waiting', retryAt: run.retryAt };
-  if (attempts >= maxAttempts) return { action: 'crashed', attempts };
-  // A run that dies again right away waits backoffSec, then twice that, before the next attempt.
-  const retryAt = backoff ? new Date(Date.now() + backoffSec * 1000 * 2 ** attempts).toISOString() : null;
-  return { action: 'resumed', attempt: attempts + 1, maxAttempts, fields: { recoveries: attempts + 1, retryAt } };
+  if (attempts >= maxRetries) return { action: 'crashed', attempts };
+  // A run that dies again right away waits retryDelaySec, then twice that, before the next attempt.
+  const retryAt = backoff ? new Date(Date.now() + retryDelaySec * 1000 * 2 ** attempts).toISOString() : null;
+  return { action: 'resumed', attempt: attempts + 1, maxRetries, fields: { recoveries: attempts + 1, retryAt } };
 }

@@ -1,7 +1,7 @@
 {
   "$comment": "Single source of truth for docs/pipeline-explorer.html and the Mermaid spine (scripts/docs/build-explorer.mjs). It models what the runner's rules say will happen for a configuration; it does not run anything. Settings name their real config path or CLI flag and say where the code keeps their default and allowed values (`checks`, verified by scripts/docs/test/pipeline-flow.test.mjs). Conditions are data: {\"eq\":[ref,value]}, {\"in\":[ref,[values]]}, {\"is\":ref}, {\"not\":c}, {\"all\":[c]}, {\"any\":[c]}, {\"gt\":[ref,n]}; a ref is a setting id or a fact id. A fact with \"walk\": true starts false and is set by the edges the walk takes ({\"set\":{fact:true}}); an outcome with cyclesLeft or cyclesUsed (a setting id) is offered only before, or once, that many visits of its step. Doc links are relative to docs/.",
   "version": 1,
-  "factoryVersion": "0.2.99",
+  "factoryVersion": "0.2.100",
   "kinds": {
     "agent": {
       "label": "Agent",
@@ -220,12 +220,12 @@
         "low"
       ],
       "default": "high",
-      "help": "High when every ticket's confidence is at least implement.reviewGate.confidence.highMin (85) with no owner question.",
+      "help": "High when every ticket's confidence is at least implement.reviewGate.confidence.highMinScore (85) with no owner question.",
       "doc": "ai-pipeline/review-gate.md#assessment",
       "checks": [
         {
           "json": "scripts/implement/config.json",
-          "path": "implement.reviewGate.confidence.highMin",
+          "path": "implement.reviewGate.confidence.highMinScore",
           "exists": true
         }
       ]
@@ -311,12 +311,7 @@
       "checks": [
         {
           "json": "scripts/implement/config.json",
-          "path": "implement.epic.prSplit",
-          "absent": true
-        },
-        {
-          "code": "scripts/implement/implement.mjs",
-          "includes": "config.implement.epic?.prSplit ?? 'epic'"
+          "path": "implement.epic.prSplit"
         },
         {
           "module": "scripts/implement/lib/epic-plan.mjs",
@@ -351,7 +346,7 @@
       "group": "delivery",
       "label": "Unit PR check",
       "kind": "config",
-      "config": "implement.epic.prCheck",
+      "config": "prCheck.mode",
       "type": "enum",
       "values": [
         "fix",
@@ -363,12 +358,8 @@
       "doc": "ai-pipeline/implement.md#epic-delivery",
       "checks": [
         {
-          "json": "scripts/implement/config.json",
-          "path": "implement.epic.prCheck"
-        },
-        {
-          "code": "scripts/implement/lib/epic.mjs",
-          "literals": true
+          "json": "scripts/pr-check/config.json",
+          "path": "prCheck.mode"
         }
       ]
     },
@@ -377,12 +368,12 @@
       "group": "council",
       "label": "pairVerify",
       "kind": "config",
-      "config": "council.stages.pairVerify",
+      "config": "implement.councilMembers",
       "type": "boolean",
       "default": false,
       "seat": "pairVerify",
-      "help": "Seat a council instead of the single pair-verifier.",
-      "doc": "ai-pipeline/council.md#stages",
+      "help": "Seat a council of three from models.pool instead of the stage's own verifier alone (implement.councilMembers, shared by both pair verifiers).",
+      "doc": "ai-pipeline/council.md#seats",
       "checks": [
         {
           "module": "scripts/pipeline/lib/council-config.mjs",
@@ -390,9 +381,9 @@
           "hasKey": "pairVerify"
         },
         {
-          "json": "scripts/pipeline/config.json",
-          "path": "council",
-          "absent": true
+          "json": "scripts/implement/config.json",
+          "path": "implement.councilMembers",
+          "exists": true
         }
       ]
     },
@@ -401,12 +392,12 @@
       "group": "council",
       "label": "pairUiVerify",
       "kind": "config",
-      "config": "council.stages.pairUiVerify",
+      "config": "implement.councilMembers",
       "type": "boolean",
       "default": false,
       "seat": "pairUiVerify",
-      "help": "Seat a council instead of the single pair-ui-verifier (UI subtasks).",
-      "doc": "ai-pipeline/council.md#stages",
+      "help": "Seat a council of three from models.pool instead of the stage's own verifier alone (implement.councilMembers, shared by both pair verifiers).",
+      "doc": "ai-pipeline/council.md#seats",
       "checks": [
         {
           "module": "scripts/pipeline/lib/council-config.mjs",
@@ -414,33 +405,33 @@
           "hasKey": "pairUiVerify"
         },
         {
-          "json": "scripts/pipeline/config.json",
-          "path": "council",
-          "absent": true
+          "json": "scripts/implement/config.json",
+          "path": "implement.councilMembers",
+          "exists": true
         }
       ]
     },
     {
-      "id": "council.review",
+      "id": "council.architectureReview",
       "group": "council",
-      "label": "review",
+      "label": "architectureReview",
       "kind": "config",
-      "config": "council.stages.review",
+      "config": "architectureReview.councilMembers",
       "type": "boolean",
       "default": false,
-      "seat": "review",
-      "help": "Seat a council instead of the single architecture-reviewer.",
-      "doc": "ai-pipeline/council.md#stages",
+      "seat": "architectureReview",
+      "help": "Seat a council of three from models.pool instead of the stage's own verifier alone (architectureReview.councilMembers).",
+      "doc": "ai-pipeline/council.md#seats",
       "checks": [
         {
           "module": "scripts/pipeline/lib/council-config.mjs",
           "export": "COUNCIL_STAGES",
-          "hasKey": "review"
+          "hasKey": "architectureReview"
         },
         {
-          "json": "scripts/pipeline/config.json",
-          "path": "council",
-          "absent": true
+          "json": "scripts/review/config.json",
+          "path": "architectureReview.councilMembers",
+          "exists": true
         }
       ]
     },
@@ -449,12 +440,12 @@
       "group": "council",
       "label": "testPlan",
       "kind": "config",
-      "config": "council.stages.testPlan",
+      "config": "testPlan.councilMembers",
       "type": "boolean",
       "default": false,
       "seat": "testPlan",
-      "help": "Seat a council instead of the single test-plan-verifier.",
-      "doc": "ai-pipeline/council.md#stages",
+      "help": "Seat a council of three from models.pool instead of the stage's own verifier alone (testPlan.councilMembers).",
+      "doc": "ai-pipeline/council.md#seats",
       "checks": [
         {
           "module": "scripts/pipeline/lib/council-config.mjs",
@@ -462,9 +453,9 @@
           "hasKey": "testPlan"
         },
         {
-          "json": "scripts/pipeline/config.json",
-          "path": "council",
-          "absent": true
+          "json": "scripts/feature-verification/config.json",
+          "path": "testPlan.councilMembers",
+          "exists": true
         }
       ]
     },
@@ -473,12 +464,12 @@
       "group": "council",
       "label": "testAutomation",
       "kind": "config",
-      "config": "council.stages.testAutomation",
+      "config": "testAutomation.councilMembers",
       "type": "boolean",
       "default": false,
       "seat": "testAutomation",
-      "help": "Seat a council instead of the single test-automation-verifier.",
-      "doc": "ai-pipeline/council.md#stages",
+      "help": "Seat a council of three from models.pool instead of the stage's own verifier alone (testAutomation.councilMembers).",
+      "doc": "ai-pipeline/council.md#seats",
       "checks": [
         {
           "module": "scripts/pipeline/lib/council-config.mjs",
@@ -486,9 +477,9 @@
           "hasKey": "testAutomation"
         },
         {
-          "json": "scripts/pipeline/config.json",
-          "path": "council",
-          "absent": true
+          "json": "scripts/feature-verification/config.json",
+          "path": "testAutomation.councilMembers",
+          "exists": true
         }
       ]
     },
@@ -497,12 +488,12 @@
       "group": "council",
       "label": "prCheck",
       "kind": "config",
-      "config": "council.stages.prCheck",
+      "config": "prCheck.councilMembers",
       "type": "boolean",
       "default": false,
       "seat": "prCheck",
-      "help": "Seat council members instead of the PR check critics.",
-      "doc": "ai-pipeline/council.md#stages",
+      "help": "Seat a council of three from models.pool instead of the stage's own verifier alone (prCheck.councilMembers).",
+      "doc": "ai-pipeline/council.md#seats",
       "checks": [
         {
           "module": "scripts/pipeline/lib/council-config.mjs",
@@ -510,9 +501,9 @@
           "hasKey": "prCheck"
         },
         {
-          "json": "scripts/pipeline/config.json",
-          "path": "council",
-          "absent": true
+          "json": "scripts/pr-check/config.json",
+          "path": "prCheck.councilMembers",
+          "exists": true
         }
       ]
     },
@@ -534,8 +525,7 @@
         },
         {
           "json": "scripts/pipeline/config.json",
-          "path": "council",
-          "absent": true
+          "path": "council.intercom.enabled"
         }
       ]
     },
@@ -611,7 +601,7 @@
       "checks": [
         {
           "json": "scripts/pipeline/config.json",
-          "path": "analysis",
+          "path": "analysis.tools",
           "absent": true
         },
         {
@@ -628,7 +618,7 @@
       "group": "loops",
       "label": "Analysis fix loop",
       "kind": "config",
-      "config": "analysis.fixLoop.bounces",
+      "config": "analysis.maxFixRounds",
       "type": "integer",
       "min": 0,
       "max": 10,
@@ -712,11 +702,11 @@
       ]
     },
     {
-      "id": "maxPairRounds",
+      "id": "implementMaxCouncilRounds",
       "group": "loops",
-      "label": "maxPairRounds",
+      "label": "implement.maxCouncilRounds",
       "kind": "config",
-      "config": "implement.maxPairRounds",
+      "config": "implement.maxCouncilRounds",
       "type": "integer",
       "min": 1,
       "max": 10,
@@ -726,16 +716,16 @@
       "checks": [
         {
           "json": "scripts/implement/config.json",
-          "path": "implement.maxPairRounds"
+          "path": "implement.maxCouncilRounds"
         }
       ]
     },
     {
-      "id": "reviewMaxRounds",
+      "id": "architectureReviewMaxCouncilRounds",
       "group": "loops",
-      "label": "review.maxRounds",
+      "label": "architectureReview.maxCouncilRounds",
       "kind": "config",
-      "config": "review.maxRounds",
+      "config": "architectureReview.maxCouncilRounds",
       "type": "integer",
       "min": 1,
       "max": 20,
@@ -745,16 +735,16 @@
       "checks": [
         {
           "json": "scripts/review/config.json",
-          "path": "review.maxRounds"
+          "path": "architectureReview.maxCouncilRounds"
         }
       ]
     },
     {
-      "id": "maxBugFixCycles",
+      "id": "maxBugFixReturns",
       "group": "loops",
-      "label": "maxBugFixCycles",
+      "label": "maxBugFixReturns",
       "kind": "config",
-      "config": "implement.maxBugFixCycles",
+      "config": "implement.maxBugFixReturns",
       "type": "integer",
       "min": 0,
       "max": 10,
@@ -764,7 +754,7 @@
       "checks": [
         {
           "json": "scripts/implement/config.json",
-          "path": "implement.maxBugFixCycles"
+          "path": "implement.maxBugFixReturns"
         }
       ]
     },
@@ -773,15 +763,15 @@
       "group": "loops",
       "label": "Return PR check findings to implementation",
       "kind": "config",
-      "config": "implement.prCheck.returnToImplementation.enabled",
+      "config": "prCheck.returnToImplementation.enabled",
       "type": "boolean",
       "default": true,
       "help": "Off: every PR check finding stays with pr-check-fixer.",
       "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation",
       "checks": [
         {
-          "json": "scripts/implement/config.json",
-          "path": "implement.prCheck.returnToImplementation.enabled"
+          "json": "scripts/pr-check/config.json",
+          "path": "prCheck.returnToImplementation.enabled"
         },
         {
           "module": "scripts/implement/lib/pr-check-return.mjs",
@@ -795,7 +785,7 @@
       "group": "loops",
       "label": "returnToImplementation.maxReturns",
       "kind": "config",
-      "config": "implement.prCheck.returnToImplementation.maxReturns",
+      "config": "prCheck.returnToImplementation.maxReturns",
       "type": "integer",
       "min": 0,
       "max": 10,
@@ -804,8 +794,8 @@
       "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation",
       "checks": [
         {
-          "json": "scripts/implement/config.json",
-          "path": "implement.prCheck.returnToImplementation.maxReturns"
+          "json": "scripts/pr-check/config.json",
+          "path": "prCheck.returnToImplementation.maxReturns"
         },
         {
           "module": "scripts/implement/lib/pr-check-return.mjs",
@@ -819,7 +809,7 @@
       "group": "loops",
       "label": "returnToImplementation.minSeverity",
       "kind": "config",
-      "config": "implement.prCheck.returnToImplementation.minSeverity",
+      "config": "prCheck.returnToImplementation.minSeverity",
       "type": "enum",
       "values": [
         "blocking",
@@ -831,8 +821,8 @@
       "doc": "ai-pipeline/pr-check.md#findings-about-the-production-change-go-back-to-implementation",
       "checks": [
         {
-          "json": "scripts/implement/config.json",
-          "path": "implement.prCheck.returnToImplementation.minSeverity"
+          "json": "scripts/pr-check/config.json",
+          "path": "prCheck.returnToImplementation.minSeverity"
         },
         {
           "module": "scripts/implement/lib/pr-check-return.mjs",
@@ -847,46 +837,35 @@
       ]
     },
     {
-      "id": "ciFixRounds",
+      "id": "ciMaxFixRounds",
       "group": "loops",
-      "label": "ciFixRounds",
+      "label": "ci.maxFixRounds",
       "kind": "config",
-      "config": "implement.ciFixRounds",
+      "config": "implement.ci.maxFixRounds",
       "env": "PIPELINE_CI_FIX_ROUNDS",
       "type": "integer",
       "min": 0,
       "max": 5,
-      "default": 1,
-      "help": "0 sends red CI straight to a person. Any value above 0 gives one fixing round per CI gate (the gate runs at most one).",
-      "doc": "configuration.md#stage-sections",
+      "default": 2,
+      "help": "CI fixing rounds of a ticket in all, before and after its PR opens; 0 sends red CI straight to a person.",
+      "doc": "configuration.md#settings-reference",
       "checks": [
+        {
+          "json": "scripts/implement/config.json",
+          "path": "implement.ci.maxFixRounds"
+        },
         {
           "module": "scripts/implement/lib/ci-wait.mjs",
           "export": "ciFixRounds",
           "call": [
-            {},
+            {
+              "ci": {
+                "maxFixRounds": 2
+              }
+            },
             {}
-          ]
-        }
-      ]
-    },
-    {
-      "id": "draftCycles",
-      "group": "loops",
-      "label": "preOpen.draftCycles",
-      "kind": "config",
-      "config": "implement.preOpen.draftCycles",
-      "type": "integer",
-      "min": 0,
-      "max": 5,
-      "default": 1,
-      "help": "Times an open PR may go back on hold for a CI fixing round before a person decides.",
-      "doc": "configuration.md#stage-sections",
-      "checks": [
-        {
-          "module": "scripts/implement/lib/pre-open.mjs",
-          "export": "PRE_OPEN_DEFAULTS",
-          "path": "draftCycles"
+          ],
+          "expect": 2
         }
       ]
     },
@@ -904,7 +883,7 @@
       ],
       "default": "draft",
       "help": "How an open PR is held while agents work on it again. close-reopen becomes draft on a host that cannot reopen (Bitbucket), with a warning when implement, the review gate or factory doctor load the config. Another value stops the config from loading.",
-      "doc": "configuration.md#stage-sections",
+      "doc": "configuration.md#settings-reference",
       "checks": [
         {
           "module": "scripts/implement/lib/pre-open.mjs",
@@ -912,34 +891,34 @@
           "path": "afterOpen"
         },
         {
-          "code": "scripts/pipeline/lib/config.mjs",
-          "includes": "export const AFTER_OPEN = ['draft', 'label', 'close-reopen']"
+          "module": "scripts/pipeline/lib/config.mjs",
+          "export": "AFTER_OPEN",
+          "values": true
         }
       ]
     },
     {
-      "id": "ciWait",
+      "id": "ciWaitEnabled",
       "group": "loops",
-      "label": "ciWait",
+      "label": "ci.wait.enabled",
       "kind": "config",
-      "config": "implement.ciWait",
+      "config": "implement.ci.wait.enabled",
       "type": "boolean",
       "default": true,
       "help": "false: no CI proof on the branch before the open and no wait for the PR's checks after it (the PR opens without the proof).",
-      "doc": "configuration.md#stage-sections",
+      "doc": "configuration.md#settings-reference",
       "checks": [
         {
           "json": "scripts/implement/config.json",
-          "path": "implement.ciWait",
-          "absent": true
+          "path": "implement.ci.wait.enabled"
         },
         {
           "code": "scripts/implement/lib/pre-open.mjs",
-          "includes": "settings.ciWait === false"
+          "includes": "settings.ci.wait.enabled === false"
         },
         {
           "code": "scripts/implement/lib/implement.mjs",
-          "includes": "settings.ciWait !== false"
+          "includes": "settings.ci.wait.enabled !== false"
         }
       ]
     },
@@ -1493,7 +1472,7 @@
       "is": {
         "all": [
           {
-            "is": "ciWait"
+            "is": "ciWaitEnabled"
           },
           {
             "is": "branchPipelines"
@@ -1507,7 +1486,7 @@
       "is": {
         "all": [
           {
-            "is": "ciWait"
+            "is": "ciWaitEnabled"
           },
           {
             "not": {
@@ -1659,7 +1638,7 @@
       "label": "red CI gets a fixing round",
       "is": {
         "gt": [
-          "ciFixRounds",
+          "ciMaxFixRounds",
           0
         ]
       }
@@ -1674,7 +1653,7 @@
           },
           {
             "gt": [
-              "draftCycles",
+              "ciMaxFixRounds",
               0
             ]
           }
@@ -1750,7 +1729,7 @@
             "is": "council.intercom.enabled"
           },
           {
-            "is": "council.review"
+            "is": "council.architectureReview"
           }
         ]
       }
@@ -2117,7 +2096,7 @@
       "settings": [
         "council.pairVerify",
         "council.pairUiVerify",
-        "maxPairRounds",
+        "implementMaxCouncilRounds",
         "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/implement.md#ui-verification"
@@ -2154,8 +2133,8 @@
       "decision": "review",
       "desc": "A fresh architecture-reviewer (or a council) approves the code on disk; approval moves the card to Testing.",
       "settings": [
-        "council.review",
-        "reviewMaxRounds",
+        "council.architectureReview",
+        "architectureReviewMaxCouncilRounds",
         "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/review.md#the-policy-step-engine-and-policy"
@@ -2204,7 +2183,7 @@
       "desc": "Workflow 2: automated tests for every case, checked by test-automation-verifier (or a council); a test that finds a product bug sends the change back.",
       "settings": [
         "council.testAutomation",
-        "maxBugFixCycles",
+        "maxBugFixReturns",
         "council.intercom.enabled"
       ],
       "doc": "ai-pipeline/feature-verification.md#workflow-2-implementation-to-automated-tests"
@@ -2307,7 +2286,7 @@
       "kind": "agent",
       "agents": [
         "council members",
-        "implement orchestrator or PR check judge (splits)"
+        "the stage's orchestrator (splits)"
       ],
       "lane": null,
       "layout": {
@@ -2387,7 +2366,7 @@
       "when": {
         "is": "ticketPrCheck"
       },
-      "desc": "Fixes findings confined to tests, docs, records, PR text or style, and production findings below minSeverity (implement.prCheck.fixUntil, bugFixUntil).",
+      "desc": "Fixes findings confined to tests, docs, records, PR text or style, and production findings below minSeverity (prCheck.fixMinSeverity, prCheck.bugFixMinSeverity).",
       "settings": [
         "minSeverity"
       ],
@@ -2411,7 +2390,7 @@
       "when": {
         "is": "pr"
       },
-      "desc": "A single ticket's or a bug group's tickets are published and fetched back as CI reads them (a feature epic's PRs read their own ticket copies), what CI runs on the PR runs here first (failures go through a fixing round), and another ticket's verified plan or tests this change edited is verified again. Every PR gets it: a single ticket, a bug group (also when a reopened ticket joins its open PR), a feature epic as one PR and each PR of a split epic. A check that still fails after one fixing run is reported in the PR body; it does not stop the delivery. implement.ciParity false skips the parity run of a single ticket and of a feature epic's PRs (a bug group's still runs) and, for every delivery, the pre-push analysis gate.",
+      "desc": "A single ticket's or a bug group's tickets are published and fetched back as CI reads them (a feature epic's PRs read their own ticket copies), what CI runs on the PR runs here first (failures go through a fixing round), and another ticket's verified plan or tests this change edited is verified again. Every PR gets it: a single ticket, a bug group (also when a reopened ticket joins its open PR), a feature epic as one PR and each PR of a split epic. A check that still fails after one fixing run is reported in the PR body; it does not stop the delivery. implement.ci.parity.enabled false skips the parity run of a single ticket and of a feature epic's PRs (a bug group's still runs) and, for every delivery, the pre-push analysis gate.",
       "settings": [],
       "doc": "ai-pipeline/ci-parity.md"
     },
@@ -2435,7 +2414,7 @@
           }
         ]
       },
-      "desc": "CI's analysis jobs (rendered only with static analysis on) run with CI's own script on a clean checkout of the head before anything is pushed; a secret the commit gate held still in the worktree stops the push. implement.ciParity false skips the gate too.",
+      "desc": "CI's analysis jobs (rendered only with static analysis on) run with CI's own script on a clean checkout of the head before anything is pushed; a secret the commit gate held still in the worktree stops the push. implement.ci.parity.enabled false skips the gate too.",
       "settings": [
         "analysis"
       ],
@@ -2524,9 +2503,9 @@
       },
       "desc": "Every pipeline a push of the branch runs must complete green on that exact SHA (a skipped run is not a pass, a retry-only pass is a finding); if the base moved it is merged in and the new head proven again.",
       "settings": [
-        "ciWait",
+        "ciWaitEnabled",
         "ciProvider",
-        "ciFixRounds"
+        "ciMaxFixRounds"
       ],
       "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
     },
@@ -2558,7 +2537,7 @@
       },
       "desc": "One fixing round on the failing checks (the PR check in fix mode, pushed), then the harness's own way out once (CI's analysis jobs here, the secret decision table), then the head is proven again.",
       "settings": [
-        "ciFixRounds"
+        "ciMaxFixRounds"
       ],
       "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
     },
@@ -2788,7 +2767,7 @@
       "settings": [
         "host",
         "ciProvider",
-        "ciWait"
+        "ciWaitEnabled"
       ],
       "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
     },
@@ -2849,15 +2828,15 @@
             "is": "pr"
           },
           {
-            "is": "ciWait"
+            "is": "ciWaitEnabled"
           }
         ]
       },
-      "desc": "The PR's own checks are waited for with no fixing agent; a check only a PR runs, or a moved base, can still fail here. With implement.ciWait false nothing is waited for and the run goes on as green.",
+      "desc": "The PR's own checks are waited for with no fixing agent; a check only a PR runs, or a moved base, can still fail here. With implement.ci.wait.enabled false nothing is waited for and the run goes on as green.",
       "settings": [
-        "ciWait",
-        "draftCycles",
-        "ciFixRounds"
+        "ciWaitEnabled",
+        "ciMaxFixRounds",
+        "ciMaxFixRounds"
       ],
       "doc": "ai-pipeline/implement.md#after-the-open"
     },
@@ -2876,7 +2855,7 @@
             "is": "pr"
           },
           {
-            "is": "ciWait"
+            "is": "ciWaitEnabled"
           },
           {
             "is": "fixAfterOpen"
@@ -2886,7 +2865,7 @@
       "desc": "The PR goes back to draft, gets the work-in-progress label, or is closed (preOpen.afterOpen) before any agent works on it again; Bitbucket cannot reopen, so close-reopen becomes draft there. The hold is confirmed by re-reading the PR (up to 3 reads, 1 s apart); a hold that is not confirmed stops the run before any agent. A PR already confirmed on hold (draft-first, a re-delivery) keeps its hold.",
       "settings": [
         "afterOpen",
-        "draftCycles"
+        "ciMaxFixRounds"
       ],
       "doc": "ai-pipeline/implement.md#after-the-open",
       "decision": "hold"
@@ -2910,17 +2889,17 @@
             "is": "pr"
           },
           {
-            "is": "ciWait"
+            "is": "ciWaitEnabled"
           },
           {
             "is": "fixAfterOpen"
           }
         ]
       },
-      "desc": "One fixing round on the branch while the PR is held; still failing with cycles left, another round on the same hold, at most preOpen.draftCycles rounds in all.",
+      "desc": "One fixing round on the branch while the PR is held; still failing with cycles left, another round on the same hold, at most ci.maxFixRounds rounds in all, counting those before the open.",
       "settings": [
-        "draftCycles",
-        "ciFixRounds"
+        "ciMaxFixRounds",
+        "ciMaxFixRounds"
       ],
       "doc": "ai-pipeline/implement.md#after-the-open"
     },
@@ -3132,7 +3111,7 @@
       "continue": "Answer the questions on the ticket and tick Resolved; board sync moves it to Ready and implement requeue (or run <KEY>) runs it with the decisions.",
       "desc": "Planning or a pair could not finish.",
       "settings": [
-        "maxPairRounds"
+        "implementMaxCouncilRounds"
       ],
       "doc": "ai-pipeline/escalations.md#outcomes"
     },
@@ -3158,7 +3137,7 @@
       "continue": "Answer on the ticket and tick Resolved (or delete the escalation note after fixing by hand); requeue or run it again.",
       "desc": "The review did not approve within its rounds, or the implementer runs ran out.",
       "settings": [
-        "reviewMaxRounds"
+        "architectureReviewMaxCouncilRounds"
       ],
       "doc": "ai-pipeline/escalations.md#outcomes"
     },
@@ -3187,7 +3166,7 @@
       "continue": "Answer on the ticket and Resolve; crashed and timed-out runs resume with implement resume.",
       "desc": "The plan or tests did not verify, or product bugs remained after the bug-fix cycles.",
       "settings": [
-        "maxBugFixCycles"
+        "maxBugFixReturns"
       ],
       "doc": "ai-pipeline/escalations.md#outcomes"
     },
@@ -3328,7 +3307,7 @@
         "pr": "none"
       },
       "continue": "Resolve on the ticket; requeue or run again.",
-      "desc": "The PR check did not finish, or a unit's check ended escalated or with findings at fixUntil or worse.",
+      "desc": "The PR check did not finish, or a unit's check ended escalated or with findings at prCheck.fixMinSeverity or worse.",
       "settings": [
         "epicPrCheck"
       ],
@@ -3358,7 +3337,7 @@
       "continue": "A person decides from the ticket's questions; requeue or run again after the fix.",
       "desc": "CI on the branch head is red, passed only with retries, cannot be read, conflicts, or the fix round escalated.",
       "settings": [
-        "ciFixRounds"
+        "ciMaxFixRounds"
       ],
       "doc": "ai-pipeline/implement.md#the-pr-opens-finished"
     },
@@ -3399,7 +3378,7 @@
         "gate-assessment-failed"
       ],
       "remains": {
-        "branch": "pushed; CI-proven unless the proof was bypassed (draft-first or ciWait off)",
+        "branch": "pushed; CI-proven unless the proof was bypassed (draft-first or ci.wait.enabled off)",
         "ticket": "the finding GATE-ASSESS-FAILED; card in Failed",
         "pr": "no new PR; a re-delivered PR stays open on hold"
       },
@@ -3454,10 +3433,10 @@
         "pr": "open; on hold when a hold was applied; the gate requires a person"
       },
       "continue": "A person fixes it on the branch or decides; implement resume --stopped continues a stopped CI wait.",
-      "desc": "A check failed after the open and no fixing round is left (every preOpen.draftCycles cycle used, or ciFixRounds 0), or CI could not be read or conflicts.",
+      "desc": "A check failed after the open and no fixing round is left (every ci.maxFixRounds round used), or CI could not be read or conflicts.",
       "settings": [
-        "draftCycles",
-        "ciFixRounds"
+        "ciMaxFixRounds",
+        "ciMaxFixRounds"
       ],
       "doc": "ai-pipeline/implement.md#after-the-open"
     },
@@ -4090,16 +4069,16 @@
           "label": "still failing, cycles left: another round on hold",
           "when": {
             "gt": [
-              "draftCycles",
+              "ciMaxFixRounds",
               1
             ]
           },
-          "cyclesLeft": "draftCycles"
+          "cyclesLeft": "ciMaxFixRounds"
         },
         {
           "id": "failed",
           "label": "still failing, every cycle used",
-          "cyclesUsed": "draftCycles"
+          "cyclesUsed": "ciMaxFixRounds"
         }
       ]
     },
@@ -4395,8 +4374,8 @@
       "to": "pairs",
       "outcome": "changes",
       "loop": {
-        "budget": "maxPairRounds",
-        "text": "loop, at most {maxPairRounds} pair rounds"
+        "budget": "implementMaxCouncilRounds",
+        "text": "loop, at most {implementMaxCouncilRounds} pair rounds"
       }
     },
     {
@@ -4414,7 +4393,7 @@
       "to": "pairs",
       "outcome": "block",
       "loop": {
-        "budget": "reviewMaxRounds",
+        "budget": "architectureReviewMaxCouncilRounds",
         "text": "loop, a review round"
       }
     },
@@ -4429,8 +4408,8 @@
       "to": "pairs",
       "outcome": "changes",
       "loop": {
-        "budget": "reviewMaxRounds",
-        "text": "loop, at most {reviewMaxRounds} review rounds"
+        "budget": "architectureReviewMaxCouncilRounds",
+        "text": "loop, at most {architectureReviewMaxCouncilRounds} review rounds"
       }
     },
     {
@@ -4490,8 +4469,8 @@
       "outcome": "product-bug",
       "lane": "In Progress",
       "loop": {
-        "budget": "maxBugFixCycles",
-        "text": "loop, at most {maxBugFixCycles} bug-fix cycles; card to In Progress"
+        "budget": "maxBugFixReturns",
+        "text": "loop, at most {maxBugFixReturns} bug-fix returns; card to In Progress"
       }
     },
     {
@@ -4654,7 +4633,7 @@
           "is": "ciFix"
         }
       },
-      "label": "ciFixRounds 0: a person decides"
+      "label": "ci.maxFixRounds 0: a person decides"
     },
     {
       "from": "branchCi",
@@ -4881,8 +4860,8 @@
       "to": "holdFix",
       "outcome": "again",
       "loop": {
-        "budget": "draftCycles",
-        "text": "another round on hold, at most {draftCycles}"
+        "budget": "ciMaxFixRounds",
+        "text": "another round on hold, at most {ciMaxFixRounds} in all"
       },
       "label": "cycles left: another round"
     },
@@ -4890,7 +4869,7 @@
       "from": "holdFix",
       "to": "heldFailed",
       "outcome": "failed",
-      "label": "draftCycles {draftCycles} used"
+      "label": "ci.maxFixRounds {ciMaxFixRounds} used"
     },
     {
       "from": "ready",
@@ -5083,7 +5062,7 @@
         "pr": true,
         "council.pairVerify": true,
         "council.pairUiVerify": true,
-        "council.review": true,
+        "council.architectureReview": true,
         "council.testPlan": true,
         "council.testAutomation": true,
         "council.prCheck": true,

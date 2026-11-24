@@ -208,7 +208,7 @@ test('ADV-11 (D2): review-gate CLI parses --no-agent and publishes needs-human w
   fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({
     board: { repo: 'acme/shop', projectNumber: 1 },
     tickets: { repo: 'acme/shop' },
-    implement: { reviewGate: { enabled: true, autoMerge: { enabled: true } } },
+    implement: { reviewGate: { enabled: true }, autoMerge: { enabled: true } },
   }));
   const head = git(root, 'rev-parse', 'HEAD');
   const binDir = path.join(root, '.fake-bin');

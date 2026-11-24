@@ -11,7 +11,7 @@ import { withStaticAnalysis } from '../../pipeline/lib/analysis/report.mjs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { ceiling, runAgent } from '../../pipeline/lib/agents.mjs';
-import { INSTALL_ROOT, loadConfig } from '../../pipeline/lib/config.mjs';
+import { INSTALL_ROOT, deepMerge, loadConfig } from '../../pipeline/lib/config.mjs';
 import { formatBugs, normalizeBugs } from '../../pipeline/lib/decisions.mjs';
 import { addWorktree, git, implChanges, revExists } from '../../pipeline/lib/git.mjs';
 import { HUMAN_DECISIONS_FILE, decisionsBlock, readDecisions } from '../../pipeline/lib/human-decisions.mjs';
@@ -21,7 +21,7 @@ import { prsDisabled, runTags } from '../../pipeline/lib/run-tags.mjs';
 import { addUsage } from '../../pipeline/lib/usage.mjs';
 import { activeStoryFile } from '../../pipeline/lib/stories.mjs';
 import { openPullRequest, prPublisher, pushBranch, pushFoldedBranch } from '../../pipeline/lib/bot.mjs';
-import { RESOLVED_LABEL, clearEscalationNotes } from '../../board/lib/escalation.mjs';
+import { clearEscalationNotes, resolvedLabel } from '../../board/lib/escalation.mjs';
 import { readMeta, ticketFile, writeTicket } from '../../board/lib/source.mjs';
 import { gateConfig } from '../../review-gate/lib/config.mjs';
 import { liveDiffKey, localDiffKey } from '../../review-gate/lib/assessment.mjs';
@@ -33,7 +33,7 @@ import { boardEvent } from './board-events.mjs';
 import { OUTCOMES_FILE, attributeEscaped, storyOutcomeRecord } from './decisions.mjs';
 import { changedLineLint, parityGate, paritySection } from './ci-parity.mjs';
 import { analysisFindings, analysisGate, analysisGateSection, remedyRedBranch } from './analysis-gate.mjs';
-import { ciFixRounds, ciGate, ciLine, ciOutcome, deliveryDecision } from './ci-wait.mjs';
+import { ciFixBudget, ciGate, ciLine, ciOutcome, deliveryDecision } from './ci-wait.mjs';
 import { sideEffectsSection } from './side-effects.mjs';
 import { councilFor, councilRecords, councilReviewSection, fixDeclarationText, fixesFile, sealPendingFixes, withCouncilReview } from '../../pipeline/lib/council.mjs';
 import { freeReroute, returnSettings, returnTask, routeFindings, unaddressed } from './pr-check-return.mjs';
@@ -42,7 +42,7 @@ import { dedupeFollowUps, followUpLine } from './follow-ups.mjs';
 export { dedupeFollowUps };
 import { commitAll, commitEnv, commitRecords, filesChanged, formattingOnlyHunks, headSha, listSubtaskWorktrees, mustGit, removeWorktree, stackedRef } from './gitops.mjs';
 import { formatDiagnostics, lspAdapter } from './lsp.mjs';
-import { LimitError, agentSettings, checkBudget, createContext, orchestrate, verifyLaterChange } from './orchestrate.mjs';
+import { LimitError, RESUME_NOTE, checkBudget, createContext, orchestrate, verifyLaterChange } from './orchestrate.mjs';
 import { applyResources, resourcesFromEnv, waitForMemory } from './resources.mjs';
 import { newFeedbackLog } from './feedback.mjs';
 import { readOutage } from '../../pipeline/lib/outage.mjs';
@@ -55,14 +55,20 @@ import { isReopened, openPrFor, placeReopened, prIsOpen, syncFromRemote } from '
 import { confirmPrState, headActivities, holdPr, preOpenMedia, preOpenSettings, proveBeforeOpen, readyAudit, recordHeadActivity, releasePr } from './pre-open.mjs';
 import { keyFolder } from '../../pr-video/lib/pr-video.mjs';
 import { pruneRunLocal, removeDelivered } from '../../factory/lib/prune.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
+import { fvEnabled } from '../../feature-verification/lib/enabled.mjs';
 
 // With a PR check council, the implementer answering a return says which lines answer which finding (council.mjs
 // fixDeclarationText); '' otherwise.
 function declarePrCheckFixes(config, worktree, key, findings) {
-  if (!councilFor(config, 'prCheck')) return '';
+  if (councilFor(config, 'prCheck', { subject: key }).sole) return '';
   const text = fixDeclarationText(fixesFile(worktree, config.stateDir, { stage: 'prCheck', story: key }), findings ?? []);
   return text ? `\n\n${text}` : '';
 }
+
+// The wait before a worker's retry: implement.worker.retryDelaySec, doubled each retry (1, 2, 4 ... times), like
+// recovery.retryDelaySec.
+export const retryWaitMs = (retryDelaySec, attempt) => retryDelaySec * 1000 * 2 ** (attempt - 1);
 
 const PIPELINE_CLI = path.join(INSTALL_ROOT, 'scripts/pipeline/pipeline.mjs');
 const FV_CLI = path.join(INSTALL_ROOT, 'scripts/feature-verification/feature-verification.mjs');
@@ -219,7 +225,7 @@ export function startResolvedReruns(config, stories, { event = boardEvent, pr = 
 // ---------------------------------------------------------------------------------------------
 
 // A ticket waiting for a person: the board's needs-human label without escalation-resolved.
-export const waitingForPerson = (config, s) => (s.labels ?? []).includes(config.board?.blockedLabel ?? 'needs-human') && !(s.labels ?? []).includes(config.board?.resolvedLabel ?? 'escalation-resolved');
+export const waitingForPerson = (config, s) => (s.labels ?? []).includes(setting(config, 'board.blockedLabel')) && !(s.labels ?? []).includes(setting(config, 'board.resolvedLabel'));
 
 export function plan(config, inputs, { base = config.baseRef, force = false, placeReopenedRuns = true, reopenDeps = {}, resumeStopped = false, checkPrState = true } = {}) {
   const stories = orderStories(collectStories(inputs));
@@ -229,7 +235,7 @@ export function plan(config, inputs, { base = config.baseRef, force = false, pla
     s.reopened = isReopened(config, s);
     // Waiting for a person (the board's needs-human label, an escalation or an owner decision not yet answered): not
     // run again until the person resolves it (council C6: an epic run picked up a ticket blocked on its owner).
-    const blocked = config.board?.blockedLabel ?? 'needs-human';
+    const blocked = setting(config, 'board.blockedLabel');
     // A delivery that only waits for its PR to open needs no person's answer: it resumes at the open.
     const waiting = waitingForPerson(config, s) && !(!force && openPending(loadRun(config, s.key)));
     s.skip = s.abandoned && !s.reopened ? 'abandoned (its issue is closed as not planned or a duplicate)' : waiting && !force ? `waiting for a person (${blocked}): answer the questions on the ticket and tick Resolved` : s.implemented && !force && !s.reopened ? 'already implemented (its issue is closed; --force to redo)' : null;
@@ -240,7 +246,7 @@ export function plan(config, inputs, { base = config.baseRef, force = false, pla
     // A human answered the escalation questions of its last run (the issue is labeled
     // escalation-resolved): the ticket runs again, fresh, as with --force for its earlier run's outcome
     // (also a standing fv/review escalation, which otherwise waits for a human).
-    s.resolved = Boolean(s.labels?.includes(config.board?.resolvedLabel ?? RESOLVED_LABEL));
+    s.resolved = Boolean(s.labels?.includes(resolvedLabel(config)));
     const retry = force || s.resolved || s.reopened;
     // A later run continues where an interrupted one stopped: finished stories are kept, stories that
     // died part-way resume in their worktree.
@@ -331,7 +337,10 @@ export function describePlan(stories) {
     .join('\n');
 }
 
-export async function runBatch(config, stories, { parallel = 1, pr = false, script }) {
+// `deps` replaces the worker start and the wait between retries (tests).
+export async function runBatch(config, stories, { parallel = 1, pr = false, script, deps = {} }) {
+  const start = deps.startWorker ?? startWorker;
+  const wait = deps.sleep ?? sleep;
   fs.mkdirSync(runsDir(config), { recursive: true });
   const outcome = new Map(stories.filter((s) => s.skip).map((s) => [s.key, skippedOutcome(s)]));
   for (const s of stories) {
@@ -339,7 +348,8 @@ export async function runBatch(config, stories, { parallel = 1, pr = false, scri
     saveRun(config, s.key, s.skip ? { outcome: 'skipped', reason: s.skip, status: 'finished' } : { status: 'queued', outcome: null, reason: null, branch: s.branch, worktree: s.worktree, base: s.base, ...(s.resume ? keepPendingOpen(loadRun(config, s.key)) : { pendingOpen: null }) });
   }
   const retries = new Map();
-  const { maxWorkerRetries = 0, retryDelaySec = 0 } = config.implement;
+  // implement.worker: a failed ticket is started again up to maxRetries times; the wait doubles each retry.
+  const { maxRetries, retryDelaySec } = config.implement.worker;
 
   const pending = stories.filter((s) => !s.skip);
   const running = new Map();
@@ -363,18 +373,18 @@ export async function runBatch(config, stories, { parallel = 1, pr = false, scri
       } else if (running.size < parallel && ready(s)) {
         pending.splice(i--, 1);
         // Back-pressure: a new story waits while free memory is below the reserve (auto sizing).
-        running.set(s.key, waitForMemory(config, s.key).then(() => startWorker(config, s, { pr, script })).then((r) => [s, r]));
+        running.set(s.key, (deps.startWorker ? Promise.resolve() : waitForMemory(config, s.key)).then(() => start(config, s, { pr, script })).then((r) => [s, r]));
       }
     }
     if (!running.size) continue;
     const [s, result] = await Promise.race(running.values());
     running.delete(s.key);
     const attempt = (retries.get(s.key) ?? 0) + 1;
-    if (RETRYABLE.has(result.outcome) && attempt <= maxWorkerRetries && !result.outage) {
+    if (RETRYABLE.has(result.outcome) && attempt <= maxRetries && !result.outage) {
       retries.set(s.key, attempt);
       s.resume = true;
-      log(`${s.key}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''}; retrying (${attempt}/${maxWorkerRetries}).`);
-      running.set(s.key, sleep(retryDelaySec * 1000 * attempt).then(() => startWorker(config, s, { pr, script })).then((r) => [s, r]));
+      log(`${s.key}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''}; retrying (${attempt}/${maxRetries}).`);
+      running.set(s.key, wait(retryWaitMs(retryDelaySec, attempt)).then(() => start(config, s, { pr, script })).then((r) => [s, r]));
       continue;
     }
     outcome.set(s.key, result);
@@ -584,11 +594,9 @@ async function waitForFv(config, key, { timeoutSec, pollSec, recover }) {
   }
 }
 
-// Settings the environment overrides: PIPELINE_VERIFIER_CLI runs both verifiers on another CLI, and
-// IMPLEMENT_ORCHESTRATE=0 falls back to one implementer agent per story.
+// Settings the environment overrides.
 export function applyEnv(config) {
   const s = config.implement;
-  if (process.env.IMPLEMENT_ORCHESTRATE === '0') s.orchestrate = false;
   // Experiments give every arm its own branch names (scripts/pipeline/lib/experiment.mjs).
   if (process.env.IMPLEMENT_BRANCH_PREFIX) s.branchPrefix = process.env.IMPLEMENT_BRANCH_PREFIX;
   s.epic = { ...(s.epic ?? {}) };
@@ -596,7 +604,6 @@ export function applyEnv(config) {
   if (process.env.IMPLEMENT_BUGFIX_BRANCH_PREFIX) s.epic.bugfixPrefix = process.env.IMPLEMENT_BUGFIX_BRANCH_PREFIX;
   if (process.env.IMPLEMENT_WORKTREE_DIR) s.worktreeDir = process.env.IMPLEMENT_WORKTREE_DIR;
   applyResources(config);
-  if (process.env.PIPELINE_VERIFIER_CLI) for (const r of ['verifier', 'uiVerifier']) s.roles[r] = { ...s.roles[r], cli: process.env.PIPELINE_VERIFIER_CLI };
   return config;
 }
 
@@ -740,7 +747,7 @@ export async function recoverDeadRun(config, { batch = readJson(batchFile(config
 // before the merge could not see them (dogfood). Best effort: a store that is down never fails a story.
 export async function shipMetrics(wt, pushImpl = sinkPush) {
   try {
-    if (process.env.FACTORY_SINK === 'off' || sinkSettings(wt).type === 'none') return null;
+    if (sinkSettings(wt).type === 'none') return null;
     const r = await pushImpl(wt);
     if (r?.shipped) log(`metrics: ${r.shipped} record(s) shipped to the ${sinkSettings(wt).type} store`);
     return r;
@@ -895,7 +902,7 @@ async function implementStoryInner(config, opts, holder) {
         log(`${key}: resuming the delivery of ${branch}: ${saved.pr ? `${saved.pr} (on hold) was not rated` : 'the PR did not open'} earlier (${String(saved.openRefused?.reason ?? saved.reason ?? '').slice(0, 160)}); skipping implementation and review to ${saved.pr ? 'rate and update it' : 'open'} on the CI-proven head (delivery-stage agents may still run if needed)${input.rebuilt ? ' (its body rebuilt from the run records)' : ''}`);
         holder.wt = wtResume;
         recordExternalCalls(wtResume, key);
-        const ticketMeta = readJson(path.join(worktree, wtResume.stateDir ?? '.factory/state', 'board', key, 'meta.json'), {}) ?? {};
+        const ticketMeta = readJson(path.join(worktree, setting(wtResume, 'stateDir'), 'board', key, 'meta.json'), {}) ?? {};
         return deliverStory(config, wtResume, { key, branch, worktree, base: saved.base ?? base, baseBranch: String(saved.base ?? base).replace(/^origin\//, ''), title: input.title, body: input.body, result: finish('done', null, { resumedAt: 'open-pending', firstPushAt: saved.firstPushAt ?? null }), isBug: Boolean(saved.bug) || isBugTicket({ key, type: ticketMeta.type }), issueUrl: saved.issueUrl ?? ticketMeta.issue?.url ?? null, questions: [], prcIncomplete: null, resumed: true, ...(saved.pr ? { existingPr: saved.pr, holds: held?.holds ?? saved.holds ?? [], openedAt: saved.openedAt ?? null, readyAt: saved.readyAt ?? null } : {}) });
       }
     } else if (saved.pr && saved.opened && movedAfterOpen('after the open', saved.provenHead ?? null)?.stop) {
@@ -957,7 +964,7 @@ async function implementStoryInner(config, opts, holder) {
   // plan's lint precheck found no node_modules there).
   const prepareCmd = prep.config.implement?.prepareCmd;
   if (prep.created && prepareCmd) {
-    const r = run('sh', ['-c', prepareCmd], { cwd: worktree, timeoutSec: prep.config.implement?.timeouts?.checkSec ?? 1800 });
+    const r = run('sh', ['-c', prepareCmd], { cwd: worktree, timeoutSec: setting(prep.config, 'implement.timeoutsSec.checks') });
     log(`${key}: prepareCmd ${r.status === 0 ? 'ran' : `failed (exit ${r.status}); continuing`} in the new worktree`);
   }
   // Epic delivery: the epic design note (written by the epic plan) goes to the orchestrator's plan.
@@ -981,7 +988,7 @@ async function implementStoryInner(config, opts, holder) {
       const start = pipeline(worktree, base, ['start', key]);
       if (start.status !== 0) return finish('error', `pipeline start failed: ${tail(start.stderr, 500)}`);
     }
-    if (opts.resume) feedback = 'A previous run of this story was interrupted. Its work so far is on this branch (committed, or still uncommitted in the worktree). Review it and continue the implementation rather than starting over.';
+    if (opts.resume) feedback = RESUME_NOTE;
   }
 
   // A resumed story does not plan again: subtask worktrees, stack slots and language servers of the
@@ -990,8 +997,9 @@ async function implementStoryInner(config, opts, holder) {
   // A resumed story keeps its orchestration: it continues with the interrupted run's plan, pairs and verifiers
   // (dogfood C2: a crash-resumed story ran a lone implementer, so it had no verifier pair and no pair record, and the
   // review gate's confidence for it fell to 42).
-  const orchestrated = wt.implement.orchestrate !== false;
-  if (opts.resume && wt.implement.orchestrate !== false) await cleanupSubtasks(wt, key);
+  // The implement stage's orchestrator always leads: it implements the ticket itself or plans subtasks for pairs.
+  const orchestrated = true;
+  if (opts.resume) await cleanupSubtasks(wt, key);
   let prCheckReturnsSoFar = [];
   const prCheckReturnsCount = () => prCheckReturnsSoFar.length;
   const recordOutcome = (outcome, reason) => {
@@ -1018,7 +1026,7 @@ async function implementStoryInner(config, opts, holder) {
     const fresh = ctx?.requiredCases?.slice(requiredFlushed) ?? [];
     if (!fresh.length) return;
     requiredFlushed = ctx.requiredCases.length;
-    const file = path.join(worktree, wt.stateDir ?? '.factory/state', 'implement', `${key}-pair-required.json`);
+    const file = path.join(worktree, setting(wt, 'stateDir'), 'implement', `${key}-pair-required.json`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     writeText(file, JSON.stringify(fresh));
     const r = run(process.execPath, [FV_CLI, 'require', key, `--file=${file}`, '--no-start'], { cwd: worktree, env: { ...process.env, PIPELINE_ROOT: worktree } });
@@ -1093,8 +1101,8 @@ async function implementStoryInner(config, opts, holder) {
       if (skipNextRun) {
         skipNextRun = false;
       } else {
-        if (metrics.implementerRuns >= settings.maxImplementerRuns) return ctx ? stop('unresolved', `still not approved after ${metrics.implementerRuns} implementer runs`) : finish('unresolved', `still not approved after ${metrics.implementerRuns} implementer runs`);
-        let left = settings.implementerTimeoutSec;
+        if (metrics.implementerRuns >= settings.maxOrchestratorRuns) return ctx ? stop('unresolved', `still not approved after ${metrics.implementerRuns} implementer runs`) : finish('unresolved', `still not approved after ${metrics.implementerRuns} implementer runs`);
+        let left = settings.timeoutsSec.orchestratorFix;
         let release = null;
         if (ctx) {
           try {
@@ -1112,10 +1120,9 @@ async function implementStoryInner(config, opts, holder) {
         const wasIntegration = Boolean(integration);
         const task = integration ?? implementerTask({ key, storyFile: prep.story, branch, worktree, base, feedback, epicNote: ctx ? null : epicNote, decisions: readDecisions(prep.story) });
         integration = null;
-        const { cli, model } = agentSettings(wt, 'orchestrator');
         let res;
         try {
-          res = runAgent(wt, { name: 'implementer', task, mode: 'implement', model, cli, noSubagents: Boolean(ctx), timeoutSec: left, usage: { stage: 'implement', story: key, round: metrics.implementerRuns } });
+          res = runAgent(wt, { name: 'implementer', task, mode: 'implement', noSubagents: Boolean(ctx), timeoutSec: left, usage: { stage: 'implement', story: key, round: metrics.implementerRuns } });
         } finally {
           release?.();
         }
@@ -1198,10 +1205,10 @@ async function implementStoryInner(config, opts, holder) {
             } else log(`${key}: secret finding(s) in history not folded: ${folded.reason}`);
           }
           const blockingTool = (storyReport?.findings ?? []).filter((f) => f.severity === 'blocking');
-          if (blockingTool.length && analysisRounds < (resolveAnalysis(wt)?.fixLoop.bounces ?? 2)) {
+          if (blockingTool.length && analysisRounds < (resolveAnalysis(wt)?.fixLoop.bounces ?? 0)) {
             analysisRounds++;
             // not-routed: tool findings (static analysis on production files), the harness's own facts, always the code agent's
-            feedback = fixTaskText({ ...storyReport, findings: blockingTool }, { bounce: analysisRounds, bounces: resolveAnalysis(wt)?.fixLoop.bounces ?? 2 });
+            feedback = fixTaskText({ ...storyReport, findings: blockingTool }, { bounce: analysisRounds, bounces: resolveAnalysis(wt)?.fixLoop.bounces ?? 0 });
             continue;
           }
         }
@@ -1233,12 +1240,14 @@ async function implementStoryInner(config, opts, holder) {
     const approvedHash = loadState(wt, key).review.approvedHash;
     boardEvent(worktree, key, ['event', key, 'testing', ...(approvedHash ? ['--id', `testing:${approvedHash}`] : [])]);
     // feature verification writes and verifies the tests in the background; wait for its verdict.
-    fv = await waitForFv(wt, key, { timeoutSec: ceiling(wt, settings.fvTimeoutSec), pollSec: settings.fvPollSec, recover: () => pipeline(worktree, base, ['resume', key]) });
+    // featureVerification.enabled false (or FV_SKIP=1): no tests are written for the ticket, so none are waited for.
+    fv = fvEnabled(wt) ? await waitForFv(wt, key, { timeoutSec: ceiling(wt, settings.waitSec.featureVerification), pollSec: settings.pollSec.featureVerification, recover: () => pipeline(worktree, base, ['resume', key]) }) : { status: 'verified', skipped: 'featureVerification.enabled is false' };
     if (fv.status === 'verified' && pr && !opts.epicBranch && !prsDisabled() && back.enabled && prCheckHookOn(worktree)) {
       // The PR check's report round on this head; its upheld production findings return to implementation.
-      checkedPrc = await waitForHookPrCheck(wt, key, { ceilingSec: ceiling(wt, settings.prCheckWaitSec ?? 14400), recover: () => run(process.execPath, [PR_CHECK_CLI, 'resume', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 300 }), log, expected: true, startGraceSec: settings.prCheckStartGraceSec ?? 300, restartStale: () => run(process.execPath, [PR_CHECK_CLI, 'recheck', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 120 }), notHash: prCheckReturns.at(-1)?.findings?.some((f) => (f.route ?? 'implementation') === 'implementation') ? prCheckReturns.at(-1).hash ?? null : null });
+      checkedPrc = await waitForHookPrCheck(wt, key, { ceilingSec: ceiling(wt, settings.waitSec.prCheck), recover: () => run(process.execPath, [PR_CHECK_CLI, 'resume', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 300 }), log, expected: true, startGraceSec: settings.waitSec.prCheckStart, restartStale: () => run(process.execPath, [PR_CHECK_CLI, 'recheck', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 120 }), notHash: prCheckReturns.at(-1)?.findings?.some((f) => (f.route ?? 'implementation') === 'implementation') ? prCheckReturns.at(-1).hash ?? null : null });
       const fixable = checkedPrc?.status === 'done' ? prCheckToFix(wt, checkedPrc, { bug: isBugTicket({ key, type: (readJson(path.join(path.dirname(prep.story), 'meta.json'), {}) ?? {}).type }) }) : [];
-      const memberLenses = Object.fromEntries((councilFor(wt, 'prCheck')?.members ?? []).map((m) => [m.name, m.lens]));
+      const prCouncil = councilFor(wt, 'prCheck', { subject: key });
+      const memberLenses = Object.fromEntries((prCouncil.sole ? [] : prCouncil.members).map((m) => [m.name, m.lens]));
       const routed = routeFindings(fixable, { settings: back, memberLenses, root: worktree });
       const toReturn = [...routed.implementation, ...routed.tests];
       if (toReturn.length) {
@@ -1259,7 +1268,7 @@ async function implementStoryInner(config, opts, holder) {
         const ids = toReturn.map((f) => f.id);
         if (spent >= back.maxReturns && !free) {
           const allCode = toReturn.every((f) => f.route === 'implementation');
-          return stop('unresolved', `the PR check still upholds ${ids.length} ${allCode ? 'production ' : ''}finding(s) after ${spent} return(s)${allCode ? ' to implementation' : ''} (implement.prCheck.returnToImplementation.maxReturns ${back.maxReturns}): ${toReturn.map((f) => `${f.id} ${f.title}${allCode ? '' : ` (${f.route === 'tests' ? 'tests' : 'production'})`}`).join('; ')}`, { findings: toReturn.map((f) => `[${f.severity}] ${f.id}: ${f.title}`) });
+          return stop('unresolved', `the PR check still upholds ${ids.length} ${allCode ? 'production ' : ''}finding(s) after ${spent} return(s)${allCode ? ' to implementation' : ''} (prCheck.returnToImplementation.maxReturns ${back.maxReturns}): ${toReturn.map((f) => `${f.id} ${f.title}${allCode ? '' : ` (${f.route === 'tests' ? 'tests' : 'production'})`}`).join('; ')}`, { findings: toReturn.map((f) => `[${f.severity}] ${f.id}: ${f.title}`) });
         }
         // The plan and tests feature verification just verified are kept on the branch before the change goes back.
         commitAll(worktree, `${key}: Test plan and tests verified before the PR check sent the change back`);
@@ -1278,7 +1287,7 @@ async function implementStoryInner(config, opts, holder) {
         if (testItems.length) {
           // Test gaps: required cases for the test plan and test automation, with the finding attached; their verifiers
           // cannot approve while one is unmet (feature-verification/lib/required.mjs).
-          const file = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${key}-required-${entry.n}.json`);
+          const file = path.join(worktree, setting(wt, 'stateDir'), 'pr-check', `${key}-required-${entry.n}.json`);
           fs.mkdirSync(path.dirname(file), { recursive: true });
           writeText(file, JSON.stringify(testItems.map((f) => ({ id: f.id, source: `pr-check round ${entry.round}`, title: f.title, fix: f.fix, reason: f.reason, head: entry.head }))));
           const rq = run(process.execPath, [FV_CLI, 'require', key, `--file=${file}`, ...(codeItems.length ? ['--no-start'] : [])], { cwd: worktree, env: { ...process.env, PIPELINE_ROOT: worktree } });
@@ -1302,7 +1311,7 @@ async function implementStoryInner(config, opts, holder) {
       if (prCheckReturns.length) saveRun(config, key, { phase: null, prCheckReturns });
     }
     if (fv.status !== 'product-bug') break;
-    if (metrics.bugFixCycles >= settings.maxBugFixCycles) break;
+    if (metrics.bugFixCycles >= settings.maxBugFixReturns) break;
     metrics.bugFixCycles++;
     // Back to the implementer: the card returns to In Progress with the bugs.
     boardEvent(worktree, key, ['event', key, 'product-bug', ...(fv.finishedAt ? ['--id', `bug:${fv.finishedAt}`] : [])], { input: JSON.stringify({ bugs: fv.bugs ?? [], cycle: metrics.bugFixCycles }) });
@@ -1333,7 +1342,7 @@ async function implementStoryInner(config, opts, holder) {
     const issueUrl = ticketMeta.issue?.url;
     // The PR check the Stop hook started runs in the background (report only): wait for it, so its verdict and
     // open findings are in the PR, not lost behind it (dogfood step 5: the PR opened 3 minutes before it ended).
-    const reported = checkedPrc ?? (await waitForHookPrCheck(wt, key, { ceilingSec: ceiling(wt, settings.prCheckWaitSec ?? 14400), recover: () => run(process.execPath, [PR_CHECK_CLI, 'resume', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 300 }), log, expected: prCheckHookOn(worktree), startGraceSec: settings.prCheckStartGraceSec ?? 300, restartStale: () => run(process.execPath, [PR_CHECK_CLI, 'recheck', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 120 }) }));
+    const reported = checkedPrc ?? (await waitForHookPrCheck(wt, key, { ceilingSec: ceiling(wt, settings.waitSec.prCheck), recover: () => run(process.execPath, [PR_CHECK_CLI, 'resume', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 300 }), log, expected: prCheckHookOn(worktree), startGraceSec: settings.waitSec.prCheckStart, restartStale: () => run(process.execPath, [PR_CHECK_CLI, 'recheck', key], { cwd: worktree, env: fixEnv(worktree, base, key), timeoutSec: 120 }) }));
     const prcIncomplete = prCheckIncomplete(reported, { enabled: prCheckHookOn(worktree), issues: [Number(String(issueUrl ?? '').match(/\/issues\/(\d+)/)?.[1])].filter(Boolean) });
     if (prcIncomplete) log(`${key}: ${prcIncomplete.reason}; no PR opens (pr-check-incomplete): the branch is pushed and the findings go on the ticket`);
     const prc = fixBeforePr(wt, { key, worktree, base, bug: isBugTicket({ key, type: ticketMeta.type }) }, reported);
@@ -1341,7 +1350,7 @@ async function implementStoryInner(config, opts, holder) {
     publishTicket(worktree, key);
     boardEvent(worktree, key, ['fetch', key, '--refresh']);
     // What CI runs on the PR, run here first; failures go back through the fixing loop (dogfood C4).
-    const parity = settings.ciParity === false ? null : parityGate({ cwd: worktree, base, targetArgs: ['--story', key], seedFile: path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${key}-ci-parity.json`), prCheckCli: PR_CHECK_CLI, env: fixEnv(worktree, base, key), log: (m) => log(`${key}: ${m}`) });
+    const parity = settings.ci.parity.enabled === false ? null : parityGate({ cwd: worktree, base, targetArgs: ['--story', key], seedFile: path.join(worktree, setting(wt, 'stateDir'), 'pr-check', `${key}-ci-parity.json`), prCheckCli: PR_CHECK_CLI, env: fixEnv(worktree, base, key), budget: ciFixBudget(settings, { load: () => loadRun(config, key), save: (s) => saveRun(config, key, s) }), log: (m) => log(`${key}: ${m}`) });
     result.finalSha = headSha(worktree);
     const questions = prc?.questions ?? [];
     let body = `${heldBlock(prcIncomplete)}${ownerDecisionBlock(questions)}Implements ${key}${issueUrl ? ` (${issueUrl})` : ''} (generated by \`pipeline implement\`).\n\n- Architecture review: approved\n- Test plan and automated tests: verified\n- ${ctx ? '' : `Implementer runs: ${metrics.implementerRuns}, `}Review rounds blocked: ${metrics.reviewBlocks}, feature verification bug-fix cycles: ${metrics.bugFixCycles}${orch}\n${prCheckSection(prc)}${prCheckReturnsSection(prCheckReturns)}${runConditionsSection(runConditions(wt, [key]), ctx?.deps.lsp.unavailable?.(worktree) ?? [])}${paritySection(parity?.results)}${fullProjectsSection(fullProjectRuns(wt, [key]))}${followUpsSection([...withoutResolved(result.followUps ?? [], [prc]), ...prCheckFollowUps([prc])])}${sideEffectsBlock(prc?.sideEffects)}\nThe demo video of the changed e2e specs (and, for backend changes, an API summary of the endpoints) is added below by the local demo-video step before the PR opens.`;
@@ -1354,7 +1363,7 @@ async function implementStoryInner(config, opts, holder) {
     // Another story's verified plan or tests this change edited are verified again before the push (held-out C14: a
     // feature scoped an existing spec's assertion to the brand section, nothing re-verified that story, and the push was
     // refused after the run said done).
-    const others = reverifyEditedStories(wt, { worktree, base, key, timeoutSec: ceiling(wt, settings.fvTimeoutSec) });
+    const others = reverifyEditedStories(wt, { worktree, base, key, timeoutSec: ceiling(wt, settings.waitSec.featureVerification) });
     if (!others.ok) return { ...result, outcome: 'not-delivered', reason: `no PR: ${others.reason}` };
     // The PR opens finished (implement.preOpen, owner requirement C16): CI on the branch, the gate's rating, the video and
     // the whole body first; after the open only deterministic steps, and agent work only while the PR is on hold.
@@ -1413,13 +1422,13 @@ function deliverStory(config, wt, { key, branch, worktree, base, baseBranch, tit
 }
 
 // The PR title and body a delivery started from (deliverFinished), kept for a resume after the host refused the open.
-export const deliveryInputFile = (worktree, wt, id) => path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-delivery-input.json`);
+export const deliveryInputFile = (worktree, wt, id) => path.join(worktree, setting(wt, 'stateDir'), 'pr-check', `${id}-delivery-input.json`);
 
 // The title and body of a delivery whose input was not saved (a run from before the input was kept), rebuilt from the run
 // records: the ticket's heading, the PR check result, run conditions, whole-project runs, follow-ups, behaviour changes,
 // the council's rounds and the static analysis. Deterministic; no agent.
 export function rebuildDeliveryInput(wt, { key, worktree, issueUrl = null, followUps = [] }) {
-  const stateDir = path.join(worktree, wt.stateDir ?? '.factory/state');
+  const stateDir = path.join(worktree, setting(wt, 'stateDir'));
   const story = path.join(stateDir, 'board', key, 'story.md');
   const heading = fs.existsSync(story) ? fs.readFileSync(story, 'utf8').match(/^#\s+(.+)$/m)?.[1] : null;
   const title = `${key}: ${heading?.replace(new RegExp(`^${key}[:\\s-]*`), '') ?? key}`;
@@ -1458,10 +1467,13 @@ export async function deliverFinished(config, wt, o) {
   const result = o.result ?? {};
   const io = { ...deliveryIo(wt), ...(o.io ?? {}) };
   const save = o.save ?? ((s) => saveRun(config, id, s));
+  const load = o.load ?? (() => loadRun(config, id));
+  // The ticket's CI fixing rounds, one count from the analysis gate to the rounds after the open (ciFixBudget).
+  const budget = ciFixBudget(deepMerge(defaultSettings().implement, config.implement ?? {}), { load, save });
   const issues = o.issues ?? [];
   const targetArgs = o.targetArgs ?? ['--stories', keys.join(',')];
   let body = o.body;
-  const stateDir = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check');
+  const stateDir = path.join(worktree, setting(wt, 'stateDir'), 'pr-check');
   const holds = [...(o.holds ?? [])];
   // The PR's title and body as the agent stages left them, before the delivery adds its evidence: what `implement resume`
   // delivers again (skipping implementation, review and feature verification) when the open was refused or assessment failed.
@@ -1480,7 +1492,7 @@ export async function deliverFinished(config, wt, o) {
   // machine until the jobs pass (analysis-gate.mjs).
   const heldOf = (w) => (io.held ?? ((x) => heldSecrets(wt, x)))(w);
   const fixEnvOf = () => o.env ?? fixEnv(worktree, base, keys[0]);
-  const aGate = (io.analysisGate ?? ((a) => analysisGate(wt, a)))({ cwd: worktree, branch, base, targetArgs, seedFile: path.join(stateDir, `${id}-analysis-gate.json`), prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), keys, held: heldOf, log: (m) => log(`${label}: ${m}`) });
+  const aGate = (io.analysisGate ?? ((a) => analysisGate(wt, a)))({ cwd: worktree, branch, base, targetArgs, seedFile: path.join(stateDir, `${id}-analysis-gate.json`), prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), budget, keys, held: heldOf, log: (m) => log(`${label}: ${m}`) });
   if (!aGate.ok) {
     const failing = aGate.results.filter((r) => !r.ok);
     const reason = `CI's analysis jobs fail on the head before the push, after the fixing round (${failing.map((r) => r.check).join('; ')}); the branch is not pushed`;
@@ -1504,11 +1516,11 @@ export async function deliverFinished(config, wt, o) {
   if (questions.length) return notFinished(needsDecision(questions), 'it needs an owner decision, asked on the ticket');
   if (prcIncomplete) return notFinished({ outcome: prcIncomplete.outcome, reason: prcIncomplete.reason, findings: prcIncomplete.findings, delivery: prcIncomplete }, prcIncomplete.reason);
   save({ phase: 'branch-ci', branch, worktree, base, firstPushAt, pushedHead: headSha(worktree), ...(existingPr ? { pr: existingPr, holds, preOpen: true } : {}) });
-  const proof = await proveBeforeOpen(wt, { label, stories: keys, branch, worktree, base, issues, targetArgs, prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), stateDir, repo: io.repo(), sync: () => io.push({ worktree, branch, base, commitRecords: false }), log, gate: io.gate,
+  const proof = await proveBeforeOpen(wt, { label, stories: keys, branch, worktree, base, issues, targetArgs, prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), stateDir, repo: io.repo(), sync: () => io.push({ worktree, branch, base, commitRecords: false }), log, budget, gate: io.gate,
     // A red branch CI after its fixing round: the analysis jobs run here on the same head, and the secret decision table's
     // way out is taken (a fixing round for what is still in the files; the fold of the story's own branch with no PR for a
     // fake value in its pushed history); anything else escalates as before.
-    remedy: (ci) => (io.remedy ?? ((a) => remedyRedBranch(wt, a)))({ worktree, branch, base, ci, prOpen: existingPr ? true : io.prOpen(branch), keys, targetArgs, seedFile: path.join(stateDir, `${id}-branch-remedy.json`), prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), push: () => io.push({ worktree, branch, base, commitRecords: false }), pushLease: (lease) => (io.pushLease ?? ((a) => pushLeaseDefault(wt, a)))({ worktree, branch, lease }), log: (m) => log(`${label}: ${m}`) }) });
+    remedy: (ci, spend = {}) => (io.remedy ?? ((a) => remedyRedBranch(wt, a)))({ ...spend, worktree, branch, base, ci, prOpen: existingPr ? true : io.prOpen(branch), keys, targetArgs, seedFile: path.join(stateDir, `${id}-branch-remedy.json`), prCheckCli: PR_CHECK_CLI, env: fixEnvOf(), push: () => io.push({ worktree, branch, base, commitRecords: false }), pushLease: (lease) => (io.pushLease ?? ((a) => pushLeaseDefault(wt, a)))({ worktree, branch, lease }), log: (m) => log(`${label}: ${m}`) }) });
   const { branchCi, draftFirst } = proof;
   if (proof.syncFailed) return { ...result, outcome: 'not-delivered', reason: `no PR: ${proof.syncFailed}`, pr: existingPr };
   if (proof.delivery) return notFinished({ outcome: proof.delivery.outcome, reason: `before its PR: ${proof.delivery.reason}`, findings: proof.delivery.findings, delivery: proof.delivery }, `its CI on the branch is not green (${proof.delivery.reason})`);
@@ -1651,7 +1663,7 @@ export async function deliverFinished(config, wt, o) {
     ratedDiff = localDiffKey(worktree, base);
   }
   save({ phase: 'ci-wait', opened: null, pr: prUrl, branch, worktree, base, deliveredHead: headSha(worktree), bug: Boolean(isBug), issues, questions: [], prCheckIncomplete: null, preOpen: true, firstPushAt, greenAt, openedAt, readyAt, holds, branchCi: branchCi ? { state: branchCi.state, head: branchCi.head ?? head, pipelines: branchCi.names ?? [], prOnly: branchCi.prOnly ?? [], rounds: branchCi.rounds ?? 0 } : null });
-  return afterOpen(config, wt, { ...o, io, save, issues, targetArgs, prUrl, result: { ...result, firstPushAt, greenAt, openedAt }, readyAt, holds, ratedDiff: gateSkipped ? localDiffKey(worktree, base) : ratedDiff, openedAt, greenAt, provenHead, firstPushAt });
+  return afterOpen(config, wt, { ...o, io, save, load, issues, targetArgs, prUrl, result: { ...result, firstPushAt, greenAt, openedAt }, readyAt, holds, ratedDiff: gateSkipped ? localDiffKey(worktree, base) : ratedDiff, openedAt, greenAt, provenHead, firstPushAt });
 }
 
 // A PR found open for a branch whose run stopped between the open and its record (a crash right after `pr create`): it is
@@ -1673,7 +1685,7 @@ export function publishRatingOrHold(config, wt, o, { prUrl, holds = [], openedAt
   const save = o.save ?? ((s) => saveRun(config, id, s));
   if (!o.isBug) return null;
   const head = headSha(worktree);
-  const assessFile = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-gate-assessment.json`);
+  const assessFile = path.join(worktree, setting(wt, 'stateDir'), 'pr-check', `${id}-gate-assessment.json`);
   const rating = readJson(assessFile, null);
   let r;
   try {
@@ -1764,13 +1776,13 @@ export function deliveryIo(wt) {
         log(`static analysis of the delivered head not run: ${error.message}`);
       }
     },
-    media: ({ folder, head }) => preOpenMedia(host(), { folder, head, storageBranch: wt.prVideo?.storageBranch ?? 'pr-videos' }),
+    media: ({ folder, head }) => preOpenMedia(host(), { folder, head, storageBranch: setting(wt, 'prVideo.storageBranch') }),
     demoVideo: async ({ worktree, base, branch, head, out }) => {
       if (!demoVideoOn(worktree)) return null;
       // The step writes its outcome (or the error that stopped it) to a file of its own: never read from a log line.
       const resultFile = `${out}.result`;
       fs.rmSync(resultFile, { force: true });
-      const r = await runAsync(process.execPath, [path.join(INSTALL_ROOT, 'scripts/pr-video/pr-video.mjs'), 'local', '--base', base, '--key', branch, '--head-sha', head, '--result', resultFile], { cwd: worktree, timeoutSec: Number(wt.prVideo?.localTimeoutSec ?? 5400) });
+      const r = await runAsync(process.execPath, [path.join(INSTALL_ROOT, 'scripts/pr-video/pr-video.mjs'), 'local', '--base', base, '--key', branch, '--head-sha', head, '--result', resultFile], { cwd: worktree, timeoutSec: Number(setting(wt, 'prVideo.localTimeoutSec')) });
       const record = stepRecord(r, readJson(resultFile, null));
       fs.rmSync(resultFile, { force: true });
       writeJson(out, { at: nowIso(), head, ...record });
@@ -1832,11 +1844,11 @@ export async function afterOpen(config, wt, o) {
   const issues = o.issues ?? [];
   const targetArgs = o.targetArgs ?? ['--stories', keys.join(',')];
   const po = preOpenSettings(wt);
-  const settings = config.implement ?? {};
+  const settings = deepMerge(defaultSettings().implement, config.implement ?? {});
   const holds = o.holds ?? [];
   let readyAt = o.readyAt ?? null;
   const repo = io.repo();
-  const common = { config: wt, ciOptions: { ciSettings: settings.reviewGate?.ci ?? {}, activities: (h) => headActivities(wt, prUrl, h) }, repo, pr: prUrl, branch, cwd: worktree, prCheckCli: PR_CHECK_CLI, targetArgs, base, env: o.env ?? fixEnv(worktree, base, keys[0]), seedFile: path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-ci-fix.json`), log: (m) => log(`${label}: ${m}`), ...(settings.ciWaitSec ? { timeoutSec: settings.ciWaitSec } : {}), ...(settings.ciPollSec != null ? { pollSec: settings.ciPollSec } : {}), ...(settings.ciSettleSec != null ? { settleSec: settings.ciSettleSec } : {}) };
+  const common = { config: wt, ciOptions: { ciSettings: settings.reviewGate?.ci ?? {}, activities: (h) => headActivities(wt, prUrl, h) }, repo, pr: prUrl, branch, cwd: worktree, prCheckCli: PR_CHECK_CLI, targetArgs, base, env: o.env ?? fixEnv(worktree, base, keys[0]), seedFile: path.join(worktree, setting(wt, 'stateDir'), 'pr-check', `${id}-ci-fix.json`), log: (m) => log(`${label}: ${m}`), timeoutSec: settings.ci.wait.timeoutSec, pollSec: settings.ci.wait.pollSec, settleSec: settings.ci.wait.settleSec };
   // `deliveredHead`: what the run itself pushed last (a resume compares the remote's head with it).
   const saveWait = (extra = {}) => save({ phase: 'ci-wait', pr: prUrl, preOpen: true, readyAt, holds, deliveredHead: headSha(worktree), ...extra });
   // Held for a fixing round only when the last hold was confirmed and its release was not attempted: a hold whose release
@@ -1881,9 +1893,14 @@ export async function afterOpen(config, wt, o) {
     log(`${label}: ${prUrl} is ready again: every expected check is green on its head`);
     return true;
   };
-  const waitOnly = () => (repo && settings.ciWait !== false && io.ownsPr(prUrl) ? io.gate({ ...common, fixRounds: 0 }) : Promise.resolve({ state: 'success', failing: [], pending: [] }));
+  const waitOnly = () => (repo && settings.ci.wait.enabled !== false && io.ownsPr(prUrl) ? io.gate({ ...common, fixRounds: 0 }) : Promise.resolve({ state: 'success', failing: [], pending: [] }));
   let ci = await waitOnly();
-  let cycles = holds.filter((h) => h.cycle && h.ok !== false).length;
+  // The fixing rounds already spent after the open: the last round number a confirmed hold recorded (one hold can span
+  // several rounds: each round under it sets its number), not the number of holds.
+  let cycles = Math.max(0, ...holds.filter((h) => h.cycle && h.ok !== false).map((h) => Number(h.cycle) || 0));
+  // implement.ci.maxFixRounds is one count for the ticket, read from the run record: every round charged before the PR
+  // opened (or before a stop) comes off it.
+  const budget = ciFixBudget(settings, { load, save });
   // The change whose rating the host shows (publishRatingOrHold's diff key): a bug PR is released only while the PR's own
   // change, as the host has it now (not this checkout's head), is still that change.
   const ratedDiff = o.ratedDiff ?? load()?.ratedDiff ?? null;
@@ -1901,7 +1918,7 @@ export async function afterOpen(config, wt, o) {
       saveWait();
       break;
     }
-    if (!['failure', 'flaky'].includes(ci.state) || cycles >= po.draftCycles || ciFixRounds(settings) < 1) break;
+    if (!['failure', 'flaky'].includes(ci.state) || budget.left() < 1) break;
     cycles += 1;
     // Agents work on an open PR only while it is confirmed on hold: a recorded hold is confirmed on the host again first
     // (a person may have released it while the run was stopped); one that is not is closed and the PR held again.
@@ -1927,14 +1944,16 @@ export async function afterOpen(config, wt, o) {
     saveWait({ phase: 'draft-back' });
     log(`${label}: ${prUrl} is on hold (${holds.at(-1).mode}); one CI fixing round on the branch`);
     const before = headSha(worktree);
-    ci = await io.gate({ ...common, fixRounds: ciFixRounds(settings) });
+    // The round is one of the ticket's from the moment it starts, whatever the gate then reports (a stop mid-round counts).
+    budget.charge();
+    ci = await io.gate({ ...common, fixRounds: 1 });
     if (headSha(worktree) !== before) recordHeadActivity(wt, prUrl, headSha(worktree), 'synchronize');
   }
   log(`${label}: ${ciLine(ci)}`);
   if (ci.flaky?.length) appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'flaky-tests', pr: prUrl, tests: ci.flaky, state: ci.state }]);
   const ciDelivery = deliveryDecision(ci, { issues });
   const delivery = holdFailed ? mergeDecisions(holdFailed, ciDelivery) : releaseFailed ? mergeDecisions(releaseFailed, ciDelivery) : ciDelivery;
-  const deliveryFile = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', `${id}-delivery.json`);
+  const deliveryFile = path.join(worktree, setting(wt, 'stateDir'), 'pr-check', `${id}-delivery.json`);
   if (delivery) writeJson(deliveryFile, delivery);
   if (isBug) io.regate({ worktree, pr: prUrl, args: delivery ? ['--delivery', deliveryFile] : ['--delivery-clear'] });
   if (delivery) await io.stateDecision(prUrl, { keys, outcome: delivery.outcome, reason: delivery.reason, issues: delivery.issues ?? [] });
@@ -1983,7 +2002,7 @@ export async function stateDecisionInBody(target, prUrl, decision, { gh = null }
 // The Stop hook's PR check for the story, once it has finished (council C12: a fixed 30-minute wait opened a held-out bug's PR
 // with "PR check: running" while its slow agents were still at work, and nothing acted on the result afterwards).
 // The run waits as long as the check is alive; a check whose process died is restarted through the PR check's own
-// recovery (it gives up as `crashed` after recovery.maxAttempts); the ceiling only ends a check that never finishes.
+// recovery (it gives up as `crashed` after recovery.maxRetries); the ceiling only ends a check that never finishes.
 // Whatever it returns that is not `done` is a check that did not complete (prCheckIncomplete).
 const PR_CHECK_PENDING = ['waiting', 'starting', 'running'];
 export async function waitForHookPrCheck(config, key, { ceilingSec = 144000, pollSec = 15, recover = null, died = (pc) => runDied(config, pc, { active: ['waiting', 'running'] }), now = Date.now, wait = sleep, log: say = () => {}, expected = false, startGraceSec = 300, notHash = null, restartStale = null } = {}) {
@@ -2049,7 +2068,7 @@ export function prCheckIncomplete(prc, { enabled = true, issues = [] } = {}) {
 // failure like an incomplete one: the change is not finished, so no PR opens (an open PR on hold stays on hold); the
 // branch is pushed and the findings go on the tickets for a person (the same rule as the standalone route, where such a
 // story ends unresolved without a PR). Report mode only reports: its verdict goes into the PR as it is.
-export function prCheckHold(prc, { mode = 'report', fixUntil = 'major', issues = [] } = {}) {
+export function prCheckHold(prc, { mode = defaultSettings().prCheck.mode, fixUntil = defaultSettings().prCheck.fixMinSeverity, issues = [] } = {}) {
   if (mode !== 'fix' || !prc || prc.status === 'skipped') return null;
   const severe = (prc.openFindings ?? []).filter((f) => severityAtLeast(f.severity, fixUntil));
   if (prc.verdict !== 'ESCALATED' && !severe.length) return null;
@@ -2191,12 +2210,16 @@ export function prCheckSection(prc) {
   return `- PR check (${how}): ${prc.verdict} ${prc.score}/10${open ? `, open findings:\n${open}` : ''}\n`;
 }
 
-// Single-ticket delivery's PR check mode (implement.prCheck.mode). `fix` (the default): when the report round
-// upholds a finding at or above implement.prCheck.fixUntil (major), the story goes through the PR check's
-// fixing loop on its branch before the PR opens (fixer, feature verification re-verifies what a fix made
-// stale, re-check), for at most implement.prCheck.fixRounds rounds, until nothing that severe is upheld;
-// the PR then carries the final report. `report`: the reference pipeline's behaviour, the report round's
-// verdict goes into the PR as it is.
+// The PR check mode before a PR opens (prCheck.mode, the same for a single ticket and an epic). `fix` (the default):
+// when the report round upholds a finding at or above prCheck.fixMinSeverity (prCheck.bugFixMinSeverity for a bug), the
+// work goes through the PR check's fixing loop on its branch before the PR opens (fixer, feature verification
+// re-verifies what a fix made stale, re-check), for at most prCheck.maxCouncilRounds rounds, until nothing that
+// severe is upheld; the PR then carries the final report. `report`: the report round's verdict goes into the PR as it
+// is. `off`: no PR check before the PR.
+export const prCheckFixSettings = (config) => {
+  const p = { ...defaultSettings().prCheck, ...(config.prCheck ?? {}) };
+  return { mode: p.mode, fixUntil: p.fixMinSeverity, bugFixUntil: p.bugFixMinSeverity, fixLenses: p.fixLenses, maxRounds: p.maxCouncilRounds, fixTimeoutSec: setting(config, 'implement.waitSec.prCheck') };
+};
 // The environment a pipeline CLI run on a story's worktree gets (PR check fixing loop, CI parity fix).
 // Feature verification of the other stories whose verified plan or tests this change edited (`check --changed-from`
 // fails for them): each ticket is fetched and handed to that call only, its plan and tests are checked as they are
@@ -2231,14 +2254,14 @@ export function fixEnv(worktree, base, key) {
 
 // The upheld findings fix mode acts on: at fixUntil or worse (bugFixUntil for a bug), or on fixLenses.
 export function prCheckToFix(wt, prc, { bug = false } = {}) {
-  const s = { mode: 'fix', fixUntil: 'major', bugFixUntil: 'minor', fixLenses: [], ...(wt.implement?.prCheck ?? {}) };
+  const s = prCheckFixSettings(wt);
   if (s.mode !== 'fix' || prc?.status !== 'done') return [];
   const until = bug ? s.bugFixUntil : s.fixUntil;
   return (prc.openFindings ?? []).filter((f) => severityAtLeast(f.severity, until) || (s.fixLenses ?? []).includes(f.lens));
 }
 
 export function fixBeforePr(wt, { key, worktree, base, bug = false }, prc, { runCli = run } = {}) {
-  const s = { mode: 'fix', fixUntil: 'major', bugFixUntil: 'minor', fixRounds: 3, fixLenses: [], ...(wt.implement?.prCheck ?? {}) };
+  const s = prCheckFixSettings(wt);
   if (s.mode !== 'fix' || prc?.status !== 'done') return prc;
   // A bug fix aims at 10/10: the review gate auto-merges a Low fix only when its PR check scored 10 (the reference's
   // criterion), so its minor findings are fixed too (dogfood C2: a Low group at 9/10 went to review).
@@ -2248,11 +2271,11 @@ export function fixBeforePr(wt, { key, worktree, base, bug = false }, prc, { run
   // `fixLenses` (none by default) are fixed at any severity.
   const severe = (prc.openFindings ?? []).filter((f) => severityAtLeast(f.severity, s.fixUntil) || (s.fixLenses ?? []).includes(f.lens));
   if (!severe.length) return prc;
-  log(`${key}: the PR check upheld ${severe.length} finding(s) to fix (${s.fixUntil} or worse${(s.fixLenses ?? []).length ? `, or on ${s.fixLenses.join(', ')}` : ''}) (${severe.map((f) => f.id).join(', ')}); fixing them before the PR opens (up to ${s.fixRounds} round(s))`);
+  log(`${key}: the PR check upheld ${severe.length} finding(s) to fix (${s.fixUntil} or worse${(s.fixLenses ?? []).length ? `, or on ${s.fixLenses.join(', ')}` : ''}) (${severe.map((f) => f.id).join(', ')}); fixing them before the PR opens (up to ${s.maxRounds} round(s))`);
   const env = fixEnv(worktree, base, key);
   // The fixer starts on the report round's upheld findings (its result.json, read before the run folder is reused).
-  const seed = path.join(worktree, wt.stateDir ?? '.factory/state', 'pr-check', key, 'result.json');
-  const r = runCli(process.execPath, [PR_CHECK_CLI, 'run', '--story', key, '--base', base, '--until', s.fixUntil, ...((s.fixLenses ?? []).length ? ['--fix-lenses', s.fixLenses.join(',')] : []), '--max-rounds', String(s.fixRounds), '--fix-first', seed, '--json'], { cwd: worktree, env, timeoutSec: ceiling(wt, s.fixTimeoutSec ?? 14400) });
+  const seed = path.join(worktree, setting(wt, 'stateDir'), 'pr-check', key, 'result.json');
+  const r = runCli(process.execPath, [PR_CHECK_CLI, 'run', '--story', key, '--base', base, '--until', s.fixUntil, ...((s.fixLenses ?? []).length ? ['--fix-lenses', s.fixLenses.join(',')] : []), '--fix-first', seed, '--json'], { cwd: worktree, env, timeoutSec: ceiling(wt, s.fixTimeoutSec) });
   const reportFields = { reportScore: prc.score, reportMajor: severe.length };
   try {
     const out = JSON.parse(String(r.stdout).slice(String(r.stdout).indexOf('{')));

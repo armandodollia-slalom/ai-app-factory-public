@@ -81,7 +81,7 @@ Narration is spoken locally with [kokoro-onnx](https://github.com/thewh1teagle/k
 
 ### The PR check reads frames per step
 
-The [PR check](pr-check.md#videos)'s video critic reads frames, and slower videos must not multiply its cost: when a video has subtitles next to it (`<name>.vtt`, downloaded with a linked video) or a step log (`<name>.steps.json`, a local recording), it samples one frame from the middle of each step (`video.critic.framesPerStep`), capped (`video.critic.maxFrames` and the check's own `maxFrames`). Other videos keep the interval sampling.
+The [PR check](pr-check.md#videos)'s video critic reads frames, and slower videos must not multiply its cost: when a video has subtitles next to it (`<name>.vtt`, downloaded with a linked video) or a step log (`<name>.steps.json`, a local recording), it samples one frame from the middle of each step (`prCheck.video.framesPerStep`), capped (`prCheck.video.maxFrames` and the check's own `maxFrames`). Other videos keep the interval sampling.
 
 ## Headline demos and evidence
 
@@ -91,7 +91,7 @@ The other test-case videos are **evidence**: recorded and rendered the same way,
 
 ## Narration scripts
 
-Before the PR opens, the local step makes one `demo-narrator` run (model `video.script.model`) for all the videos
+Before the PR opens, the local step makes one `demo-narrator` run (on its pool entry, `models.agents.demo-narrator`) for all the videos
 `video.script.scope` selects, the headline demos by default. It gets the ticket's title and acceptance criteria,
 each case's title and purpose, and each recording's step list, all redacted first. It answers with a script per
 video: an **opening** from the ticket, a **walk** of whole sentences each bound to a range of recorded steps, and a
@@ -108,7 +108,7 @@ therefore costs at most two narrator runs for its scripts, plus at most two for 
 
 **Timing and subtitles.** The video is re-timed to the script from the one recording: each segment's line is spoken
 from its start while the moments it narrates play at recorded speed, each settled result held until the sentence
-ends; waits with nothing to see are cut, and a segment lasts its line plus `pacing.pauseMs`. The subtitles come from
+ends; waits with nothing to see are cut, and a segment lasts its line plus `pacing.pauseSec`. The subtitles come from
 the same timeline, one cue per segment, drawn into the video and written to the `.vtt`; the quality gate checks that
 every cue lasts until its line has been spoken and never overlaps the next.
 
@@ -267,14 +267,12 @@ and `video.licenceReview: "strict"` turns narration off.
 | `narration.enabled` | `true` | speak each step; `false`: silent videos with subtitles |
 | `narration.voice`, `narration.speed`, `narration.lang` | `af_heart`, `1.0`, `en-us` | the Kokoro voice, speaking speed and language |
 | `narration.model` | `int8` | `int8` (quantized, about 90 MB); the full model is not pinned yet |
-| `pacing.stepDelayMs`, `pacing.holdMs`, `pacing.typeDelayMs`, `pacing.cursorMs` | `700`, `1500`, `90`, `600` | while recording: the pause before each step, the hold after each visible change, the delay between typed characters, and how long the cursor takes to reach its target |
-| `pacing.pauseMs` | `600` | in the rendered video: the pause after each narrated line. A step lasts as long as its line is spoken plus this pause (its reading time when silent); a longer recorded stretch (a slow load, a long hold) is cut down to that, keeping its start and its end |
+| `pacing.stepDelaySec`, `pacing.holdSec`, `pacing.typeDelaySec`, `pacing.cursorSec` | `0.7`, `1.5`, `0.09`, `0.6` | while recording: the pause before each step, the hold after each visible change, the delay between typed characters, and how long the cursor takes to reach its target |
+| `pacing.pauseSec` | `0.6` | in the rendered video: the pause after each narrated line. A step lasts as long as its line is spoken plus this pause (its reading time when silent); a longer recorded stretch (a slow load, a long hold) is cut down to that, keeping its start and its end |
 | `size.width`, `size.height` | `1280`, `720` | the recording size and viewport in demo mode |
 | `ffmpeg` | the pinned one | a path to the team's own ffmpeg build |
 | `licenceReview` | `default` | `strict` turns narration off while any of its licence items is pending review |
-| `critic.framesPerStep`, `critic.maxFrames` | `1`, `24` | how the PR check's video critic samples a rendered video |
 | `script.scope` | `headline` | which videos the `demo-narrator` agent writes a script for: `headline` (the [headline demos](#headline-demos-and-evidence)), `all`, or `none` (every video keeps the automatic lines, and a backend bug's reproduction steps use plain wording). Any other value stops every command that loads the pipeline config ("video.script.scope must be one of headline, all, none"), and `factory doctor` lists it as a failed row. `all` and `none` are proven by fixture tests only |
-| `script.model` | `null` | the narrator's model; `null`: `agent.models.narrator`, else the test-automation model (`agent.models.automation`) |
 | `script.timeoutSec`, `script.maxSegments`, `script.maxSegmentChars`, `script.maxOpeningChars`, `script.maxCloseChars`, `script.maxTotalChars`, `script.minWordsPerAction` | `600`, `16`, `280`, `240`, `200`, `2400`, `5` | the narrator's time limit and the script's length limits ([validation](#narration-scripts)) |
 | `script.speakEvidence` | `false` | evidence videos are subtitled with the automatic lines and silent; `true` narrates them aloud too |
 | `bugPair.enabled` | `true` | a UI bug gets a [before and after pair](#bugs-before-and-after-the-fix) |

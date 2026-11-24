@@ -11,9 +11,10 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.mjs';
-import { adjudicate, councilFor, councilMemory, fixesFile, memberTask, mergeCouncil, memoryFile } from '../lib/council.mjs';
+import { adjudicate, councilMemory, fixesFile, memberTask, mergeCouncil, memoryFile } from '../lib/council.mjs';
 import { readJsonl } from '../lib/util.mjs';
 import { councilArchitectureReview } from '../../review/lib/review.mjs';
+import { poolSettings, seatedCouncil } from './fixtures/pool.mjs';
 import { councilVerifier } from '../../feature-verification/lib/verify.mjs';
 import { isResolvesQuestion, RESOLVES_ANSWER } from './fixtures/resolves-question.mjs';
 
@@ -28,7 +29,10 @@ const round1Service = () => lines(130, (i) => (i === 112 ? '            PriceAtA
 // After the fix of round 1's findings: lines 112-124 validate the price and line 120 answers InvalidArgument.
 const round2Service = () => lines(142, (i) => (i === 120 ? '                throw new RpcException(new Status(StatusCode.InvalidArgument, "price_at_adding is not a valid price"));' : i >= 112 && i <= 124 ? `            // validation ${i}` : i === 125 ? '            PriceAtAdding = price,' : i > 100 ? `            // change ${i}` : `// base ${i}`));
 
-function repo(council) {
+// These councils were written for a pass score of 9 (GEN-8: each stage's own councilPassScore).
+const at9 = Object.fromEntries(['implement', 'architectureReview', 'testPlan', 'testAutomation', 'prCheck'].map((s) => [s, { councilPassScore: 9 }]));
+// The members are the pool; the tests seat them with their recorded lenses (seatedCouncil).
+function repo() {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'council-memory-')));
   const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
   const write = (rel, text) => (fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }), fs.writeFileSync(path.join(dir, rel), text));
@@ -36,7 +40,7 @@ function repo(council) {
   git('config', 'user.email', 't@example.com');
   git('config', 'user.name', 'T');
   write('.gitignore', '.factory/state/\n.factory/metrics/\n');
-  write('.factory/config.json', JSON.stringify({ baseRef: 'main', agent: { modelIds: { codex: { sol: 'gpt-6.1-sol' } } }, council }));
+  write('.factory/config.json', JSON.stringify({ baseRef: 'main', ...at9, ...poolSettings(MEMBERS) }));
   write('story.md', '# PCHG-1: Tell the shopper when a product\'s price changed\n\n## Acceptance Criteria\n\n- AC1: a bag line whose price changed since it was added shows the old price\n- AC2: a bag line whose price did not change shows no note\n');
   write(SERVICE, lines(100, (i) => `// base ${i}`));
   write(PROTO, lines(20, (i) => `// proto ${i}`));
@@ -62,7 +66,6 @@ const MEMBERS = [
   { name: 'opus', cli: 'claude', model: 'opus', lens: 'acceptance' },
   { name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness' },
 ];
-const COUNCIL = { passScore: 9, blockOn: 'any', members: MEMBERS, stages: { review: {}, testAutomation: {}, pairVerify: {} } };
 
 // A recorded round as the members' answers: each member returns its verdict, score and the items it raised.
 function answers(rec, change = (f) => f) {
@@ -79,17 +82,17 @@ const vote = (task, answer, evidence = 'src/Basket.API/Grpc/BasketService.cs:120
 
 // Round 2's members answer an adjudication with `votes` ({ opus: 'yes', sol: 'no' }; a missing name gives no parsable answer).
 async function replay({ round2 = (f) => f, declare = true, votes = { opus: 'yes', sol: 'yes' } } = {}) {
-  const { dir, write } = repo(COUNCIL);
+  const { dir, write } = repo();
   const config = loadConfig('review', dir);
   const story = { key: 'PCHG-1', file: 'story.md' };
   const tasks = {};
   const [r1rec, r2rec] = RECORDED.rounds;
-  const r1 = await councilArchitectureReview(config, story, 1, { runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : ((tasks[`1:${m.name}`] = task), answers(r1rec)[m.name]) });
+  const r1 = await councilArchitectureReview(config, story, 1, { council: seatedCouncil(config, 'architectureReview', MEMBERS), runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : ((tasks[`1:${m.name}`] = task), answers(r1rec)[m.name]) });
   // The implementer answers round 1's upheld findings: the price is validated and a bad one answers InvalidArgument,
   // and it declares the validation's lines as its fix of the price finding (the review's fix declaration).
   write(SERVICE, round2Service());
-  if (declare) declareFix(dir, 'review', 'PCHG-1', [{ id: r1.findings.find((f) => f.line === 112).id, hunks: [{ file: SERVICE, start: 112, end: 125 }] }]);
-  const r2 = await councilArchitectureReview(config, story, 2, { runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : (ADJ.test(task) ? ((tasks[`adj:${m.name}`] = task), votes[m.name] ? vote(task, votes[m.name]) : { status: 0, output: 'no answer' }) : ((tasks[`2:${m.name}`] = task), answers(r2rec, round2)[m.name])) });
+  if (declare) declareFix(dir, 'architectureReview', 'PCHG-1', [{ id: r1.findings.find((f) => f.line === 112).id, hunks: [{ file: SERVICE, start: 112, end: 125 }] }]);
+  const r2 = await councilArchitectureReview(config, story, 2, { council: seatedCouncil(config, 'architectureReview', MEMBERS), runMember: async (m, task) => isResolvesQuestion(task) ? { status: 0, output: RESOLVES_ANSWER } : (ADJ.test(task) ? ((tasks[`adj:${m.name}`] = task), votes[m.name] ? vote(task, votes[m.name]) : { status: 0, output: 'no answer' }) : ((tasks[`2:${m.name}`] = task), answers(r2rec, round2)[m.name])) });
   return { dir, config, r1, r2, tasks, write };
 }
 
@@ -131,7 +134,7 @@ test('the earlier ruling settles the objection on its own: the same objection as
   assert.match(r2.council.notes[0].notUpheld, /every blocking member \(opus, sol\) accepted, on adjudication, that the agreed fix of \S+ \(upheld in round 1: Validate and convert[^)]*\) requires this behaviour/);
   assert.doesNotMatch(r2.council.notes[0].notUpheld, /optional representation/);
   assert.equal(metrics(dir, 'council-rounds').at(-1).earlierRound, 1);
-  const decision = metrics(dir, 'decisions').filter((d) => d.stage === 'council-review').at(-1);
+  const decision = metrics(dir, 'decisions').filter((d) => d.stage === 'council-architectureReview').at(-1);
   assert.equal(decision.items.find((i) => i.sanctionedBy).sanctionedBy.length, 1);
   const adj = metrics(dir, 'decisions').filter((d) => d.decision === 'adjudicated');
   assert.deepEqual(adj.map((d) => d.items.map((i) => [i.outcome, i.acceptedBy.join('+')])), [[['covered', 'opus+sol']]]);
@@ -157,7 +160,7 @@ test('a scope objection outside the fix still blocks: a line round 1 already jud
 });
 
 test('a blocking finding that asks for no change is a note even with no earlier round', () => {
-  const council = { stage: 'review', rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail', members: MEMBERS.map((m) => ({ ...m, blocking: true })) };
+  const council = { stage: 'review', maxCouncilRounds: 3, councilPassScore: 9, blockQuorum: 'any', onUnavailable: 'fail', members: MEMBERS.map((m) => ({ ...m, blocking: true })) };
   const finding = (fix) => ({ id: 'x', severity: 'blocking', action: 'fix', lens: 'correctness', file: SERVICE, line: 120, text: 'a thing', fix, member: 'sol' });
   const results = (fix) => [{ member: council.members[0], status: 'ok', score: 9, verdict: 'APPROVED', findings: [] }, { member: council.members[1], status: 'ok', score: 8, verdict: 'CHANGES_REQUESTED', findings: [finding(fix)] }];
   for (const fix of ['None required; keep it as validation of the new field.', 'None.', 'No change needed', 'nothing']) {
@@ -170,7 +173,7 @@ test('a blocking finding that asks for no change is a note even with no earlier 
 
 test('a new sitting starts with an empty memory', async () => {
   const { dir } = await replay();
-  const file = memoryFile(dir, '.factory/state', { stage: 'review', story: 'PCHG-1' });
+  const file = memoryFile(dir, '.factory/state', { stage: 'architectureReview', story: 'PCHG-1' });
   assert.equal(councilMemory({ file, cwd: dir, round: 3 }).upheld.length, 2, 'round 2 upheld nothing; round 1 is still this sitting');
   const again = councilMemory({ file, cwd: dir, round: 1 });
   assert.ok(again.upheld.length && again.upheld.every((u) => u.earlierSitting), 'the old sitting\'s rulings are history, not this sitting');
@@ -180,9 +183,9 @@ test('replay, a later stage: the PR check\'s council does not block the validati
   const { dir, write } = await replay();
   // The review passed at round 2, which recorded round 1's fix by its lines. Later work adds lines above the validation.
   write(SERVICE, round2Service().replace('// base 50\n', '// base 50\n// later 1\n// later 2\n// later 3\n// later 4\n// later 5\n'));
-  const council = { stage: 'prCheck', rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail', members: MEMBERS.map((m) => ({ ...m, blocking: true })) };
+  const council = { stage: 'prCheck', maxCouncilRounds: 3, councilPassScore: 9, blockQuorum: 'any', onUnavailable: 'fail', members: MEMBERS.map((m) => ({ ...m, blocking: true })) };
   const memory = councilMemory({ file: memoryFile(dir, '.factory/state', { stage: 'prCheck', story: 'PCHG-1' }), cwd: dir, round: 1 });
-  assert.match(memory.text, /review, round 1[\s\S]*Agreed fix: Validate and convert the optional price/);
+  assert.match(memory.text, /architectureReview, round 1[\s\S]*Agreed fix: Validate and convert the optional price/);
   const objection = (line, text = 'Adds an InvalidArgument response no ticket line names') => [{ member: council.members[0], status: 'ok', score: 6, findings: [{ id: 'o1', severity: 'blocking', action: 'fix', lens: 'acceptance', file: SERVICE, line, text, fix: 'remove it', member: 'opus' }] }, { member: council.members[1], status: 'ok', score: 9, findings: [] }];
   const settle = (results) => adjudicate({ council, merged: mergeCouncil(council, results, { earlier: memory }), remerge: (adjudications) => mergeCouncil(council, results, { earlier: memory, adjudications }), run: async (m, task) => vote(task, 'yes'), stage: 'prCheck', story: 'PCHG-1', round: 1, log: () => {} });
   assert.equal(mergeCouncil(council, objection(125), { earlier: memory }).pass, false, 'not settled by the harness alone');
@@ -194,15 +197,15 @@ test('replay, a later stage: the PR check\'s council does not block the validati
 });
 
 test('memberTask: the earlier-rounds block reaches every member, after the scope rule', () => {
-  const council = { stage: 'pairVerify', rounds: 3, passScore: 9, members: MEMBERS.map((m) => ({ ...m, blocking: true })) };
+  const council = { stage: 'pairVerify', maxCouncilRounds: 3, councilPassScore: 9, members: MEMBERS.map((m) => ({ ...m, blocking: true })) };
   const text = memberTask('task', { council, member: council.members[0], round: 2, earlier: '### Findings the council upheld in earlier rounds\n\n- round 1: X', skill: '' });
   assert.match(text, /`kind` "scope"[\s\S]*### Findings the council upheld in earlier rounds/);
 });
 
 test('test automation council: an objection to a test an earlier round required is settled the same way', async () => {
-  const { dir, write } = repo(COUNCIL);
+  const { dir, write } = repo();
   const config = loadConfig('feature-verification', dir);
-  const council = councilFor(config, 'testAutomation');
+  const council = seatedCouncil(config, 'testAutomation', MEMBERS);
   const spec = 'tests/Basket.FunctionalTests/PriceTests.cs';
   write(spec, lines(10, (i) => `// test ${i}`));
   const gap = { case: 'TC-PCHG-1-01-03', category: 'missing-case', detail: 'no test sends a NaN price; the upheld review fix answers InvalidArgument for it', location: `${spec}:5`, fix: 'add a test that a NaN price answers InvalidArgument' };

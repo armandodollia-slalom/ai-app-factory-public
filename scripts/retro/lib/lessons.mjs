@@ -1,4 +1,5 @@
 import { writeText } from '../../pipeline/lib/redact.mjs';
+import { entryFor } from '../../pipeline/lib/pool.mjs';
 import fs from 'node:fs';
 import { remoteHost } from '../../pipeline/lib/hosts/index.mjs';
 import path from 'node:path';
@@ -25,6 +26,8 @@ import { digestIsEmpty, retroDigest, retroSince } from './digest.mjs';
 import { applyProposals } from '../../review-gate/lib/review-retro.mjs';
 import { VERIFIER, metricsFile, runVerifier } from '../../feature-verification/lib/verify.mjs';
 import { LENSES } from '../../pr-check/lib/loop.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
+import { computeScorecard, scorecardPath, scorecardRecords, writeScorecard } from '../../pipeline/lib/scorecard.mjs';
 
 const RULE = /^##\s+(L\d+)[:.]?\s*(.*)$/;
 const MARKER = /<!--\s*category:\s*([^;>]+?)\s*(?:;\s*subtype:\s*([^;>]*?)\s*)?;\s*added:\s*([0-9T:.\-Z]+)\s*(?:;[^>]*)?-->/;
@@ -133,7 +136,7 @@ export function checkLessons(config, root, { runAgentImpl = runAgent } = {}) {
   const found = [];
   for (const x of files) {
     const task = [`## ${x.agent}`, '', '### Definition', '', '````markdown', agentDefinition(definitions, x.agent).body, '````', '', '### Lessons file', '', '````markdown', x.text.trimEnd(), '````', ''].join('\n');
-    const res = runAgentImpl(config, { name: 'lessons-check', mode: 'read', cwd: root, usage: { stage: 'lessons', story: null }, timeoutSec: config.timeoutsSec.lessons, task });
+    const res = runAgentImpl(config, { name: 'lessons-check', mode: 'read', cwd: root, usage: { stage: 'lessons', story: null }, timeoutSec: setting(config, 'featureVerification.timeoutsSec.lessons'), task });
     if (!res?.ok) {
       log(`lessons: the lessons check of ${x.agent} did not run; none of its rules was removed.`);
       continue;
@@ -254,7 +257,7 @@ function runsFor(data, agent) {
 
 // Decides, from the denial log alone, what each agent's lessons file should gain or lose.
 export function lessonCandidates(config, data, agent, lessonsText) {
-  const settings = config.lessons;
+  const settings = { ...defaultSettings().retro.lessons, ...(config.retro?.lessons ?? {}) };
   const entries = entriesFor(data, agent);
   const runs = runsFor(data, agent);
   const rules = parseRules(lessonsText);
@@ -297,7 +300,7 @@ export const LESSON_AGENTS = ['test-planner', 'test-automation', VERIFIER.plan, 
 
 function lessonsTask(config, reports, root, digest = null, factoryDir = null) {
   const lines = [
-    `Maximum rules per file: ${config.lessons.maxRules}. Today: ${nowIso()}.`,
+    `Maximum rules per file: ${config.retro.lessons.maxRules}. Today: ${nowIso()}.`,
     reports.length
       ? 'Edit the lessons files listed below as requested. Every rule you add or rewrite must carry the tracking marker on the line after its heading, with added set to today.'
       : 'No lessons file needs a change this time.',
@@ -338,7 +341,7 @@ function lessonsTask(config, reports, root, digest = null, factoryDir = null) {
   return lines.join('\n');
 }
 
-const allowedPaths = (config) => config.lessons.retro?.allowedPaths ?? [];
+const allowedPaths = (config) => setting(config, 'retro.allowedPaths');
 
 // The review gate's approvals policy (`implement.reviewGate` of the effective config of `root`): the
 // table and the retro's proposal settings.
@@ -374,8 +377,7 @@ function applyApprovalProposals(root, proposals) {
 // it goes into the lessons branch. The other belongs to the factory itself (a base agent definition, the
 // docs, a template, a skill): the agent gets a checkout of the factory, inside the worktree's ignored
 // state folder, and its edits there become a separate branch and pull request against the factory.
-const FACTORY_ALLOWED = ['agents/', 'docs/', 'templates/', 'skills/'];
-const factorySettings = (config) => ({ enabled: true, allowedPaths: FACTORY_ALLOWED, evidence: 'summary', ...(config.retro?.factory ?? {}) });
+const factorySettings = (config) => ({ ...defaultSettings().retro.factory, ...(config.retro?.factory ?? {}) });
 
 export function factorySource(config) {
   const settings = factorySettings(config);
@@ -581,7 +583,7 @@ export async function publish(config, { branch, push, title, body }, deps = {}) 
       label: 'lessons',
       branch,
       worktree,
-      base: config.baseRef ?? 'origin/main',
+      base: setting(config, 'baseRef'),
       title,
       body,
       result: {},
@@ -590,7 +592,7 @@ export async function publish(config, { branch, push, title, body }, deps = {}) 
       save: (s) => saveRun(config, { phase: s.phase === 'ci-wait' || s.phase === null ? 'pushed' : 'committed', delivery: s }),
       load: () => readRun(config)?.delivery ?? null,
       open: deps.open ?? (async ({ title: t, body: b, draft }) => {
-        const opened = await openPullRequest(publisher, { cwd: worktree, branch, base: String(config.baseRef ?? 'origin/main').replace(/^origin\//, ''), title: t, body: b, draft }, { mergeBase: () => null });
+        const opened = await openPullRequest(publisher, { cwd: worktree, branch, base: String(setting(config, 'baseRef')).replace(/^origin\//, ''), title: t, body: b, draft }, { mergeBase: () => null });
         return { ...opened, draft };
       }),
       io: { publishTicket: () => {}, ...(deps.io ?? {}), gate: (opts) => (deps.io?.gate ?? ciGate)({ ...opts, fixRounds: 0 }) },
@@ -650,7 +652,7 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
       return { status: 'nothing-to-resume' };
     }
     const lastRun = readJson(lastFile, {});
-    if (ifDue && !interrupted && lastRun.ts && Date.now() - Date.parse(lastRun.ts) < config.lessons.intervalDays * 86_400_000) {
+    if (ifDue && !interrupted && lastRun.ts && Date.now() - Date.parse(lastRun.ts) < config.retro.intervalDays * 86_400_000) {
       log(`lessons: last run ${lastRun.ts}; not due yet.`);
       return { status: 'not-due' };
     }
@@ -672,15 +674,20 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
       return lessonCandidates(config, data, agent, fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
     });
     const actionable = reports.filter((r) => r.actionable);
-    const retro = config.lessons.retro?.enabled === false ? null : retroDigest(config, data.decisions ?? [], windowStart ?? retroSince(config), { outcomes: data.outcomes ?? [], policy: reviewPolicy(config.root), prChecks: data.prChecks ?? [], verifierRuns: data.runs ?? [], implementRuns: data.implementRuns ?? [], escalations: data.escalations ?? [] });
+    const retro = setting(config, 'retro.enabled') === false ? null : retroDigest(config, data.decisions ?? [], windowStart ?? retroSince(config), { outcomes: data.outcomes ?? [], policy: reviewPolicy(config.root), prChecks: data.prChecks ?? [], verifierRuns: data.runs ?? [], implementRuns: data.implementRuns ?? [], escalations: data.escalations ?? [] });
     const digest = retro && !digestIsEmpty(retro) ? retro : null;
     // Lessons files changed since the last lessons check (a merged lessons PR, an edit by hand) are checked even
     // when nothing else is due.
     const lessonsNow = lessonsHash(config);
     const checkDue = Boolean(lessonsNow) && lessonsNow !== lastRun.lessonsChecked;
-    const summaryOfRun = { actionable: actionable.map((r) => r.agent), retro: digest ? digest.counts : null, lessonsChecked: lastRun.lessonsChecked ?? null };
+    // The council scorecard (scorecard.mjs): arithmetic over the records, written by the harness after the agent so no
+    // agent sets its numbers. A scorecard the records would change is reason enough for a run.
+    const scorecard = computeScorecard(config, scorecardRecords(config));
+    const scorecardNow = readJson(scorecardPath(config), null);
+    const scorecardDue = scorecardNow?.version !== scorecard.version;
+    const summaryOfRun = { actionable: actionable.map((r) => r.agent), retro: digest ? digest.counts : null, lessonsChecked: lastRun.lessonsChecked ?? null, scorecard: scorecard.version };
     last = { ts: nowIso(), ...summaryOfRun };
-    if (dryRun || (actionable.length === 0 && !digest && !checkDue)) {
+    if (dryRun || (actionable.length === 0 && !digest && !checkDue && !scorecardDue)) {
       log(dryRun ? 'lessons: dry run' : 'lessons: no recurring denials past the threshold, no rules to retire or revert and no new decisions to review.');
       return { status: dryRun ? 'dry-run' : 'nothing-to-do', reports, digest };
     }
@@ -710,7 +717,7 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
         }
       }
       // Only the lessons check is due: no retro agent run.
-      const result = actionable.length || digest ? runAgent(config, { name: 'retro', mode: 'write', cwd: root, usage: { stage: 'lessons', story: null }, timeoutSec: config.timeoutsSec.lessons, task: lessonsTask(config, actionable, root, digest, factoryDir) }) : { ok: true, output: '' };
+      const result = actionable.length || digest ? runAgent(config, { name: 'retro', mode: 'write', cwd: root, usage: { stage: 'lessons', story: null }, timeoutSec: setting(config, 'featureVerification.timeoutsSec.lessons'), task: lessonsTask(config, actionable, root, digest, factoryDir) }) : { ok: true, output: '' };
       if (!result.ok) throw new Error('lessons agent failed');
       const writable = [config.lessonsDir, ...(digest ? allowedPaths(config) : [])];
       const outside = changedFiles(root).filter((c) => !inside(c.file, writable));
@@ -743,6 +750,8 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
           log(`retro: factory issues not filed (${error.message})`);
         }
       }
+      // Last, over any edit the agent made to it: the scorecard of the records.
+      writeScorecard(config, root);
       const contradicting = checkLessons(config, root);
       last.lessonsChecked = lessonsHash(config, root);
       // The approvals policy proposals (computed in code, guarded) go into this PR for a person to approve.
@@ -753,7 +762,7 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
         if (!fs.existsSync(file)) continue;
         ensureLessonsHeading(file, agent);
         const count = parseRules(fs.readFileSync(file, 'utf8')).length;
-        if (count > config.lessons.maxRules) throw new Error(`${agent} lessons file has ${count} rules (max ${config.lessons.maxRules}).`);
+        if (count > config.retro.lessons.maxRules) throw new Error(`${agent} lessons file has ${count} rules (max ${config.retro.lessons.maxRules}).`);
       }
       if (local) return { status: 'applied-locally', reports: actionable, proposals, policy, observations, contradicting };
       const toCommit = changedFiles(root).map((c) => c.file);
@@ -775,17 +784,18 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
         actionable
           .map((r) => `- **${r.agent}**: ${[...r.changes.map((c) => `${c.action} ${c.category}${c.subtype ? `/${c.subtype}` : ''} (${c.stories} stories)`), ...r.rules.filter((x) => x.action !== 'keep').map((x) => `${x.action} ${x.id} ${x.category}`)].join('; ')}`)
           .join('\n') || '- No lessons file changes.';
+      const scorecardLine = scorecardDue ? `\n- **council scorecard**: version ${scorecard.version}, ${scorecard.rows.length} row(s), ${scorecard.rows.filter((r) => r.unknown).length} unknown (fewer than ${scorecard.minSeats} seats).` : '';
       const removedNote = contradicting.length ? `\n\n### Lessons removed: they contradicted their agent's definition\n\n${contradicting.map((c) => `- **${c.agent}** ${c.rule}: ${c.why} (definition: "${c.definition}")`).join('\n')}` : '';
       const factory =
         removedNote + (proposals.length ? `\n\n### Proposed factory changes (needs human review)\n\nFrom the decision log since ${digest.since}:\n\n${proposals.map((p) => `- \`${p.file}\`: ${p.why}`).join('\n')}` : '') +
         (policy.length || written.length
-          ? `\n\n### Proposed approvals policy changes (needs human review)\n\nFrom the review gate's pr-review records (\`implement.reviewGate.approvals\` in \`${OVERLAY}\`; never fewer than 1 approval for a PR that is not auto-merged, and only for a class with at least ${reviewPolicy(root)?.retro?.minSample ?? 5} PRs reviewed by people):\n\n${[...policy.map((p) => `- \`${p.class}\`: ${p.from} → ${p.to} approval(s): ${p.why}`), ...written.map((p) => `- \`${p.class}\`: not applied, for a person to decide: ${p.why}`)].join('\n')}`
+          ? `\n\n### Proposed approvals policy changes (needs human review)\n\nFrom the review gate's pr-review records (\`implement.reviewGate.approvals\` in \`${OVERLAY}\`; never fewer than 1 approval for a PR that is not auto-merged, and only for a class with at least ${reviewPolicy(root)?.retro?.minSample ?? defaultSettings().implement.reviewGate.retro.minSample} PRs reviewed by people):\n\n${[...policy.map((p) => `- \`${p.class}\`: ${p.from} → ${p.to} approval(s): ${p.why}`), ...written.map((p) => `- \`${p.class}\`: not applied, for a person to decide: ${p.why}`)].join('\n')}`
           : '');
       const upstreamNote = upstream ? `\n\n### Proposed upstream to the factory\n\n${upstream.url ? `Pull request: ${upstream.url}` : upstream.patch ? `Saved as a patch for a person to send: \`${upstream.patch}\`` : `Branch \`${upstream.branch}\` pushed to the factory; a person opens its PR${upstream.compare ? ` (${upstream.compare})` : ''}`} (${upstream.files.map((f) => `\`${f}\``).join(', ')}).` : '';
       const title = 'Update agent lessons from verifier, architecture review and PR check findings';
-      const trailer = agentTrailer(config.agent?.cli);
-      const message = `${title}\n\n${summary}${factory}${trailer ? `\n\n${trailer}` : ''}`;
-      const body = `Generated by \`factory retro run\` from \`.factory/metrics/\`.\n\n${summary}${factory}${upstreamNote}\n\nReview each rule: it should be concrete, generalize beyond the examples, and not contradict the agent definition.`;
+      const trailer = agentTrailer(entryFor(config, { name: 'retro' }).cli);
+      const message = `${title}\n\n${summary}${scorecardLine}${factory}${trailer ? `\n\n${trailer}` : ''}`;
+      const body = `Generated by \`factory retro run\` from \`.factory/metrics/\`.\n\n${summary}${scorecardLine}${factory}${upstreamNote}\n\nReview each rule: it should be concrete, generalize beyond the examples, and not contradict the agent definition.`;
       git(root, ['commit', '-m', message], { allowFail: false });
       saveRun(config, { phase: 'committed', title, body });
       return { ...(await publish(config, { branch, push, title, body })), worktree: push ? undefined : root, proposals, upstream, observations, contradicting };
@@ -832,7 +842,7 @@ export async function shipRetroRecords(config, pushImpl = sinkPush) {
 export const agentTrailer = (cli) => ({ copilot: 'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>', claude: 'Co-authored-by: Claude <noreply@anthropic.com>' })[cli] ?? null;
 
 // Resumes a lessons run that died, in the background, with the shared backoff; escalates after
-// recovery.maxAttempts. `force` restarts one escalated as crashed.
+// recovery.maxRetries. `force` restarts one escalated as crashed.
 export function recoverLessons(config, { force = false } = {}) {
   if (lessonsDisabled()) return null;
   let runRec = readRun(config);
@@ -863,7 +873,7 @@ export function formatLessonsRecovery(r) {
   return 'Retro: the lessons and factory retro run kept crashing and was escalated (.factory/state/escalations/lessons-retro.md).';
 }
 
-// Re-checks recent passing results (at or above loops.requiredScore) with a stricter auditor so the verifiers themselves can improve.
+// Re-checks recent passing results (at or above testPlan.councilPassScore) with a stricter auditor so the verifiers themselves can improve.
 export function calibrateCommand(config, { stage = null, sample = 3 } = {}) {
   const data = loadMetrics(config);
   const stories = listStories(config);
@@ -879,7 +889,7 @@ export function calibrateCommand(config, { stage = null, sample = 3 } = {}) {
       .slice(0, sample);
     for (const { run: original, story } of candidates) {
       const task = `${s === 'plan' ? planVerifierTaskFor(config, story) : automationVerifierTaskFor(config, story)}\n\nAUDIT MODE: another verifier already scored this ${original.score}/10. Re-check it independently and strictly; report every gap you find.`;
-      const verdict = runVerifier(config, { stage: s, story, round: 0, producerVersion: original.agent_prompt_ver, task, model: config.agent.models.audit, metrics: false });
+      const verdict = runVerifier(config, { stage: s, story, round: 0, producerVersion: original.agent_prompt_ver, task, metrics: false });
       if (verdict.error) continue;
       const misses = verdict.gaps.map((g) => ({ ts: nowIso(), stage: s, story: story.key, verifier_ver: original.verifier_ver, audit_score: verdict.score, ...g, attributed_agent: VERIFIER[s] }));
       appendJsonl(metricsFile(config, 'calibration.jsonl'), misses.length ? misses : [{ ts: nowIso(), stage: s, story: story.key, verifier_ver: original.verifier_ver, audit_score: verdict.score, category: 'agreed', attributed_agent: 'none' }]);

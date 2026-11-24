@@ -411,7 +411,7 @@ test('the PR description says why a person reviews it, from the live read, on pu
 
 test('the host\'s auto-merge is armed only on an auto-merge decision and cancelled when a later read says review; a failed cancel is reported (ADV2-R2-05, Sol 12)', () => {
   const w = waitingGroup();
-  w.config.implement.autoMerge = { ...w.config.implement.autoMerge, native: true };
+  w.config.implement.autoMerge = { ...w.config.implement.autoMerge, hostAutoMerge: { enabled: true } };
   // Checks green, but GitHub has not cleared the merge yet (BLOCKED): the gate arms the host's auto-merge.
   w.pr.mergeStateStatus = 'BLOCKED';
   assert.equal(w.regateNow().decision.action, 'auto-merge');
@@ -422,7 +422,7 @@ test('the host\'s auto-merge is armed only on an auto-merge decision and cancell
   assert.equal(w.pr.autoMerge, false, 'disarmed');
   // A cancel the host refuses is reported, not swallowed.
   const r = waitingGroup();
-  r.config.implement.autoMerge = { ...r.config.implement.autoMerge, native: true };
+  r.config.implement.autoMerge = { ...r.config.implement.autoMerge, hostAutoMerge: { enabled: true } };
   r.pr.mergeStateStatus = 'BLOCKED';
   r.regateNow();
   r.pr.reviews.push({ id: 41, state: 'CHANGES_REQUESTED', body: 'no', user: { login: 'dana' }, submitted_at: '2026-11-03T01:00:00Z' });

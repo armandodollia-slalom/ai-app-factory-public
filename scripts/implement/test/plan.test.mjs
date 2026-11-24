@@ -2,12 +2,12 @@
 // implement flow (pure functions).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { globsOverlap, isUiStory, matchGlob, parsePlanOutput, parseVerdict, resolveModel, resolveModelForRole, scopeViolations, topoOrder, uiRules, uiStoryHint, validatePlan, validateRewrite } from '../lib/plan.mjs';
+import { globsOverlap, isUiStory, matchGlob, parsePlanOutput, parseVerdict, scopeViolations, topoOrder, uiRules, uiStoryHint, validatePlan, validateRewrite } from '../lib/plan.mjs';
 
 const BE = '# DEMO-1: [BE - Catalog.API] - Thing\n\n## Acceptance Criteria\n\n- a\n';
 const FE = '# DEMO-2: [FE - WebApp] - Page\n';
-const limits = { maxSubtasks: 4, maxLargeSubtasks: 1 };
-const sub = (id, owns, over = {}) => ({ id, goal: `do ${id}`, acceptance: ['works'], owns, dependsOn: [], modelClass: 'medium', verify: 'code', modelReason: 'normal work', verifyReason: 'api only', expectedFiles: 2, expectedLoc: 50, confidence: 0.8, alternatives: [], ...over });
+const limits = { maxSubtasks: 4 };
+const sub = (id, owns, over = {}) => ({ id, goal: `do ${id}`, acceptance: ['works'], owns, dependsOn: [], model: 'sonnet', verify: 'code', modelReason: 'normal work', verifyReason: 'api only', expectedFiles: 2, expectedLoc: 50, confidence: 0.8, alternatives: [], ...over });
 const plan = (subtasks, over = {}) => ({ mode: 'delegate', modeReason: 'two services', splitReason: 'one per service', subtasks, ...over });
 
 test('a valid delegate plan is normalized and keeps the reasoning apart from the spec', () => {
@@ -20,9 +20,9 @@ test('a valid delegate plan is normalized and keeps the reasoning apart from the
 });
 
 test('schema errors are listed one by one', () => {
-  const v = validatePlan(plan([{ id: 'Bad Id', owns: [], modelClass: 'huge', verify: 'manual' }]), { storyText: BE, limits });
+  const v = validatePlan(plan([{ id: 'Bad Id', owns: [], verify: 'manual' }]), { storyText: BE, limits });
   assert.ok(!v.ok);
-  for (const re of [/`id` must match/, /`goal` is required/, /`acceptance`/, /`owns` must be a non-empty list/, /`modelClass` must be one of/, /`verify` must be/, /`modelReason` is required/, /`expectedLoc`/, /`confidence`/]) assert.ok(v.errors.some((e) => re.test(e)), `missing ${re}`);
+  for (const re of [/`id` must match/, /`goal` is required/, /`acceptance`/, /`owns` must be a non-empty list/, /`model` must name the models\.pool entry its pair implementer runs on/, /`verify` must be/, /`modelReason` is required/, /`expectedLoc`/, /`confidence`/]) assert.ok(v.errors.some((e) => re.test(e)), `missing ${re}`);
   assert.ok(!validatePlan({ mode: 'other' }, { limits }).ok);
   assert.ok(!validatePlan(null, { limits }).ok);
   assert.ok(validatePlan(plan([sub('a', ['src/A/**'])], { splitReason: '' }), { storyText: BE, limits }).errors.some((e) => /splitReason/.test(e)));
@@ -49,21 +49,14 @@ test('dependsOn must name other subtasks and be acyclic', () => {
   assert.ok(cyc.errors.some((e) => /dependency cycle/.test(e)));
 });
 
-test('at most one large subtask, and it needs a justification', () => {
-  const noJust = validatePlan(plan([sub('a', ['src/A/**'], { modelClass: 'large' })]), { storyText: BE, limits });
-  assert.ok(noJust.errors.some((e) => /needs a `justification`/.test(e)));
-  const two = validatePlan(plan([sub('a', ['src/A/**'], { modelClass: 'large', justification: 'x' }), sub('b', ['src/B/**'], { modelClass: 'large', justification: 'y' })]), { storyText: BE, limits });
-  assert.ok(two.errors.some((e) => /at most 1 subtask\(s\) may use modelClass "large"/.test(e)));
-});
-
 test('verify "ui" only for UI stories, and a false uiStory claim is caught', () => {
   assert.ok(validatePlan(plan([sub('a', ['src/WebApp/**'], { verify: 'ui' })]), { storyText: FE, limits }).ok);
   assert.ok(validatePlan(plan([sub('a', ['src/Catalog.API/**'], { verify: 'ui' })]), { storyText: BE, limits }).errors.some((e) => /only allowed for UI stories/.test(e)));
   assert.ok(validatePlan(plan([sub('a', ['src/A/**'])], { uiStory: true }), { storyText: BE, limits }).errors.some((e) => /`uiStory` is true but/.test(e)));
 });
 
-// What an app repository with a Blazor storefront would configure (implement.uiStory).
-const BLAZOR_UI = uiRules({ implement: { uiStory: { components: ['WebApp', 'WebAppComponents', 'Blazor'], filePatterns: ['.razor'] } } });
+// What an app repository with a Blazor storefront would configure (implement.uiStory and project.frontendPaths).
+const BLAZOR_UI = uiRules({ project: { frontendPaths: ['.razor'] }, implement: { uiStory: { components: ['WebApp', 'WebAppComponents', 'Blazor'] } } });
 
 test('UI story detection: the configured title tag, a configured component in the title, or a configured file pattern', () => {
   assert.ok(isUiStory(FE, BLAZOR_UI));
@@ -134,21 +127,6 @@ test('verdicts are strict: blocking findings need a file (code) or a screenshot 
   assert.equal(parseVerdict('nothing'), null);
 });
 
-test('model classes map to allowed aliases, checked for the role\'s CLI; a role can use another CLI', () => {
-  const agent = { cli: 'claude', cmd: null, models: {}, strictModels: true, allowedModels: ['opus', 'sonnet'], modelIds: { claude: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' }, copilot: { opus: 'claude-opus-5.5', sonnet: 'claude-sonnet-5.5' } } };
-  const config = { agent, modelClasses: { small: 'sonnet', medium: 'sonnet', large: 'opus', bad: 'haiku' }, implement: { roles: { orchestrator: { modelClass: 'large' }, verifier: { cli: 'codex', modelClass: 'medium' }, uiVerifier: { cli: 'copilot', modelClass: 'large' } } } };
-  assert.equal(resolveModel(config, 'pairImplementer', 'small'), 'sonnet');
-  assert.equal(resolveModel(config, 'pairImplementer', 'large'), 'opus');
-  assert.equal(resolveModel(config, 'pairImplementer', 'unknown'), null, 'no mapping and no default: the CLI default');
-  assert.throws(() => resolveModel(config, 'pairImplementer', 'bad'), /Model "haiku" is not allowed/);
-  assert.throws(() => resolveModel(config, 'verifier', 'medium'), /no id for agent CLI "codex"/, 'codex has no allowed model ids');
-  assert.equal(resolveModelForRole(config, 'uiVerifier'), 'opus', 'the UI verifier runs on copilot, which has an opus id');
-  assert.equal(resolveModel({ ...config, agent: { ...agent, cmd: 'x' } }, 'verifier', 'medium'), 'sonnet', 'a custom command gets the alias unchecked against a CLI');
-  assert.equal(resolveModelForRole(config, 'orchestrator'), 'opus');
-  assert.equal(resolveModelForRole({ ...config, agent: { ...agent, models: { implementer: 'sonnet' } } }, 'orchestrator'), 'sonnet', 'agent.models.implementer pins it');
-  assert.throws(() => resolveModelForRole({ ...config, agent: { ...agent, models: { implementer: 'gpt-4' } } }, 'orchestrator'), /not allowed/);
-});
-
 test('a rewritten subtask keeps its id and must not overlap the others', () => {
   const original = { ...sub('a', ['src/A/**']), decision: { modelReason: 'm', verifyReason: 'v', expectedFiles: 1, expectedLoc: 1, confidence: 0.5, alternatives: [] } };
   const other = { ...sub('b', ['src/B/**']), decision: original.decision };
@@ -159,16 +137,12 @@ test('a rewritten subtask keeps its id and must not overlap the others', () => {
   assert.ok(!validateRewrite(original, { owns: ['src/B/x.cs'] }, [other], { storyText: BE }).ok);
 });
 
-test('a subtask may name an allowed model alias (sol on Copilot) instead of its class', async () => {
-  const { loadConfig } = await import('../../pipeline/lib/config.mjs');
-  const base = loadConfig('implement');
-  const allowedModels = ['opus', 'sonnet', 'sol'];
-  const v = validatePlan(plan([sub('api', ['src/Catalog.API/**'], { model: 'sol' }), sub('web', ['src/WebApp/**'])]), { storyText: BE, limits: { ...limits, allowedModels } });
+// GEN-9 AC 0: the planner names one pool entry per subtask, from implement.subtaskModels; a plan naming another is refused.
+test('each subtask names the pool entry its pair implementer runs on, one of implement.subtaskModels', () => {
+  const allowed = { ...limits, subtaskModels: ['sonnet', 'sol'] };
+  const v = validatePlan(plan([sub('api', ['src/Catalog.API/**'], { model: 'sol' }), sub('web', ['src/WebApp/**'])]), { storyText: BE, limits: allowed });
   assert.ok(v.ok, v.errors.join('\n'));
-  assert.equal(v.plan.subtasks[0].model, 'sol');
-  assert.equal('model' in v.plan.subtasks[1], false);
-  assert.match(validatePlan(plan([sub('api', ['src/Catalog.API/**'], { model: 'gpt-4' })]), { storyText: BE, limits: { ...limits, allowedModels } }).errors.join(), /`model` must be one of the allowed models \(opus, sonnet, sol\)/);
-  const copilot = { ...base, agent: { ...base.agent, cmd: null, cli: 'copilot', allowedModels, modelIds: { ...base.agent.modelIds, copilot: { ...base.agent.modelIds.copilot, sol: 'gpt-6.1-sol' } } } };
-  assert.equal(resolveModelForRole(copilot, 'pairImplementer', 'medium', 'sol'), 'sol');
-  assert.throws(() => resolveModelForRole({ ...copilot, agent: { ...copilot.agent, cli: 'claude' } }, 'pairImplementer', 'medium', 'sol'), /no id for agent CLI "claude"/);
+  assert.deepEqual(v.plan.subtasks.map((st) => st.model), ['sol', 'sonnet']);
+  assert.match(validatePlan(plan([sub('api', ['src/Catalog.API/**'], { model: 'opus' })]), { storyText: BE, limits: allowed }).errors.join(), /subtask api: `model` must name the models\.pool entry its pair implementer runs on, one of sonnet, sol/);
+  assert.match(validatePlan(plan([sub('api', ['src/Catalog.API/**'], { model: undefined })]), { storyText: BE, limits: allowed }).errors.join(), /`model` must name/, 'a subtask without one is refused too');
 });

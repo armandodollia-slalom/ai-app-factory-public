@@ -168,35 +168,35 @@ no card moves, and `factory implement resume` continues the unfinished batch onc
 | `foundation` | Foundation pair: ok, failed | `pair-implementer`, `pair-verifier` | none | [implement.md](implement.md#epic-delivery) |
 | `plan` | Orchestrator plans: planned, rejected | `implementer` | none | [implement.md](implement.md#plan) |
 | `pairs` | Implementer | `pair-implementer`, `implementer` | none | [implement.md](implement.md#what-happens) |
-| `harnessChecks` | Harness checks: clean, finding | harness | `analysis`, `analysis.fixLoop.bounces` | [implement.md](implement.md#static-analysis-in-the-pair-rounds) |
-| `verifier` | Pair verifier: approved, changes, exhausted, owner | `pair-verifier`, `pair-ui-verifier` | `council.stages.pairVerify`, `council.stages.pairUiVerify`, `implement.maxPairRounds` | [implement.md](implement.md#ui-verification) |
+| `harnessChecks` | Harness checks: clean, finding | harness | `analysis`, `analysis.maxFixRounds` | [implement.md](implement.md#static-analysis-in-the-pair-rounds) |
+| `verifier` | Pair verifier: approved, changes, exhausted, owner | `pair-verifier`, `pair-ui-verifier` | `implement.councilMembers`, `implement.maxCouncilRounds`, `council.intercom.enabled` | [implement.md](implement.md#ui-verification) |
 | `policy` | Policy engine: pass, block | harness | none | [review.md](review.md#the-policy-step-engine-and-policy) |
-| `review` | Architecture review: approved, changes, escalated, owner | `architecture-reviewer` | `council.stages.review`, `review.maxRounds`, `council.intercom.enabled` | [review.md](review.md#the-policy-step-engine-and-policy) |
-| `testPlan` | Test plan: verified, failed, owner | `test-planner`, `test-plan-verifier` | `council.stages.testPlan`, `council.intercom.enabled` | [feature-verification.md](feature-verification.md#workflow-1-story-to-test-plan) |
-| `fv` | Test automation: verified, product-bug, failed, owner | `test-automation`, `test-automation-verifier` | `council.stages.testAutomation`, `implement.maxBugFixCycles`, `council.intercom.enabled` | [feature-verification.md](feature-verification.md#workflow-2-implementation-to-automated-tests) |
+| `review` | Architecture review: approved, changes, escalated, owner | `architecture-reviewer` | `architectureReview.councilMembers`, `architectureReview.maxCouncilRounds`, `council.intercom.enabled` | [review.md](review.md#the-policy-step-engine-and-policy) |
+| `testPlan` | Test plan: verified, failed, owner | `test-planner`, `test-plan-verifier` | `testPlan.councilMembers`, `council.intercom.enabled` | [feature-verification.md](feature-verification.md#workflow-1-story-to-test-plan) |
+| `fv` | Test automation: verified, product-bug, failed, owner | `test-automation`, `test-automation-verifier` | `testAutomation.councilMembers`, `implement.maxBugFixReturns`, `council.intercom.enabled` | [feature-verification.md](feature-verification.md#workflow-2-implementation-to-automated-tests) |
 | `unit` | Merged into the unit branch | harness | none | [implement.md](implement.md#epic-delivery) |
 | `doneNoPr` | Run ends: done, no PR | record | `--pr` | [escalations.md](escalations.md#outcomes) |
 | `journeys` | Unit feature verification: verified, failed | `test-planner`, `test-automation`, `verifiers` | `implement.epic.featureVerification` | [implement.md](implement.md#epic-delivery) |
-| `unitPrCheck` | Unit PR check | `pr-check critics`, `defender`, `judge`, `pr-check-fixer` | `implement.epic.prCheck`, `council.stages.prCheck`, `council.intercom.enabled` | [pr-check.md](pr-check.md#several-tickets-an-epic) |
-| `discussion` | Council discussion: settled, ruled, owner, unavailable | `council members`, `implement orchestrator or PR check judge` | `council.intercom.enabled`, `council.intercom.onSplit`, `council.intercom.maxTurnsPerMember` | [council-intercom.md](council-intercom.md) |
-| `prCheck` | PR check: pass, production, tests, light, unresolved | `pr-check critics`, `defender`, `judge` | `council.stages.prCheck`, `implement.prCheck.returnToImplementation.enabled`, `implement.prCheck.returnToImplementation.maxReturns` | [pr-check.md](pr-check.md#findings-about-the-production-change-go-back-to-implementation) |
+| `unitPrCheck` | Unit PR check | `pr-check critics`, `defender`, `judge`, `pr-check-fixer` | `prCheck.mode`, `prCheck.councilMembers`, `council.intercom.enabled` | [pr-check.md](pr-check.md#several-tickets-an-epic) |
+| `discussion` | Council discussion: settled, ruled, owner, unavailable | `council members`, `the stage's orchestrator` | `council.intercom.enabled`, `council.intercom.onSplit`, `council.intercom.maxTurnsPerMember` | [council-intercom.md](council-intercom.md) |
+| `prCheck` | PR check: pass, production, tests, light, unresolved | `pr-check critics`, `defender`, `judge` | `prCheck.councilMembers`, `prCheck.returnToImplementation.enabled`, `prCheck.returnToImplementation.maxReturns` | [pr-check.md](pr-check.md#findings-about-the-production-change-go-back-to-implementation) |
 | `parity` | Publish, CI parity, re-verify: ok, failed | harness, may call `pr-check-fixer`, `feature verification` | none | [ci-parity.md](ci-parity.md) |
 | `analysisGate` | Pre-push analysis gate: pass, finding, blocked | harness | `analysis` | [analysis.md](analysis.md#ci) |
 | `push` | Push the branch: pushed, failed | harness | none | [analysis.md](analysis.md#secrets-in-records-and-posts-redaction) |
 | `ownerQ` | Owner question or unfinished check?: none, question, incomplete | harness | none | [implement.md](implement.md#the-pr-opens-finished) |
-| `branchCi` | CI proven on the branch head: green, red, base-moved | harness | `implement.ciWait`, `ci.provider`, `implement.ciFixRounds` | [implement.md](implement.md#the-pr-opens-finished) |
-| `ciFixRound` | CI fixing round: green, red | `pr-check-fixer` | `implement.ciFixRounds` | [implement.md](implement.md#the-pr-opens-finished) |
+| `branchCi` | CI proven on the branch head: green, red, base-moved | harness | `implement.ci.wait.enabled`, `ci.provider`, `implement.ci.maxFixRounds` | [implement.md](implement.md#the-pr-opens-finished) |
+| `ciFixRound` | CI fixing round: green, red | `pr-check-fixer` | `implement.ci.maxFixRounds` | [implement.md](implement.md#the-pr-opens-finished) |
 | `bug` | A bug fix? | harness | none | [review-gate.md](review-gate.md#assessment) |
 | `triage` | Bug triage: assessed, failed | `bug-triage` | none | [review-gate.md](review-gate.md#assessment) |
 | `evidence` | Demo video | harness, may call `demo-narrator` | `features.demoVideo`, `video.script.scope` | [pr-demo-video.md](pr-demo-video.md#how-it-works) |
 | `uiPair` | UI bug: before / after videos: shown, missing | harness, may call `demo-narrator` | `video.bugPair.requireBefore`, `video.script.scope` | [pr-demo-video.md](pr-demo-video.md#bugs-before-and-after-the-fix) |
 | `apiEvidence` | Backend bug: request evidence: shown, missing | harness, may call `demo-narrator` | `video.bugPair.requireBefore` | [pr-demo-video.md](pr-demo-video.md#backend-bugs-the-requests-before-and-after-the-fix) |
 | `apiChanges` | API changes section | harness | `features.demoVideo` | [pr-demo-video.md](pr-demo-video.md#api-changes) |
-| `open` | Open the PR, or update the held one: updated, opened, refused, failed | harness | `host.type`, `ci.provider`, `implement.ciWait` | [implement.md](implement.md#the-pr-opens-finished) |
+| `open` | Open the PR, or update the held one: updated, opened, refused, failed | harness | `host.type`, `ci.provider`, `implement.ci.wait.enabled` | [implement.md](implement.md#the-pr-opens-finished) |
 | `gatePublish` | Gate publishes the rating: saved, missing | harness | none | [review-gate.md](review-gate.md#assessment) |
-| `checks` | Wait for the PR's checks: green, failed, unknown | harness | `implement.ciWait`, `implement.preOpen.draftCycles`, `implement.ciFixRounds` | [implement.md](implement.md#after-the-open) |
-| `hold` | Hold the PR: confirmed, unconfirmed | harness | `implement.preOpen.afterOpen`, `implement.preOpen.draftCycles` | [implement.md](implement.md#after-the-open) |
-| `holdFix` | CI fixing round on hold: green, again, failed | `pr-check-fixer` | `implement.preOpen.draftCycles`, `implement.ciFixRounds` | [implement.md](implement.md#after-the-open) |
+| `checks` | Wait for the PR's checks: green, failed, unknown | harness | `implement.ci.wait.enabled`, `implement.ci.maxFixRounds` | [implement.md](implement.md#after-the-open) |
+| `hold` | Hold the PR: confirmed, unconfirmed | harness | `implement.preOpen.afterOpen`, `implement.ci.maxFixRounds` | [implement.md](implement.md#after-the-open) |
+| `holdFix` | CI fixing round on hold: green, again, failed | `pr-check-fixer` | `implement.ci.maxFixRounds` | [implement.md](implement.md#after-the-open) |
 | `ready` | Release the hold, mark ready: confirmed, unconfirmed | harness | `implement.preOpen.afterOpen` | [implement.md](implement.md#after-the-open) |
 | `runDone` | Run ends: outcome done | record | none | [implement.md](implement.md#after-the-open) |
 | `gate` | Review gate decides: auto-merge, approvals, person | harness | `implement.autoMerge.enabled`, `implement.reviewGate.approvals.Low`, `implement.reviewGate.approvals.Medium` | [review-gate.md](review-gate.md#the-gate) |
@@ -216,7 +216,7 @@ and the PR check's debate ([pr-check.md](pr-check.md)). The board lanes are in [
 | --- | --- |
 | **Agent** | an AI coding tool (Claude Code, Copilot CLI, Codex or any command) started headless for one job, with a fresh context; definitions are in `agents/` ([agents.md](agents.md)) |
 | **Harness** | the factory's own code that runs the loops, checks and delivery: deterministic, no model call |
-| **Orchestrator** | the `implementer` agent when it plans a ticket into subtasks and integrates them |
+| **Orchestrator** | the agent that leads a stage and decides whether to do its work itself or delegate it: the `implementer` in the implement stage (it implements a ticket itself or plans it into subtasks and integrates them), `stage-orchestrator` in the others ([orchestrators.md](orchestrators.md)) |
 | **Verifier pair** | one agent writes a subtask, a second, read-only agent that never saw the writer's reasoning checks it |
 | **Council** | several verifiers on different tools and models sitting in one verifier's seat ([council.md](council.md)) |
 | **Intercom** | an optional discussion in which a council's members settle their disagreements with each other after their independent first round, through a chat room the harness hosts ([council-intercom.md](council-intercom.md)) |
@@ -237,7 +237,7 @@ and the PR check's debate ([pr-check.md](pr-check.md)). The board lanes are in [
 **pr-check** ([pr-check.md](pr-check.md)), **board** ([board.md](board.md)) and **retro** ([retro.md](retro.md)).
 The review gate ([review-gate.md](review-gate.md)) and the demo video ([pr-demo-video.md](pr-demo-video.md)) run
 inside the delivery. Each stage is its own Node CLI with its own config and tests, and drives a headless agent
-CLI: Claude Code by default, Copilot CLI or Codex (`PIPELINE_AGENT_CLI`), or any command (`PIPELINE_AGENT_CMD`).
+Models: every agent runs on an entry of the model pool (`models.pool`: Claude Code, Copilot CLI or Codex, [models.md](models.md)), or any command (`PIPELINE_AGENT_CMD`).
 The same stages also run from an interactive session's hooks (`factory start`, `factory done`; [internals.md](../internals.md#hooks-and-lifecycle-events)).
 
 ## After the PR opens
@@ -299,7 +299,7 @@ Behaviour that falls short of the design, stated once; each is described where i
 | [review-gate.md](review-gate.md) | C, reviewers: how bug fixes are rated and merged |
 | [pr-demo-video.md](pr-demo-video.md) | B, C: demo videos, bug evidence, API changes |
 | [escalations.md](escalations.md) | C: every outcome and what to do next |
-| [council.md](council.md), [council-intercom.md](council-intercom.md), [analysis.md](analysis.md), [models.md](models.md) | B, C: optional councils and their discussion, static analysis, the model allowlist |
+| [council.md](council.md), [council-intercom.md](council-intercom.md), [orchestrators.md](orchestrators.md), [analysis.md](analysis.md), [models.md](models.md) | B, C: every stage's council and its discussion, the orchestrator that leads each stage, static analysis, the model pool |
 | [agents.md](agents.md), [costs.md](costs.md), [disk.md](disk.md), [ci-parity.md](ci-parity.md) | C: the agents, token costs, disk use, CI parity |
 | [retro.md](retro.md), [experiments.md](experiments.md) | C, D: lessons and factory proposals; comparing delivery modes |
 | [configuration.md](../configuration.md), [providers](../providers/README.md), [hosts-and-trackers.md](../hosts-and-trackers.md) | B, C: every setting; hosts, trackers and CI systems |

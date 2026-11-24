@@ -104,7 +104,7 @@ export async function main(argv, { env = process.env, cwd = process.cwd(), overr
     const ctx = await createContext({ root: resolveRoot(global.root, env), slot: state.slot, env, writeEnv: !offline, ...overrides });
     ctx.cwd = cwd;
     const { positionals, options } = parseArgs(rest);
-    const timeoutSec = intOption(options, 'timeout', ctx.config.timeoutSeconds);
+    const timeoutSec = intOption(options, 'timeout', ctx.config.timeoutSec);
     const annotate = result => ({ ...result, ...ctx.annotation });
     const finish = (result, code = result.ok ? EXIT.ok : EXIT.notReady) => { print(result); return code; };
 

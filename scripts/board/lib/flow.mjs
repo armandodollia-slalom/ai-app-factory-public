@@ -17,6 +17,7 @@ import { nowIso, readJson, writeJson } from '../../pipeline/lib/util.mjs';
 import { addLabel, findIssue, issueItem, removeLabel, setColumn, syncEpicColumns } from './board.mjs';
 import { trackerFor } from './trackers/index.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // Allowed transitions: the lanes each event moves a card from, and the lane it moves it to. Testing ->
 // In Progress happens only on a product bug. Review and Done are left only by a forced claim or a
@@ -68,7 +69,7 @@ export const latestMarker = (comments) => comments.map((c) => parseMarker(c.body
 
 export function flowDir(config) {
   const r = git(config.root, ['rev-parse', '--git-common-dir']);
-  const common = r.status === 0 && r.stdout.trim() ? path.resolve(config.root, r.stdout.trim()) : path.join(config.root, config.stateDir ?? '.factory/state');
+  const common = r.status === 0 && r.stdout.trim() ? path.resolve(config.root, r.stdout.trim()) : path.join(config.root, setting(config, 'stateDir'));
   return path.join(common, 'ai-pipeline', 'board');
 }
 const flowFile = (config, key) => path.join(flowDir(config), `${key}.json`);

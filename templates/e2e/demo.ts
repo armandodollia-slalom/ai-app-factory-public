@@ -64,7 +64,9 @@ export interface Demo {
 }
 
 const DEMO = process.env.E2E_DEMO === '1';
-const PACING = { stepDelayMs: 700, holdMs: 1500, typeDelayMs: 90, cursorMs: 600, ...(() => { try { return JSON.parse(process.env.E2E_DEMO_PACING ?? '{}'); } catch { return {}; } })() };
+// The pacing comes from the factory (video.pacing.*, E2E_DEMO_PACING, set with E2E_DEMO): no second copy of its defaults
+// here. Demo mode without it paces nothing.
+const PACING: { stepDelayMs: number; holdMs: number; typeDelayMs: number; cursorMs: number } = { stepDelayMs: 0, holdMs: 0, typeDelayMs: 0, cursorMs: 0, ...(() => { try { return JSON.parse(process.env.E2E_DEMO_PACING ?? '{}'); } catch { return {}; } })() };
 const pace = (ms: number) => (DEMO ? ms : 0);
 
 function escapeHtml(value: string) {

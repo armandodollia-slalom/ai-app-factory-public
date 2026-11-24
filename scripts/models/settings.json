@@ -1,0 +1,13 @@
+{
+  "$comment": "What every setting in the `models` section does; defaults are in config.json beside this file (the section itself). See scripts/pipeline/lib/settings.mjs and docs/ai-pipeline/models.md.",
+  "models.cacheTtlSec": { "does": "How long the list of models each provider offers is remembered before it is fetched again.", "type": "integer", "min": 0, "unit": "seconds", "readBy": "scripts/models/lib/models.mjs" },
+  "models.pool": { "does": "The models the pipeline may run, listed once: every agent and council member runs on one of these entries. At least one.", "type": "list", "items": "object" },
+  "models.pool[].name": { "does": "An entry's short unique name; settings name the entry by it.", "type": "string", "allowed": "letters, digits, `.`, `-` or `_`, up to 40", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$", "readBy": "scripts/factory/factory.mjs" },
+  "models.pool[].cli": { "does": "The agent CLI the entry runs on (`custom` runs its `cmd`).", "type": "enum", "values": ["claude","codex","copilot","custom"], "readBy": "scripts/factory/factory.mjs" },
+  "models.pool[].model": { "does": "The CLI's own model id (`claude-opus-5-5` on Claude Code, `claude-opus-5.5` on Copilot, `gpt-6.1-sol` on Codex); its family (Anthropic, OpenAI, Google) is derived from it. Optional for `custom`.", "type": "string", "readBy": "scripts/pipeline/lib/pool.mjs" },
+  "models.pool[].effort": { "does": "The entry's reasoning effort (Claude Code's `--effort`, Codex's `model_reasoning_effort`; Copilot runs at its model's default).", "type": "enum", "values": ["low","medium","high","xhigh","max"], "readBy": "scripts/pipeline/lib/pool.mjs" },
+  "models.pool[].env": { "does": "Variables for the entry's CLI process, such as a second login's home folder; never secrets (`${NAME}` references only).", "type": "map", "items": "string", "readBy": "scripts/pipeline/lib/pool.mjs" },
+  "models.pool[].cmd": { "does": "The command a `custom` entry runs (it reads the prompt on stdin).", "type": "string", "readBy": "scripts/factory/factory.mjs" },
+  "models.pool[].timeoutSec": { "does": "The entry's normal run time as a council member (else the stage's verifier time limit).", "type": "integer", "min": 1, "unit": "seconds", "readBy": "scripts/pipeline/lib/pool.mjs" },
+  "models.agents.<agent>": { "does": "The `models.pool` entry one agent (named as in `agents/`, such as `pr-check-judge`) runs on; `default` for every agent with none of its own. The environment variable names one entry every agent runs on, for experiments.", "type": "string", "allowed": "a `models.pool` entry name", "env": "PIPELINE_MODEL_OVERRIDE", "readBy": "scripts/pipeline/lib/pool.mjs" }
+}

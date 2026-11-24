@@ -804,7 +804,7 @@
         "opengrep-interfile"
       ],
       "required": true,
-      "timeoutMin": 45
+      "timeoutSec": 2700
     },
     {
       "id": "workflows",

@@ -11,18 +11,20 @@ import { nextAttempt, runDied } from '../../pipeline/lib/recovery.mjs';
 import { clearEscalation, escalate, lockFile, loadState, logFile, updateState } from '../../pipeline/lib/state.mjs';
 import { listStories, resolveStory } from '../../pipeline/lib/stories.mjs';
 import { bootId, lockHolder, log, nowIso, selfProcess, sleep } from '../../pipeline/lib/util.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'pr-check.mjs');
 const block = (reason) => ({ decision: 'block', reason });
 const notice = (message) => ({ systemMessage: message });
-const settings = (config) => ({ enabled: true, requireTests: true, waitForTestsMin: 1440, pollSec: 20, maxRuns: 3, codeAgents: ['implementer'], ...config.prCheck.hook });
+const settings = (config) => ({ ...defaultSettings().prCheck.hook, ...config.prCheck.hook });
 
 export const hookSkipped = (config) => process.env.PR_CHECK_SKIP === '1' || !settings(config).enabled;
 
-// Main-session stops always count; subagent stops only for the agents that write the code.
-function isCodeAgentStop(config, payload) {
+// Main-session stops always count; subagent stops only for the agents that write the code (hooks.codeAgents, shared with
+// the architecture review).
+export function isCodeAgentStop(config, payload) {
   if (payload.hook_event_name !== 'SubagentStop' || !payload.agent_type) return true;
-  return settings(config).codeAgents.includes(payload.agent_type);
+  return setting(config, 'hooks.codeAgents').includes(payload.agent_type);
 }
 
 const formatFindings = (findings) => findings.map((f, i) => `${i + 1}. [${f.severity}] ${f.id} (${f.lens}) ${f.title}`).join('\n');
@@ -67,6 +69,10 @@ function deliver(config, story, pc, payload) {
 
 // Stop hook, after review and fv in the dispatcher. Its gate is the review's approval of the code on
 // disk; the check itself waits in the background for feature verification to verify the tests, so the agent can finish.
+// How many automatic checks a ticket gets: one more than the times a failing check may send the code back
+// (prCheck.returnToImplementation.maxReturns, the pipeline's own return budget too).
+export const hookMaxChecks = (config) => setting(config, 'prCheck.returnToImplementation.maxReturns') + 1;
+
 export function hookStop(config, story, payload = {}) {
   if (hookSkipped(config) || !isCodeAgentStop(config, payload)) return null;
   const state = loadState(config, story.key);
@@ -84,8 +90,9 @@ export function hookStop(config, story, payload = {}) {
     if (['skipped', 'error', 'escalated', 'crashed'].includes(pc.status)) return null;
   }
 
-  const { maxRuns } = settings(config);
-  if (pc.runs >= maxRuns && pc.verdict === 'FAIL') {
+  // A failing check sends the code back to its implementer at most prCheck.returnToImplementation.maxReturns times: one
+  // check more than the returns, then a person decides.
+  if (pc.runs >= hookMaxChecks(config) && pc.verdict === 'FAIL') {
     updateState(config, story.key, (s) => Object.assign(s.prCheck, { status: 'escalated', hash }));
     // not-an-agent: an escalation to a person
     escalate(config, story, 'pr-check', `still failing after ${pc.runs} PR checks`, `Last score ${pc.score}/10. Open findings:\n${formatFindings(pc.openFindings)}\n\nReport: ${pc.report}`);
@@ -97,7 +104,7 @@ export function hookStop(config, story, payload = {}) {
 }
 
 // A new report round on the same implementation (implement's return of test gaps to test automation): the check waits for
-// the tests to verify again, then sits. The return budget bounds how often this happens, so maxRuns is not applied.
+// the tests to verify again, then sits. The return budget (prCheck.returnToImplementation.maxReturns) bounds how often.
 export function recheck(config, story) {
   const { hash } = implChanges(config);
   if (!hash) return null;
@@ -118,7 +125,7 @@ function spawnWaiter(config, story, hash, fields) {
 }
 
 // A background check whose process died (crash, kill, reboot) while waiting or checking starts over,
-// at most recovery.maxAttempts times with growing delays, then escalates. Returns what happened, or
+// at most recovery.maxRetries times with growing delays, then escalates. Returns what happened, or
 // null when the check is not interrupted.
 export function recoverHookRun(config, story, { force = false } = {}) {
   const pc = loadState(config, story.key).prCheck;
@@ -135,8 +142,8 @@ export function recoverHookRun(config, story, { force = false } = {}) {
     return `the background PR check of ${story.key} died ${next.attempts} times; escalated (see .factory/state/escalations/${story.key}-pr-check.md).`;
   }
   const bg = spawnWaiter(config, story, pc.hash, next.fields);
-  log(`${story.key}: restarted the interrupted PR check (attempt ${next.attempt}/${next.maxAttempts})`);
-  return `restarted the interrupted PR check of ${story.key} (attempt ${next.attempt}/${next.maxAttempts}, log: ${bg.log}).`;
+  log(`${story.key}: restarted the interrupted PR check (attempt ${next.attempt}/${next.maxRetries})`);
+  return `restarted the interrupted PR check of ${story.key} (attempt ${next.attempt}/${next.maxRetries}, log: ${bg.log}).`;
 }
 
 // `resume`: every story's interrupted background check (or one story's); --force also retries crashed ones.
@@ -161,10 +168,10 @@ function testsPending(config, story, automation, hash) {
 
 // The background half of the hook: wait for feature verification, run one report-only check, record the result.
 export async function hookRun(config, story, hash, executeCheck) {
-  const { requireTests, waitForTestsMin, pollSec } = settings(config);
+  const { requireTests, waitForTestsSec, pollSec } = settings(config);
   // A ceiling, not a budget (council C12): the waiter keeps waiting while feature verification is alive and working on
   // this implementation (testsPending); slow agents make it wait longer, never skip the check.
-  const deadline = Date.now() + waitForTestsMin * 60_000;
+  const deadline = Date.now() + waitForTestsSec * 1000;
   const set = (fields) => updateState(config, story.key, (s) => Object.assign(s.prCheck, fields));
   const current = () => loadState(config, story.key).prCheck.hash === hash;
 
@@ -197,7 +204,7 @@ export async function hookRun(config, story, hash, executeCheck) {
       return 0;
     }
     if (Date.now() > deadline) {
-      set({ status: 'skipped', reason: `Feature verification did not verify the tests within ${waitForTestsMin} minutes` });
+      set({ status: 'skipped', reason: `Feature verification did not verify the tests within ${waitForTestsSec} s` });
       log('skipped: timed out waiting for feature verification');
       return 0;
     }

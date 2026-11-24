@@ -34,13 +34,16 @@ import { OUTCOMES_FILE } from './decisions.mjs';
 import { councilRecords, councilReviewSection, withCouncilReview } from '../../pipeline/lib/council.mjs';
 import { EPIC_PLAN_STAGE, featureGroupTitle, deliveryShape, epicDeps, journeyGroup, epicPlanDecision, epicPlanTask, epicPrBody, epicSlug, epicTestKey, groupDeps, groupOutcome, groupsDecision, journeyTicket, nextStories, noteMarkdown, singleGroups, validateNote } from './epic-plan.mjs';
 import { parityGate, paritySection } from './ci-parity.mjs';
+import { ciFixBudget } from './ci-wait.mjs';
 import { HARNESS_EXCLUDES, commitAll, commitEnv, commitRecords, headSha, mergeInProgress, mustGit, stackedRef, unmergedFiles } from './gitops.mjs';
-import { adoptOpenedPr, afterOpen, cleanDelivered, confirmRecordedHold, loadRun, takeRemoteHead, publishRatingOrHold, prCheckHold, deliverFinished, deliveryIo, holdOpenPr, fullProjectRuns, fullProjectsSection, plan as planStories, prCheckFollowUps, runConditions, runConditionsSection, runsDir, saveRun, shipMetrics, skippedOutcome, startWorker, withoutResolved, ownerDecisionBlock, waitingForPerson } from './implement.mjs';
+import { adoptOpenedPr, afterOpen, prCheckFixSettings, cleanDelivered, confirmRecordedHold, loadRun, takeRemoteHead, publishRatingOrHold, prCheckHold, deliverFinished, deliveryIo, holdOpenPr, fullProjectRuns, fullProjectsSection, plan as planStories, prCheckFollowUps, runConditions, runConditionsSection, runsDir, saveRun, shipMetrics, skippedOutcome, startWorker, withoutResolved, ownerDecisionBlock, waitingForPerson } from './implement.mjs';
 import { lspAdapter } from './lsp.mjs';
 import { waitForMemory } from './resources.mjs';
-import { agentSettings, createContext, runSelf } from './orchestrate.mjs';
+import { createContext, runSelf } from './orchestrate.mjs';
 import { parsePlanOutput } from './plan.mjs';
 import { withDerivedClasses } from '../../pipeline/lib/policy-classes.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
+import { fvEnabled } from '../../feature-verification/lib/enabled.mjs';
 
 const FV_CLI = path.join(INSTALL_ROOT, 'scripts/feature-verification/feature-verification.mjs');
 const PR_CHECK_CLI = path.join(INSTALL_ROOT, 'scripts/pr-check/pr-check.mjs');
@@ -64,9 +67,9 @@ const saveUnit = (config, epicKey, id, patch) => saveEpicRun(config, epicKey, (c
 
 export const listEpicRuns = (config) => (fs.existsSync(epicsDir(config)) ? fs.readdirSync(epicsDir(config)).filter((f) => f.endsWith('.json') && !f.endsWith('.note.json')).map((f) => readJson(path.join(epicsDir(config), f), null)).filter((s) => s?.epic) : []);
 
-export const epicBranchFor = (config, epicKey) => `${config.implement.epic?.branchPrefix ?? 'epic/'}${epicSlug(epicKey)}`;
+export const epicBranchFor = (config, epicKey) => `${setting(config, 'implement.epic.branchPrefix')}${epicSlug(epicKey)}`;
 export const epicWorktreeFor = (config, epicKey) => worktreeFor(config, { key: `epic-${epicSlug(epicKey)}` });
-export const groupBranchFor = (config, epicKey, id, { feature = false } = {}) => (feature ? `${config.implement.branchPrefix ?? 'feat/'}${epicSlug(epicKey)}--${id}` : `${config.implement.epic?.bugfixPrefix ?? 'bugfix/'}${epicSlug(epicKey)}/${id}`);
+export const groupBranchFor = (config, epicKey, id, { feature = false } = {}) => (feature ? `${setting(config, 'implement.branchPrefix')}${epicSlug(epicKey)}--${id}` : `${setting(config, 'implement.epic.bugfixPrefix')}${epicSlug(epicKey)}/${id}`);
 export const groupWorktreeFor = (config, epicKey, id, { feature = false } = {}) => worktreeFor(config, { key: `${feature ? 'feat' : 'bugfix'}-${epicSlug(epicKey)}--${id}` });
 
 // Statuses of an epic run that is finished for good: a single ticket of that epic then runs on its own.
@@ -160,22 +163,19 @@ async function planEpicOnce(env, { attempts = 2 } = {}) {
   const keys = stories.map((s) => s.key);
   // A feature epic split into PRs (prSplit story or groups): no foundation, feature wording; the cap is its own.
   const featureGroups = Boolean(env.shape?.feature);
-  const maxPerGroup = featureGroups ? planConfig.implement.epic?.maxStoriesPerGroup ?? null : planConfig.implement.maxBugsPerGroup ?? null;
+  const maxPerGroup = planConfig.implement.epic.maxTicketsPerGroup ?? null;
   let errors = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const { cli, model } = agentSettings(planConfig, 'orchestrator');
     const res = await deps.runAgent(planConfig, {
       name: 'implementer',
       mode: 'read',
-      model,
-      cli,
       noSubagents: true,
       cwd,
-      timeoutSec: planConfig.implement.epic?.planTimeoutSec ?? planConfig.implement.timeouts.plannerSec,
+      timeoutSec: planConfig.implement.timeoutsSec.epicPlanner,
       task: epicPlanTask({ epic, stories, mockups: env.mockups ?? [], errors, groups, maxPerGroup, featureGroups }),
       usage: { stage: EPIC_PLAN_STAGE, story: epic.key, step: 'epic-plan', round: attempt },
     });
-    const agent = { version: res.version, cli, model };
+    const agent = { version: res.version, cli: res.cli ?? null, model: res.entry ?? null };
     const raw = parsePlanOutput(res.output);
     if (raw?.status === 'blocked') {
       logDecision(planConfig, { ...epicPlanDecision({ epic, attempt, accepted: false, errors: [`blocked: ${raw.reason ?? ''}`], agent }), decision: 'blocked' });
@@ -208,7 +208,7 @@ export async function runFoundation(env, note) {
   writeText(specFile, `# ${epic.key}: epic foundation\n\n${note.foundation.goal}\n\n${noteMarkdown(note, { epic })}`);
   const ctx = createContext({ config: wtConfig, key: epic.key, storyFile: specFile, branch, worktree, base: headSha(worktree), deps: { runAgent: deps.runAgent, lsp: deps.lsp, ...(deps.stack ? { stack: deps.stack } : {}), ...(deps.acquire ? { acquire: deps.acquire } : {}) }, log: env.rawLog });
   ctx.decisionId = env.decisionId;
-  const st = { id: 'foundation', goal: note.foundation.goal, acceptance: note.foundation.acceptance.length ? note.foundation.acceptance : [note.foundation.goal], owns: note.foundation.owns, dependsOn: [], modelClass: 'large', verify: 'code' };
+  const st = { id: 'foundation', goal: note.foundation.goal, acceptance: note.foundation.acceptance.length ? note.foundation.acceptance : [note.foundation.goal], owns: note.foundation.owns, dependsOn: [], verify: 'code' };
   const r = await runSelf(ctx, { mode: 'self', subtasks: [st] });
   return { ...r, agentRuns: ctx.metrics.agentRuns, usage: ctx.metrics.usage };
 }
@@ -242,8 +242,7 @@ export async function mergeStory(env, story) {
       return { ok: false, reason: `merging ${story.branch} failed: ${tail(r.stderr || r.stdout, 300)}` };
     }
     log(`${story.key}: merging into ${branch} conflicts in ${files.join(', ')}; asking the orchestrator to resolve them`);
-    const { cli, model } = agentSettings(wtConfig, 'orchestrator');
-    await deps.runAgent(wtConfig, { name: 'implementer', mode: 'implement', model, cli, noSubagents: true, cwd: worktree, timeoutSec: wtConfig.implement.timeouts.orchestratorSec, task: conflictTask({ epic, key: story.key, worktree, branch, storyBranch: story.branch, files, noteFile: env.noteFile }), usage: { stage: 'implement', story: story.key, step: `merge into ${branch}` } });
+    await deps.runAgent(wtConfig, { name: 'implementer', mode: 'implement', noSubagents: true, cwd: worktree, timeoutSec: wtConfig.implement.timeoutsSec.orchestrator, task: conflictTask({ epic, key: story.key, worktree, branch, storyBranch: story.branch, files, noteFile: env.noteFile }), usage: { stage: 'implement', story: story.key, step: `merge into ${branch}` } });
     const left = unmergedFiles(worktree);
     if (left.length || /<<<<<<< /.test(git(worktree, ['diff', 'HEAD', '--', ...files]).stdout)) {
       git(worktree, ['merge', '--abort']);
@@ -319,7 +318,7 @@ export async function epicFv(env, { key, note }) {
   const text = journeyTicket({ key, epic, note, stories });
   writeTicket(wtConfig, key, { content: text, meta: metaFor({ key, type: 'story', title: `${key}: ${epic.title ?? epic.key} (cross-story journeys)`, slug: `${key}-${epicSlug(epic.key)}`, source: null, parent: epic.key }, text), origin: 'file' });
   const sources = [ticketDir(wtConfig, key)];
-  const timeoutSec = wtConfig.implement.fvTimeoutSec;
+  const timeoutSec = wtConfig.implement.waitSec.featureVerification;
   const planned = cli(FV_CLI, worktree, base, ['plan', key], { timeoutSec, sources });
   const state = () => loadState(wtConfig, key);
   if (state().plan?.status !== 'verified') return { status: `plan-${state().plan?.status ?? (planned.status === 0 ? 'unknown' : 'failed')}` };
@@ -338,7 +337,7 @@ export async function reverifyStale(env, keys) {
   const failed = [];
   for (const key of stale) {
     log(`${key}: its verified tests changed with later tickets' spec edits; re-verifying them in ${env.branch}`);
-    const r = cli(FV_CLI, worktree, base, ['automate', key, '--verify-first'], { timeoutSec: wtConfig.implement.fvTimeoutSec, sources: [ticketDir(wtConfig, key)] });
+    const r = cli(FV_CLI, worktree, base, ['automate', key, '--verify-first'], { timeoutSec: wtConfig.implement.waitSec.featureVerification, sources: [ticketDir(wtConfig, key)] });
     commitAll(worktree, `${key}: Re-verify automated tests after later tickets edited their spec files`);
     const tail = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n').filter((l) => /^\[feature-verification\]|^\S+: (verified|failed|blocked|escalated)/.test(l)).slice(-12);
     for (const line of tail) log(`${key}: ${line}`);
@@ -349,13 +348,18 @@ export async function reverifyStale(env, keys) {
 
 // The PR check of a whole unit (its tickets, and the journey ticket) against the unit diff, in one run of
 // the PR check's multi-ticket mode (`run --stories K1,K2`): every frontend ticket gets the design lens.
-// Report only unless `fix` (fixes are committed on the unit branch).
+// The unit's PR check command line: report only unless `fix` (fixes are committed on the unit branch), fixing to the
+// settings' severity (a bug group to its own: 10/10, which the review gate's auto-merge needs). No round limit of its
+// own: the PR check reads prCheck.maxCouncilRounds.
+export function prCheckUnitArgs(env, keys, { fix = false } = {}) {
+  const pc = prCheckFixSettings(env.wtConfig);
+  const until = env.unit?.kind === 'group' ? pc.bugFixUntil : pc.fixUntil;
+  return ['run', '--stories', keys.join(','), '--base', env.base, '--json', ...(fix ? ['--until', until, ...(pc.fixLenses?.length ? ['--fix-lenses', pc.fixLenses.join(',')] : [])] : ['--no-fix'])];
+}
 export async function prCheckUnit(env, keys, { fix = false } = {}) {
   const { worktree, base, wtConfig } = env;
-  const pc = { fixUntil: 'major', bugFixUntil: 'minor', fixRounds: 3, fixLenses: [], ...(wtConfig.implement.prCheck ?? {}) };
-  // A bug group aims at 10/10, which the review gate's auto-merge needs.
-  if (env.unit?.kind === 'group') pc.fixUntil = pc.bugFixUntil;
-  const r = cli(PR_CHECK_CLI, worktree, base, ['run', '--stories', keys.join(','), '--base', base, '--json', ...(fix ? ['--until', pc.fixUntil, ...(pc.fixLenses?.length ? ['--fix-lenses', pc.fixLenses.join(',')] : []), '--max-rounds', String(pc.fixRounds)] : ['--no-fix'])], { timeoutSec: wtConfig.implement.epic?.prCheckTimeoutSec ?? 14400, sources: keys.map((k) => ticketDir(wtConfig, k)) });
+  const pc = prCheckFixSettings(wtConfig);
+  const r = cli(PR_CHECK_CLI, worktree, base, prCheckUnitArgs(env, keys, { fix }), { timeoutSec: pc.fixTimeoutSec, sources: keys.map((k) => ticketDir(wtConfig, k)) });
   try {
     const out = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
     return { verdict: out.verdict, score: out.score, openFindings: out.openFindings ?? [], resolvedFindings: out.resolvedFindings ?? [], followUps: out.followUps ?? [], report: out.report ?? null };
@@ -461,7 +465,7 @@ export async function runEpic(config, { epic, tickets, inputs, base, parallel = 
   const log = (m) => rawLog(`${epic.key}: ${m}`);
   const E = config.implement.epic ?? {};
   const prior = loadEpicRun(config, epic.key);
-  const shape = prior?.shape ?? deliveryShape(tickets, grouping ?? E.grouping ?? 'auto', prSplit ?? E.prSplit ?? 'epic');
+  const shape = prior?.shape ?? deliveryShape(tickets, grouping ?? E.grouping, prSplit ?? E.prSplit);
   const epicBase = prior?.base ?? base;
   const deps = { ...defaultDeps(config, log), ...injected };
   const stories = tickets.map((t) => ({ key: t.key, title: t.title, type: t.type, number: t.issue?.number ?? null, blockedBy: t.blockedBy ?? [], text: readText(config.abs(t.file)) }));
@@ -727,8 +731,8 @@ async function deliverUnit(env, unit, units, epicWt) {
   const prior = loadEpicRun(config, epic.key).units?.[unit.id] ?? {};
   // What CI runs on the PR, run here first; failures go back through the fixing loop (dogfood C4), and the results go into
   // the PR body. Every PR gets it, on every delivery route (a ticket joining an open group PR included): a bug group always
-  // (implement.ciParity does not apply to it, as before); a feature epic as one PR, and each PR of a split epic, like a
-  // single ticket (implement.ciParity: false turns it off).
+  // (implement.ci.parity.enabled does not apply to it, as before); a feature epic as one PR, and each PR of a split epic, like a
+  // single ticket (implement.ci.parity.enabled: false turns it off).
   const runParity = () => {
     // A bug group's tickets as CI will read them: published from this unit's copy and fetched back from the board first,
     // so its `fv check` reads the same text CI does (council C4, D-C7-1: parity read a group copy the board never got).
@@ -739,11 +743,11 @@ async function deliverUnit(env, unit, units, epicWt) {
         deps.board(unit.worktree, k, ['fetch', k, '--refresh']);
       }
     }
-    if (!(env.pr && !prsDisabled() && (!feature && !unit.feature ? true : config.implement?.ciParity !== false) && deps.parityGate)) return null;
+    if (!(env.pr && !prsDisabled() && (!feature && !unit.feature ? true : config.implement?.ci?.parity?.enabled !== false) && deps.parityGate)) return null;
     const penv = { ...process.env, PIPELINE_ROOT: unit.worktree, PIPELINE_BASE_REF: unitBase, PIPELINE_HEADLESS: '1', PIPELINE_TICKETS_OFFLINE: '1', PIPELINE_STORY_SOURCES: [process.env.PIPELINE_STORY_SOURCES, ...unit.keys.map((k) => ticketDir(wtConfig, k))].filter(Boolean).join(path.delimiter) };
     delete penv.PIPELINE_CHILD;
     delete penv.PIPELINE_DISABLE;
-    const out = deps.parityGate({ cwd: unit.worktree, base: unitBase, targetArgs: ['--stories', unit.keys.join(',')], seedFile: path.join(unit.worktree, wtConfig.stateDir ?? '.factory/state', 'pr-check', `${unit.id}-ci-parity.json`), prCheckCli: PR_CHECK_CLI, env: penv, log });
+    const out = deps.parityGate({ cwd: unit.worktree, base: unitBase, targetArgs: ['--stories', unit.keys.join(',')], seedFile: path.join(unit.worktree, setting(wtConfig, 'stateDir'), 'pr-check', `${unit.id}-ci-parity.json`), prCheckCli: PR_CHECK_CLI, env: penv, budget: ciFixBudget(config.implement ?? {}, { load: shared.load, save: shared.save }), log });
     commitAll(unit.worktree, `${feature ? epic.key : unit.id}: Record CI parity metrics`, [wtConfig.metricsDir]);
     return out;
   };
@@ -906,7 +910,7 @@ async function deliverUnit(env, unit, units, epicWt) {
   const journeys = feature || unit.journeys ? note?.journeys ?? [] : unit.feature ? [] : (note?.journeys ?? []).filter((j) => j.stories.length && j.stories.every((k) => unit.keys.includes(k)));
   const fvKey = epicTestKey(epic.key, epic.number);
   let fv = state.units?.[unit.id]?.fv ?? null;
-  if (E.featureVerification !== false && (feature || journeys.length) && fv?.status !== 'verified') {
+  if (E.featureVerification !== false && fvEnabled(config) && (feature || journeys.length) && fv?.status !== 'verified') {
     log(`unit feature verification (${fvKey}): ${journeys.length} cross-story journey(s)`);
     fv = { key: fvKey, ...(await deps.epicFv(uenv, { key: fvKey, note: { ...(note ?? { summary: '' }), journeys } })) };
     commitAll(unit.worktree, `${fvKey}: Add verified epic test plan and automated tests`);
@@ -940,7 +944,7 @@ async function deliverUnit(env, unit, units, epicWt) {
   const checkedHead = state.units?.[unit.id]?.prCheckHead ?? null;
   const unchanged = Boolean(checkedHead) && checkedHead === headSha(unit.worktree);
   let prChecks = unchanged ? { ...(state.units?.[unit.id]?.prChecks ?? {}) } : {};
-  const mode = E.prCheck ?? 'report';
+  const mode = prCheckFixSettings(wtConfig).mode;
   const checked = [...unit.keys, ...(fv?.status === 'verified' ? [fvKey] : [])];
   if (mode !== 'off' && !checked.every((k) => prChecks[k])) {
     log(`PR check ${checked.join(', ')} against ${unit.branch} (${mode})`);
@@ -951,8 +955,8 @@ async function deliverUnit(env, unit, units, epicWt) {
   }
 
   // What CI runs on the PR, run here first; failures go back through the fixing loop (dogfood C4), and the results go into
-  // the PR body. Every PR gets it: a bug group always (implement.ciParity does not apply to it, as before); a feature
-  // epic as one PR, and each PR of a split epic, like a single ticket (implement.ciParity: false turns it off).
+  // the PR body. Every PR gets it: a bug group always (implement.ci.parity.enabled does not apply to it, as before); a feature
+  // epic as one PR, and each PR of a split epic, like a single ticket (implement.ci.parity.enabled: false turns it off).
   const parity = runParity();
 
   // One PR for the unit, then the board.
@@ -990,7 +994,7 @@ async function deliverUnit(env, unit, units, epicWt) {
     result: {},
     questions: unitQuestions(prChecks),
     // An escalated unit PR check (fix mode) is a pre-open failure: no PR, the findings on the tickets.
-    prcIncomplete: prCheckHold(Object.values(prChecks)[0] ?? null, { mode, fixUntil: (wtConfig.implement.prCheck ?? {}).fixUntil ?? 'major', issues: unit.keys.map((k) => uenv.stories?.find?.((st) => st.key === k)?.number ?? null).filter(Boolean) }),
+    prcIncomplete: prCheckHold(Object.values(prChecks)[0] ?? null, { mode, fixUntil: prCheckFixSettings(wtConfig).fixUntil, issues: unit.keys.map((k) => uenv.stories?.find?.((st) => st.key === k)?.number ?? null).filter(Boolean) }),
     existingPr: existing,
     holds: existing ? now.delivery.holds : [],
     openedAt: existing ? now.delivery.openedAt ?? null : null,

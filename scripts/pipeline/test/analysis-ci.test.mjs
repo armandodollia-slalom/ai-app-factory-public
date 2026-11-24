@@ -30,7 +30,7 @@ function repo(config) {
 }
 
 test('the packs\' jobs are rendered for each CI system and only call the generated script', () => {
-  const a = resolveAnalysis({ root: '/r', project: { languages: ['dotnet'] }, precheck: {}, analysis: {} });
+  const a = resolveAnalysis({ root: '/r', project: { languages: ['dotnet'] }, featureVerification: { precheck: {} }, analysis: {} });
   const jobs = a.ci.jobs;
   assert.deepEqual(jobs.map((j) => j.id), ['secrets', 'dependencies', 'sast', 'workflows']);
   const gh = YAML.parse(renderGithubActions(jobs));

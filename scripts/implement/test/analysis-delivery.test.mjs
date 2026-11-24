@@ -2,6 +2,7 @@
 // nothing); a red branch CI goes back for the harness's way out and the new head is proven before the PR opens; a
 // pre-open failure keeps the first push time in the result (held-out C20: HINT-1's firstPushAt was null).
 import assert from 'node:assert/strict';
+import { ciFixBudget } from '../lib/ci-wait.mjs';
 import { spawnSync as sh } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -85,4 +86,18 @@ test('the harness\'s way out is taken once: a head still red after it ends befor
   const out = await deliverFinished(r.config, r.config, args(r, { io: io(order, { gates: [RED, RED], remedy: () => ({ retried: true, reason: 'pushed a fix' }) }), open: () => assert.fail('no PR') }));
   assert.deepEqual(order, ['analysis-gate', 'push', 'branch-ci', 'remedy', 'branch-ci']);
   assert.equal(out.outcome, 'ci-red');
+});
+
+// Council r1 (A6): the way out's fixing round ran with implement.ci.maxFixRounds 0 and was not counted.
+test('the way out\'s fixing round is one of the ticket\'s CI fixing rounds: with none left it does not run, and a person decides', async () => {
+  const { remedyRedBranch } = await import('../lib/analysis-gate.mjs');
+  const r = repo();
+  const seen = [];
+  r.config.implement = { ci: { maxFixRounds: 0 } };
+  await deliverFinished(r.config, r.config, args(r, { io: io([], { gates: [{ ...RED, rounds: 0 }], remedy: (a) => (seen.push(a.budget.left()), { retried: false, reason: 'none' }) }), open: () => assert.fail('no PR') }));
+  assert.deepEqual(seen, [0], 'the way out is told no round is left');
+  const finding = { verdict: 'blocking', secret: false, tool: 'semgrep', rule: 'sql-injection', file: 'a.js', line: 1 };
+  const out = await remedyRedBranch(r.config, { worktree: r.dir, branch: 'feat/x', base: 'main', ci: { failing: ['workflow factory-analysis'] }, prOpen: false, keys: ['X-1'], jobs: () => [{ check: 'factory-analysis Security patterns', job: 'sast', ok: false, findings: [finding] }], fix: () => assert.fail('no fixing round left'), credentials: [], budget: ciFixBudget({ ci: { maxFixRounds: 0 } }, {}, {}) });
+  assert.deepEqual([out.retried, out.fixRounds], [false, 0]);
+  assert.match(out.reason, /implement\.ci\.maxFixRounds has none left: a person decides/);
 });

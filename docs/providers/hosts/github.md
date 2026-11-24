@@ -10,9 +10,9 @@
 
 **Credentials:** `gh auth login` with the scopes `repo` and `project` (the project scope is for the GitHub tracker). The pipeline's own pull requests open as the [PR bot](../../ai-pipeline/setup.md#the-pipelines-pr-bot), a GitHub App, so that you can approve them. In CI the generated workflows use `GITHUB_TOKEN` or the App's token. GitHub Enterprise Server: `host.url: "https://ghe.example.com"` and `gh auth login --hostname ghe.example.com`.
 
-**By hand:** `factory review-gate enforce` (run `--dry-run` first) creates the ruleset that requires `review-quorum`, the CI checks and code-owner review. Allow auto-merge in the repository settings if you use `implement.autoMerge.native`.
+**By hand:** `factory review-gate enforce` (run `--dry-run` first) creates the ruleset that requires `review-quorum`, the CI checks and code-owner review. Allow auto-merge in the repository settings if you use `implement.autoMerge.hostAutoMerge.enabled`.
 
-**Merge safety:** `gh pr merge --match-head-commit <sha>` binds every merge to the head the gate assessed. Auto-merge is armed only with `implement.autoMerge.native`, and disarmed when a new head arrives.
+**Merge safety:** `gh pr merge --match-head-commit <sha>` binds every merge to the head the gate assessed. Auto-merge is armed only with `implement.autoMerge.hostAutoMerge.enabled`, and disarmed when a new head arrives.
 
 ## Capabilities
 

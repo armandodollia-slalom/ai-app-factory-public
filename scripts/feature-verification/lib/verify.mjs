@@ -4,11 +4,14 @@ import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
 import { contestedText, councilFor, councilMemory, fixesFile, memoryFile, nameFindings, memberRunEnv, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
+import { orchestratorRun } from '../../pipeline/lib/orchestrator.mjs';
+import { selectCouncil, ticketShape } from '../../pipeline/lib/selection.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log, nowIso } from '../../pipeline/lib/util.mjs';
 import { resolvesGiven } from '../../pipeline/lib/finding-route.mjs';
 import { automationFiles } from './plans.mjs';
 import { enforceRequired, requiredFor, requiredVerifierText, unmetRequired } from './required.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 export const VERIFIER = { plan: 'test-plan-verifier', automation: 'test-automation-verifier' };
 export const PRODUCER = { plan: 'test-planner', automation: 'test-automation' };
@@ -20,18 +23,25 @@ export function attributedAgent(stage, rootStage) {
   return PRODUCER.automation;
 }
 
+// The score a test stage's council must reach (testPlan.councilPassScore, testAutomation.councilPassScore).
+export const stagePassScore = (config, stage) => ((COUNCIL_STAGE[stage] ?? stage) === 'testPlan' ? setting(config, 'testPlan.councilPassScore') : setting(config, 'testAutomation.councilPassScore'));
+
+const NO_DETAIL = '(no detail given)';
+
 export function normalizeVerdict(config, stage, raw, { uiCases = [] } = {}) {
-  const categories = config.categories[stage];
-  const required = config.loops.requiredScore;
-  let score = Math.max(0, Math.min(10, Math.round(Number(raw?.score))));
-  if (!Number.isFinite(score)) score = 0;
+  const categories = config.featureVerification.categories[stage];
+  const required = stagePassScore(config, stage);
+  // One decimal place (council scores may be 9.5). A missing or invalid score (memberScore) is no score: the verdict
+  // fails whatever the pass score, before anything is normalized.
+  const given = memberScore(raw);
+  let score = given ?? 0;
   const gaps = (Array.isArray(raw?.gaps) ? raw.gaps : []).map((gap) => {
     const known = categories.includes(gap?.category);
     return {
       case: gap?.case ?? null,
       category: known ? gap.category : 'other',
       subtype: known ? gap?.subtype ?? null : gap?.category ?? gap?.subtype ?? null,
-      detail: String(gap?.detail ?? '').trim() || '(no detail given)',
+      detail: String(gap?.detail ?? '').trim() || NO_DETAIL,
       location: gap?.location ?? null,
       root_stage: stage === 'automation' && gap?.root_stage === 'plan' ? 'plan' : stage,
       // Only the automation verifier may say a gap is the code's (feature verification then reports a product bug).
@@ -54,16 +64,17 @@ export function normalizeVerdict(config, stage, raw, { uiCases = [] } = {}) {
       score = Math.min(score, required - 1);
     }
   }
+  if (given === null) gaps.push({ case: null, category: 'other', subtype: 'no-score', detail: `The verifier gave no valid score (${JSON.stringify(raw?.score ?? null)}): a score from 0 to 10 is required.`, location: null, root_stage: stage });
   if (score < required && gaps.length === 0) {
     gaps.push({ case: null, category: 'other', subtype: 'unexplained-score', detail: `Verifier scored ${score}/10 without listing gaps.`, location: null, root_stage: stage });
   }
   // At or above the required score the verdict passes even with gaps listed: they are minor by the
   // verifier's own rubric, stay in the metrics and are passed on as non-blocking notes.
-  return { score, gaps, summary: String(raw?.summary ?? ''), passed: score >= required, evidence: [...evidence.values()] };
+  return { score, gaps, summary: String(raw?.summary ?? ''), passed: given !== null && score >= required, evidence: [...evidence.values()] };
 }
 
 // Runs one verifier round in a fresh process and records the outcome for observability.
-export function runVerifier(config, { stage, story, round, task, producerVersion, model, metrics = true, uiCases = [] }) {
+export function runVerifier(config, { stage, story, round, task, producerVersion, metrics = true, uiCases = [] }) {
   const name = VERIFIER[stage];
   let attempt = 0;
   let result;
@@ -73,8 +84,7 @@ export function runVerifier(config, { stage, story, round, task, producerVersion
       name,
       task,
       mode: 'read',
-      model: model ?? config.agent.models.verifier,
-      timeoutSec: config.timeoutsSec.verifier,
+      timeoutSec: config.featureVerification.timeoutsSec.verifier,
       usage: { stage: `${stage}-verify`, story: story.key, round },
     });
     const raw = extractResult(result.output);
@@ -89,7 +99,7 @@ export function runVerifier(config, { stage, story, round, task, producerVersion
 
   if (metrics) {
     const ts = nowIso();
-    const common = { ts, stage, story: story.key, round, agent_prompt_ver: producerVersion, verifier_ver: result.version, cli: config.agent.cmd ? 'custom' : config.agent.cli };
+    const common = { ts, stage, story: story.key, round, agent_prompt_ver: producerVersion, verifier_ver: result.version, cli: result.cli ?? null, entry: result.entry ?? null };
     appendJsonl(metricsFile(config, 'verifier-runs.jsonl'), { ...common, score: verdict.score, passed: verdict.passed, gaps: verdict.gaps.length });
     appendJsonl(
       metricsFile(config, 'verifier-denials.jsonl'),
@@ -119,10 +129,10 @@ export function formatGaps(gaps) {
     .join('\n');
 }
 
-// The council stage of each feature verification verifier (council.stages.testPlan / testAutomation).
+// The council stage of each feature verification verifier (testPlan, testAutomation).
 export const COUNCIL_STAGE = { plan: 'testPlan', automation: 'testAutomation' };
 
-// One verifier round: the stage's council when one sits for it, else the single verifier (runVerifier, unchanged).
+// One verifier round: the stage's council (runVerifier is the retro audit's own re-check, unchanged).
 // A gap that only says a keyframe or the video does not show the URL (dogfood C15, C17, C23: several blocking automation
 // rounds) is presentation, not behaviour: since 0.2.85 the fixture draws the URL on every keyframe and in the video
 // itself. When the case's recorded steps prove the navigation (its test navigates or asserts the URL), the gap is a note,
@@ -163,13 +173,16 @@ export function demoteUrlCaptionGaps(verdict, { navigationProven, requiredScore 
 
 // Required cases (required.mjs): the verifier sees every one, and the harness caps the verdict while one is unmet.
 export async function verifyRound(config, opts) {
-  const council = councilFor(config, COUNCIL_STAGE[opts.stage]);
+  // The stage's seats for the story: picked once by the stage's orchestrator under the selection rules, kept.
+  if (opts.story?.key) await selectCouncil(config, COUNCIL_STAGE[opts.stage], { subject: opts.story.key, shape: ticketShape({ key: opts.story.key, test: true }), run: (o) => runAgentAsync(config, { ...o, cwd: config.root, timeoutSec: 300 }) });
+  const council = councilFor(config, COUNCIL_STAGE[opts.stage], { subject: opts.story?.key });
   const required = opts.story?.key ? requiredFor(config, opts.story.key) : [];
   const o = required.length ? { ...opts, task: `${opts.task}\n${requiredVerifierText(required, opts.stage)}` } : opts;
-  let verdict = council ? await councilVerifier(config, { ...o, council }) : await runVerifier(config, o);
-  if (opts.stage === 'automation' && verdict && !verdict.error && opts.story) verdict = demoteUrlCaptionGaps(verdict, { navigationProven: navigationProof(config, opts.story), requiredScore: config.loops.requiredScore });
+  // Every verifier stage is a council (its own verifier alone unless testPlan/testAutomation.councilMembers seats more).
+  let verdict = await councilVerifier(config, { ...o, council });
+  if (opts.stage === 'automation' && verdict && !verdict.error && opts.story) verdict = demoteUrlCaptionGaps(verdict, { navigationProven: navigationProof(config, opts.story), requiredScore: stagePassScore(config, opts.stage) });
   if (!required.length || verdict?.error) return verdict;
-  return enforceRequired(verdict, unmetRequired(config, opts.story, opts.stage, { required }), { requiredScore: config.loops.requiredScore, stage: opts.stage });
+  return enforceRequired(verdict, unmetRequired(config, opts.story, opts.stage, { required }), { requiredScore: stagePassScore(config, opts.stage), stage: opts.stage });
 }
 
 // A council round of a feature verification verifier: every member scores the plan or the tests with the stage's own
@@ -178,7 +191,8 @@ export async function verifyRound(config, opts) {
 // `late` (council.mjs lateBox) carries a non-blocking member's late result from one round to the next as feedback.
 export async function councilVerifier(config, { stage, story, round, task, producerVersion, metrics = true, uiCases = [], council, runMember = null, late = null }) {
   const name = VERIFIER[stage];
-  const call = runMember ?? ((m, t, o) => runAgentAsync(config, { name, task: t, mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.timeoutsSec.verifier, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: `${stage}-verify`, story: story.key, round, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } }));
+  // Each member runs on its seat's pool entry; a council of one is the stage's own verifier on its own entry.
+  const call = runMember ?? ((m, t, o) => runAgentAsync(config, { name, task: t, mode: 'read', entry: m.entry, timeoutSec: m.timeoutSec ?? config.featureVerification.timeoutsSec.verifier, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: `${stage}-verify`, story: story.key, round, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } }));
   const memory = councilMemory({ file: memoryFile(config.root, config.stateDir, { stage: COUNCIL_STAGE[stage], story: story.key }), cwd: config.root, round, fixes: fixesFile(config.root, config.stateDir, { stage: COUNCIL_STAGE[stage], story: story.key }) });
   const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
   const out = await runCouncil({
@@ -192,25 +206,29 @@ export async function councilVerifier(config, { stage, story, round, task, produ
       if (!raw) return null;
       const v = normalizeVerdict(config, stage, raw, { uiCases });
       const rawGaps = Array.isArray(raw.gaps) ? raw.gaps : [];
+      // A gap is often an absence (a case or a test the story needs and nothing covers): its detail, which names what is
+      // missing, is its evidence when the member gives none of its own (the council's rule 4 would make it a question).
       const findings = v.gaps.map((g, i) => {
         const r = i < rawGaps.length && rawGaps[i] && typeof rawGaps[i] === 'object' ? rawGaps[i] : {};
-        return { ...g, id: r.id, lens: r.lens, severity: ['blocking', 'major', 'minor'].includes(r.severity) ? r.severity : v.score >= council.passScore ? 'minor' : 'blocking', action: r.action, test: r.test, deletes: r.deletes, approach: r.approach, why: r.why, covers: r.covers, evidence: r.evidence, detail: g.detail, file: g.location };
+        const evidence = r.evidence ?? (g.detail && g.detail !== NO_DETAIL ? g.detail : undefined);
+        return { ...g, id: r.id, lens: r.lens, severity: ['blocking', 'major', 'minor'].includes(r.severity) ? r.severity : v.score >= council.councilPassScore ? 'minor' : 'blocking', action: r.action, test: r.test, deletes: r.deletes, approach: r.approach, why: r.why, covers: r.covers, evidence, detail: g.detail, file: g.location };
       });
-      return { score: memberScore(raw) ?? v.score, verdict: v.score >= council.passScore ? 'APPROVED' : 'CHANGES_REQUESTED', summary: v.summary, findings, disputes: raw.disputes, followUps: raw.followUps };
+      // No valid score is no score (memberScore): the member does not pass, never a normalized 0 that a pass score of 0 accepts.
+      return { score: memberScore(raw) === null ? null : v.score, verdict: v.passed && v.score >= council.councilPassScore ? 'APPROVED' : 'CHANGES_REQUESTED', summary: v.summary, findings, disputes: raw.disputes, followUps: raw.followUps };
     },
     readOnly,
     onLate: late?.push,
   });
-  const cases = planCases(config.root, config.plansDir, story.key);
-  // No model of this stage rules on a split: it becomes an owner question.
-  const intercom = await runIntercomDiscussion({ config, council, results: out.results, subject: story.key, stage: COUNCIL_STAGE[stage], round, violation: out.violation, readOnly, reviewed: task, run: call });
+  const cases = planCases(config.root, config.featureVerification.plansDir, story.key);
+  // A split in the members' discussion is ruled by the stage's orchestrator.
+  const intercom = await runIntercomDiscussion({ config, council, results: out.results, subject: story.key, ruler: (task) => runAgentAsync(config, { ...orchestratorRun(config, COUNCIL_STAGE[stage]), task, mode: 'read', cwd: config.root, timeoutSec: 300, usage: { stage: `${stage}-verify`, story: story.key, round, step: 'intercom-ruling' } }), stage: COUNCIL_STAGE[stage], round, violation: out.violation, readOnly, reviewed: task, run: call });
   const mergeOpts = { protect: (f) => testProtection(f, { keys: [story.key], cases }), violation: out.violation, feedback: late?.take() ?? [], earlier: memory, root: config.root, ...(intercom ? { intercom } : {}) };
   const merged = await adjudicate({
     config,
     council,
     merged: mergeCouncil(council, out.results, mergeOpts),
     remerge: (adjudications) => mergeCouncil(council, out.results, { ...mergeOpts, adjudications }),
-    run: runMember ?? ((m, t) => runAgentAsync(config, { name, task: t, mode: 'read', model: m.model, cli: m.cli === 'custom' ? null : m.cli, effort: m.effort, cmd: m.cli === 'custom' ? m.cmd : null, timeoutSec: m.timeoutSec ?? config.timeoutsSec.verifier, extraEnv: memberRunEnv(m), usage: { stage: `${stage}-verify`, story: story.key, round, step: `adjudication-${m.name}` } })),
+    run: runMember ?? ((m, t) => runAgentAsync(config, { name, task: t, mode: 'read', entry: m.entry, timeoutSec: m.timeoutSec ?? config.featureVerification.timeoutsSec.verifier, extraEnv: memberRunEnv(m), usage: { stage: `${stage}-verify`, story: story.key, round, step: `adjudication-${m.name}` } })),
     stage: COUNCIL_STAGE[stage],
     story: story.key,
     round,
@@ -223,7 +241,7 @@ export async function councilVerifier(config, { stage, story, round, task, produ
   const asGap = (f) => ({
     ...(f.id ? { id: f.id } : {}),
     case: f.case ?? null,
-    category: config.categories[stage].includes(f.category) ? f.category : 'other',
+    category: config.featureVerification.categories[stage].includes(f.category) ? f.category : 'other',
     subtype: f.subtype ?? (f.action !== 'fix' ? f.action : null),
     detail: `${f.action === 'rewrite' ? rewriteText(f) : f.action === 'delete-test' ? `DELETE TEST ${f.test || ''}: ${f.detail || f.text}` : f.detail || f.text}${contestedText(f)}${f.members?.length > 1 ? ` [raised by ${f.members.join(', ')}]` : ''}`,
     location: f.location ?? f.file ?? null,
@@ -236,6 +254,21 @@ export async function councilVerifier(config, { stage, story, round, task, produ
     const common = { ts: nowIso(), stage, story: story.key, round, agent_prompt_ver: producerVersion, verifier_ver: 'council', cli: 'council' };
     appendJsonl(metricsFile(config, 'verifier-runs.jsonl'), { ...common, score: verdict.score, passed: verdict.passed, gaps: gaps.length, members: merged.members.map(({ name, cli, model, score }) => ({ name, cli, model, score })) });
     appendJsonl(metricsFile(config, 'verifier-denials.jsonl'), gaps.map((gap) => ({ ...common, score: verdict.score, ...gap, attributed_agent: attributedAgent(stage, gap.root_stage) })));
+    // The stage's own verdict in the decision log, for any council size (the retro reads why plans and tests were denied).
+    logDecision(config, {
+      stage: `${stage}-verify`,
+      story: story.key,
+      round,
+      agent: name,
+      agentVer: 'council',
+      subject: PRODUCER[stage],
+      subject_ver: producerVersion ?? null,
+      decision: verdict.passed ? 'approved' : 'denied',
+      // A council of one's reason is its member's own summary; a larger council's is the merge's.
+      reason: (council.sole || council.shadow ? out.results.find((r) => r.member.blocking)?.summary : null) || verdict.summary || null,
+      score: verdict.score,
+      items: gaps.map(({ detail, ...gap }) => ({ ...gap, reason: detail, subject: attributedAgent(stage, gap.root_stage) })),
+    });
   }
   log(`${name} council round ${round}: ${verdict.passed ? 'passed' : 'not passed'} (lowest ${verdict.score}/10), ${gaps.length} gap(s)`);
   return { ...verdict, verifierVersion: 'council' };

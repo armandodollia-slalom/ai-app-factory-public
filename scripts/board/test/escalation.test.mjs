@@ -3,6 +3,7 @@
 // gh (test/fixtures/fake-gh.mjs), the Decisions section of the issue body, and `board sync` re-queueing
 // resolved cards.
 import assert from 'node:assert/strict';
+import { entryFor } from '../../pipeline/lib/pool.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -33,7 +34,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const COLUMNS = { backlog: 'Backlog', ready: 'Ready', inProgress: 'In Progress', testing: 'Testing', review: 'Pending Review', failed: 'Failed', done: 'Done' };
 const OPTIONS = Object.fromEntries(Object.values(COLUMNS).map((name, i) => [name, `opt-${i}`]));
 const BOARD = { repo: 'acme/shop', owner: 'acme', ownerType: 'user', projectNumber: 1, statusField: 'Status', columns: COLUMNS, storyLabel: 'story', blockedLabel: 'needs-human', epicLabel: 'epic', resolvedLabel: 'escalation-resolved' };
-const baseConfig = { root: '/nowhere', stateDir: '.factory/state', board: BOARD, agent: { models: { escalationQuestions: 'sonnet' } } };
+const baseConfig = { root: '/nowhere', stateDir: '.factory/state', board: BOARD, agent: {} };
 
 const QUESTIONS = normalizeQuestions({
   questions: [
@@ -98,7 +99,7 @@ test('the questions step asks Sonnet with the notes, findings and log, and falls
   assert.equal(r.questions.length, 1);
   assert.deepEqual(r.questions[0].options.map((o) => [o.id, o.recommended]), [['A', false], ['B', true]], '"Other" is added by the comment, not the agent');
   assert.equal(calls[0].name, 'escalation-questions');
-  assert.equal(calls[0].model, 'sonnet');
+  assert.equal(entryFor(baseConfig, { name: calls[0].name }).name, 'sonnet', 'it runs on its own pool entry (models.agents.escalation-questions)');
   assert.equal(calls[0].mode, 'read');
   assert.match(calls[0].task, /the plan and the story disagree/);
   assert.match(calls[0].task, /TC-03 expects 0/);

@@ -45,7 +45,7 @@ function repo(overlay, { key, files, tools }) {
   process.env.FAKE_TOOL_LOG = path.join(root, 'tools.log');
   delete process.env.FAKE_TOOL_FAIL;
   const config = loadConfig('feature-verification', root);
-  const story = { key, slug: `${key}-coupons`, file: `.factory/state/board/${key}/story.md`, planDir: `${config.plansDir}/${key}-coupons`, scenario: key.toLowerCase() };
+  const story = { key, slug: `${key}-coupons`, file: `.factory/state/board/${key}/story.md`, planDir: `${config.featureVerification.plansDir}/${key}-coupons`, scenario: key.toLowerCase() };
   write(root, story.file, `# ${key}: [BE - api] - Coupons\n\n## Acceptance Criteria\n\n- a coupon applies\n`);
   const caseFile = (n, type, extra = '') => `---\nid: TC-${key}-0${n}\ntype: ${type}\n${extra}covers: AC1\nlayer: unit\n---\n\n# TC-${key}-0${n}: case ${n}\n\n## Why\n\nBecause.\n\n## Preconditions\n\nNone.\n\n## Steps\n\n1. Do it.\n\n## Expected result\n\nIt works.\n`;
   write(root, `${story.planDir}/TC-${key}-01-applies.md`, caseFile(1, 'happy'));
@@ -65,8 +65,7 @@ test('after the story run passes, each unit\'s whole test project runs as CI run
   const overlay = {
     project: { name: 'ledger', languages: ['rust'], services: [{ name: 'api', kind: 'backend', paths: ['crates/api/**'], unitTests: 'crates/api' }] },
     implement: { unitTests: { cmd: 'cargo test --manifest-path {project}/Cargo.toml --lib' } },
-    precheck: { scenarioFile: null },
-    useSlots: false,
+    featureVerification: { precheck: { scenarioFile: null }, slots: { enabled: false } },
   };
   const r = repo(overlay, {
     key: 'RS-2',
@@ -92,8 +91,7 @@ test('after the story run passes, each unit\'s whole test project runs as CI run
 test('before the PR, every other test project that covers a touched service also runs in full; its failure is a finding', async () => {
   const overlay = {
     project: { name: 'ledger', languages: ['rust'], services: [{ name: 'api', kind: 'backend', paths: ['crates/api/**'], unitTests: 'crates/api' }, { name: 'billing', kind: 'backend', paths: ['crates/billing/**'] }] },
-    precheck: { scenarioFile: null },
-    useSlots: false,
+    featureVerification: { precheck: { scenarioFile: null }, slots: { enabled: false } },
   };
   const r = repo(overlay, {
     key: 'RS-3',
@@ -151,8 +149,7 @@ test('a Rust workspace: cargo runs the story\'s tests per crate; UI stories, uni
       frontendPaths: ['.css'],
     },
     implement: { unitTests: { cmd: 'cargo test --manifest-path {project}/Cargo.toml --lib' } },
-    precheck: { scenarioFile: null, runFullProjects: false },
-    useSlots: false,
+    featureVerification: { precheck: { scenarioFile: null, runFullProjects: false }, slots: { enabled: false } },
   };
   const r = repo(overlay, {
     key: 'RS-1',
@@ -209,7 +206,7 @@ test('a Rust workspace: cargo runs the story\'s tests per crate; UI stories, uni
   const both = systemsTouched(['crates/core/src/lib.rs'], gateSystemsSettings(twoUsers));
   assert.deepEqual(both.names, ['core']);
   assert.equal(both.shared, true, 'a library two services use is shared');
-  assert.deepEqual(frontendPathsOf({ ...impl, prCheck: { frontendPaths: null } }), ['.css', 'web/**']);
+  assert.deepEqual(frontendPathsOf(impl), ['.css', 'web/**']);
   assert.deepEqual(classifyFiles(['web/src/cart.rs'], impl), { frontend: true, backend: false, video: true, api: false });
   assert.deepEqual(classifyFiles(['crates/api/src/lib.rs', 'README.md'], impl), { frontend: false, backend: true, video: false, api: true });
 });
@@ -227,8 +224,7 @@ test('a Java project: Maven and Gradle modules each get their own JUnit runner a
       frontendPaths: ['.tsx'],
     },
     implement: { unitTests: { cmd: 'mvn -q -f {project}/pom.xml test' }, uiStory: { titleTags: ['UI'] }, reviewGate: { systems: [{ name: 'Payments', paths: ['billing/**', 'orders-service/src/main/java/shop/pay/**'], shared: true }] } },
-    precheck: { scenarioFile: null, runFullProjects: false },
-    useSlots: false,
+    featureVerification: { precheck: { scenarioFile: null, runFullProjects: false }, slots: { enabled: false } },
   };
   const r = repo(overlay, {
     key: 'JV-1',
@@ -266,7 +262,14 @@ test('a Java project: Maven and Gradle modules each get their own JUnit runner a
 test('the engine defaults name no language, framework, product or repository', () => {
   const banned = /dotnet|csproj|\.slnf?\b|slnx|razor|blazor|webapp|catalog|basket|ordering|eshop|aspire|xunit|mstest|\bTrait\b|armandodollia|cargo|maven|gradle|pytest|playwright|"src\/|"tests\//i;
   for (const stage of ['implement', 'feature-verification', 'pr-check', 'pr-video', 'board']) {
-    const text = fs.readFileSync(path.join(INSTALL_ROOT, 'scripts', stage, 'config.json'), 'utf8');
+    // The light fixer's test and docs paths, a UI verifier's report folders, the demo recording command and the PR check's shared-file patterns were the
+    // engine's own defaults in code before they moved into the default settings files (GEN-6): conventions, not a stack.
+    const doc = JSON.parse(fs.readFileSync(path.join(INSTALL_ROOT, 'scripts', stage, 'config.json'), 'utf8'));
+    delete doc.prCheck?.returnToImplementation?.lightPaths;
+    delete doc.implement?.ui?.artifactDirs;
+    delete doc.prVideo?.recordCmd;
+    delete doc.prCheck?.infraPaths;
+    const text = JSON.stringify(doc, null, 2);
     const hits = text.split('\n').filter((line) => banned.test(line));
     // `evidence.playwright` is the (null) key the board's evidence capture reads; see the report.
     assert.deepEqual(hits.filter((l) => !/^\s*"playwright": null,?$/.test(l)), [], `scripts/${stage}/config.json`);
@@ -279,6 +282,6 @@ test('the engine defaults name no language, framework, product or repository', (
   assert.deepEqual(unitTestRuns(impl, ['a/b.c'], { cwd: bare }), []);
   assert.deepEqual(systemsTouched(['a/b.c'], gateSystemsSettings(impl)).names, ['Other']);
   const fv = loadConfig('feature-verification', bare);
-  assert.deepEqual([fv.precheck.testRunners, fv.precheck.validateScenario, fv.testRoots, fv.testExtensions, Object.keys(fv.precheck.lint)], [null, null, [], [], ['.md']]);
+  assert.deepEqual([fv.featureVerification.precheck.testRunners, fv.featureVerification.precheck.validateScenario, fv.project.testRoots, fv.featureVerification.testExtensions, Object.keys(fv.featureVerification.precheck.lint)], [null, null, [], [], ['.md']]);
   assert.equal(loadConfig('board', bare).board.projectNumber, null, 'no board until the repository names one');
 });

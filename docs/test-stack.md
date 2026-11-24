@@ -38,7 +38,7 @@ Machine-wide state (slot leases and the image build lock) lives in `~/.ai-app-fa
 | `build [--force]` | Build the images, only when needed. |
 | `load <name\|path> [--hard] [--timeout s]` | Clear all state, then load the base scenario, the scenario's `extends` chain and the scenario itself. |
 | `reset [--hard] [--timeout s]` | Same as `load` with only the base scenario. |
-| `wait [--timeout s]` | Block until the stack is ready (default timeout: `teststack.timeoutSeconds`, 300). |
+| `wait [--timeout s]` | Block until the stack is ready (default timeout: `teststack.timeoutSec`, 300). |
 | `status` | One readiness pass, without waiting. |
 | `validate [<name\|path>...]` | Parse and resolve scenarios (all by default). Needs no running stack. |
 | `rebuild-changed --base <ref> [--services a,b]` | Rebuild only the images affected by `git diff <ref>...HEAD` plus uncommitted and untracked files, recreate only those containers if the stack is running, then wait. `--services` names services instead of (or on top of) a diff. |
@@ -112,7 +112,7 @@ How the stack is built and addressed. Defaults are in `scripts/stack/config.json
 | `build.inputs`, `build.exclude` | What `build` hashes to decide whether the images are current. Default: the whole repository. |
 | `publish` | Shell command that generates the compose file into `{out}`. Optional. |
 | `publishCheck` | Shell command for `publish --check`. Without it, `--check` publishes to a temporary folder and compares each generated file with the committed one. |
-| `poolSize`, `maxSlot`, `slotStride`, `leaseTtlMinutes`, `stackMemoryMb` | Slots: see [Slots](#slots-parallel-stacks). Defaults 2, 8, 1000, 240, 2000. |
+| `poolSize`, `maxSlot`, `slotStride`, `leaseTtlSec`, `stackMemoryMb` | Slots: see [Slots](#slots-parallel-stacks). Defaults 2, 8, 1000, 14400 (seconds), 2000. |
 
 Commands may use `{service}`, `{out}`, `{slot}`, `{project}`, `{imageTag}`, `{stateDir}`, `{envFile}`, `{composeFile}` and `{packs}` (the installed language packs, for a pack's build helper such as `node {packs}/dotnet/stack/publish-container.mjs {service}`, which builds .NET images with `dotnet publish -t:PublishContainer` when the services have no Dockerfile). They run from the repository root with the stack's variables (ports, `stack.env`, `build.env`) and `TESTSTACK_SLOT`, `TESTSTACK_PROJECT`, `TESTSTACK_IMAGE_TAG`, `TESTSTACK_STATE_DIR`, `TESTSTACK_ENV_FILE` and `TESTSTACK_COMPOSE_FILE` in the environment. Tools installed per user are found through `project.toolPaths`.
 
@@ -154,8 +154,8 @@ What the stack contains and when it is ready. Defaults are in `scripts/teststack
 | `infrastructureServices` | Compose services that must run but are not the application (datastores, proxies). |
 | `services` | The application's compose services. `url`: must answer with a status below 500 (`{port:<name>}` placeholders; `"http2": true` for gRPC-only ports). `databases`: databases this service migrates at startup. `queues`: queues it consumes. |
 | `restartAfterLoad` | Services that cache state a load invalidates. `{ "service", "when": "always" }` restarts on every load; `"when": "sequencesUsed"` only when a configured sequence (optionally limited by `"sequences": [names]`) handed out a value since the last load. A bare string means `always`. |
-| `healAfterSeconds` | A running service that stays unready this long while the stores are healthy is restarted once. Default 60; 0 disables. |
-| `timeoutSeconds` | Default for `--timeout`. Default 300. |
+| `healAfterSec` | A running service that stays unready this long while the stores are healthy is restarted once. Default 60; 0 disables. |
+| `timeoutSec` | Default for `--timeout`. Default 300. |
 | `commands` | Extra commands: name to module. |
 
 ### Stores
@@ -192,7 +192,7 @@ The stack is ready when all of the following hold:
 - Every database passes its `migrationsReady` probe. Databases no service lists are checked too.
 - Every queue a service lists exists and has at least one consumer.
 
-`wait` restarts a service once when it stays unready for `healAfterSeconds` while the stores are healthy. This covers a consumer that fails to connect at startup and never retries.
+`wait` restarts a service once when it stays unready for `healAfterSec` while the stores are healthy. This covers a consumer that fails to connect at startup and never retries.
 
 Choose a `url` that only answers once the service finished starting, migrations included. If the framework starts listening before the migrations ran, rely on `databases` and `migrationsReady` for that part.
 
@@ -296,7 +296,7 @@ factory stack info --slot 1   # project, state paths, image tag, ports and URLs 
 
 - When no slot is free, `lease` polls until `--wait-sec` runs out, then prints `{"ok":false,...}` and exits 2.
 - Leases live in `~/.ai-app-factory/teststack/<project>/leases/`, because they are taken from different worktrees and ports are machine-wide. Claims are serialized by an atomic `mkdir` mutex and each lease file is created with `O_EXCL`.
-- A lease is stale, and the next `lease` takes it over, when its owner pid is gone or it is older than `leaseTtlMinutes` since it was taken or last renewed (`factory stack renew --slot <n>`). The owner pid defaults to the parent process of the CLI; pass `--pid` when that is a short-lived shell.
+- A lease is stale, and the next `lease` takes it over, when its owner pid is gone or it is older than `leaseTtlSec` since it was taken or last renewed (`factory stack renew --slot <n>`). The owner pid defaults to the parent process of the CLI; pass `--pid` when that is a short-lived shell.
 - `release` does not stop the stack. Run `down` first unless the next owner should reuse it.
 - `lease` warns (stderr and `warning`) when Docker's memory looks too small for one more stack of `stackMemoryMb`.
 - Other scripts can import everything from `scripts/stack/lib/index.mjs` (`lease`, `release`, `renew`, `listLeases`, `slotInfo`, `slotPorts`, `servicesFor`, ...).

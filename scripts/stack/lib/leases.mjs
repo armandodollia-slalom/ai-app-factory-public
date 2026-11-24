@@ -98,7 +98,7 @@ function options(opts) {
     config,
     home: opts.home ?? stateHome(config),
     pool: opts.pool ?? poolSize(config),
-    ttlMs: opts.ttlMs ?? config.leaseTtlMinutes * 60_000,
+    ttlMs: opts.ttlMs ?? config.leaseTtlSec * 1000,
     now: opts.now ?? (() => Date.now()),
     isAlive: opts.isAlive ?? isPidAlive,
   };

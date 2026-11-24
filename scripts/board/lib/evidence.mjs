@@ -6,6 +6,7 @@ import { casePrefix } from '../../pipeline/lib/stories.mjs';
 import { log, readJson, run, tail } from '../../pipeline/lib/util.mjs';
 import { SECTION_END, SECTION_START } from '../../pr-video/lib/pr-video.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
 // ---------------------------------------------------------------------------------------------
 // UI stories: feature video
@@ -137,7 +138,9 @@ const shortUrl = (url) => {
   }
 };
 
-export function renderEvidence(key, tests, { maxExchanges = 60, maxBodyChars = 1500, maxChars = 60000 } = {}) {
+const EVIDENCE = defaultSettings().board.evidence;
+// The limits default to board.evidence's own.
+export function renderEvidence(key, tests, { maxExchanges = EVIDENCE.maxExchanges, maxBodyChars = EVIDENCE.maxBodyChars, maxChars = 60000 } = {}) {
   const total = tests.reduce((n, t) => n + t.exchanges.length, 0);
   const failed = tests.filter((t) => !['passed', 'skipped'].includes(t.status));
   const head = [`### API evidence for ${key}`, '', `${total} request(s) recorded from ${tests.length} verified test(s) against the test stack.${failed.length ? ` **${failed.length} test(s) did not pass on the evidence run:** ${failed.map((t) => t.title).join(', ')}.` : ''} Secrets in bodies are redacted.`, ''];
@@ -172,10 +175,10 @@ export function captureApiEvidence(config, story) {
   const settings = config.board.evidence;
   const reader = fsReader(config.root);
   const prefix = casePrefix(story.key);
-  const roots = config.testRoots ?? ['e2e', 'tests', '.factory/stack/scenarios'];
+  const roots = setting(config, 'project.testRoots');
   // API evidence replays the story's e2e specs with tracing on; without a command for that, there is none.
   if (!Array.isArray(settings?.playwright) || !settings.playwright.length) return null;
-  const extensions = settings.extensions ?? ['.ts', '.js', '.mjs'];
+  const extensions = setting(config, 'board.evidence.extensions');
   const files = roots.flatMap((r) => reader.walk(r)).filter((f) => extensions.some((e) => f.endsWith(e)) && reader.read(f)?.includes(prefix));
   if (!files.length) return null;
 

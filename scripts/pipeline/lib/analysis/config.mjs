@@ -22,6 +22,7 @@ import path from 'node:path';
 import { INSTALL_ROOT } from '../config.mjs';
 import { licenceRows } from './licences.mjs';
 import { SEVERITIES, VENDOR_SEVERITIES } from './commercial.mjs';
+import { defaultSettings } from '../settings.mjs';
 
 export const SLOTS = ['pair', 'story', 'prCheck', 'featureVerification', 'ci'];
 export const SCOPES = ['changed-lines', 'changed-files', 'repo'];
@@ -32,11 +33,16 @@ export const BUILTIN_PARSERS = ['sarif', 'msbuild', 'eslint-json', 'eslint', 'li
 export const LEVELS = ['error', 'warning', 'note'];
 export const LENSES = ['correctness', 'acceptance', 'security', 'test-value', 'rewrite', 'ui'];
 export const PRECHECK_TOOL = 'precheck';
-export const FIX_BOUNCES_DEFAULT = 2;
+// The section's defaults are in scripts/pipeline/config.json (`analysis`), merged only when a repository turns it on.
+const ANALYSIS_DEFAULTS = defaultSettings().analysis;
+export const FIX_BOUNCES_DEFAULT = ANALYSIS_DEFAULTS.maxFixRounds;
+// Per-item defaults of the lists (a pack's CI job, a licensed scanner): an item that names no timeout gets these.
+export const CI_JOB_TIMEOUT_SEC = 1800;
+export const COMMERCIAL_TIMEOUT_SEC = 3600;
 export const PLATFORMS = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'win32-x64', 'win32-arm64'];
 
 const TOOL_KEYS = ['run', 'worktreeRun', 'exclude', 'fix', 'parse', 'output', 'scope', 'baseline', 'block', 'lens', 'timeoutSec', 'extensions', 'env', 'protect', 'version', 'install', 'sample', 'description', 'okExit', 'enabled', 'when', 'onChange', 'rules', 'prepare', 'freshness', 'offline', 'needsRules', 'licence', 'data', 'rulesArg', 'validateRule', 'ruleFilter', 'licenceReview', 'errorPattern', 'missingPattern', 'forbid', 'severity', 'commercial', 'submitOnly', '$comment'];
-const SECTION_KEYS = ['$comment', 'tools', 'stages', 'fixLoop', 'suppressions', 'protect', 'coverage', 'ci', 'maxConcurrent', 'reports', 'acceptLicence', 'licenceReview', 'vars', 'secrets', 'commercial'];
+export const SECTION_KEYS = ['$comment', 'tools', 'stages', 'maxFixRounds', 'suppressions', 'protect', 'coverage', 'coverageTimeoutSec', 'ci', 'maxConcurrent', 'acceptLicence', 'licenceReview', 'vars', 'secrets', 'commercial'];
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isCmd = (v) => (typeof v === 'string' && v.trim()) || (Array.isArray(v) && v.length && v.every((a) => typeof a === 'string'));
 
@@ -89,7 +95,7 @@ export function resolveAnalysis(config, { installRoot = INSTALL_ROOT } = {}) {
   // overrides, mode and project (docs/providers/commercial-scanners.md).
   const scanners = commercialEntries(a).filter((e) => packs.tools[e.scanner]?.commercial || a.tools?.[e.scanner]?.commercial);
   for (const e of scanners) declared[e.scanner] = commercialTool(declared[e.scanner] ?? packs.tools[e.scanner], e);
-  const hasPrecheck = Object.keys(config.precheck?.lint ?? {}).length > 0;
+  const hasPrecheck = Object.keys(config.featureVerification?.precheck?.lint ?? {}).length > 0;
   if (hasPrecheck && !declared[PRECHECK_TOOL]) declared[PRECHECK_TOOL] = { builtin: PRECHECK_TOOL };
   for (const [id, raw] of Object.entries(declared)) {
     if (raw === null || raw?.enabled === false) continue;
@@ -115,12 +121,12 @@ export function resolveAnalysis(config, { installRoot = INSTALL_ROOT } = {}) {
     const t = tools.get(e.scanner);
     if (e.mode === 'local') for (const s of e.stages) if (!stages[s].includes(e.scanner)) stages[s].push(e.scanner);
     if (e.mode === 'server' && !t.run) continue; // the client's own CI integration scans; the gate waits for its check
-    jobs = [...jobs, { id: `commercial-${e.scanner}`, name: e.jobName ?? `${t.commercial?.vendor ?? e.scanner} scan (${e.scanner})`, tools: [e.scanner], required: true, timeoutMin: e.timeoutMin, secrets: refNames([e.token, ...Object.values(e.env)]), description: e.mode === 'server' ? `uploads to ${t.commercial?.vendor ?? e.scanner}; the result of the head is read from the server` : null }];
+    jobs = [...jobs, { id: `commercial-${e.scanner}`, name: e.jobName ?? `${t.commercial?.vendor ?? e.scanner} scan (${e.scanner})`, tools: [e.scanner], required: true, timeoutSec: e.timeoutSec, secrets: refNames([e.token, ...Object.values(e.env)]), description: e.mode === 'server' ? `uploads to ${t.commercial?.vendor ?? e.scanner}; the result of the head is read from the server` : null }];
   }
   // Licences: a tool, rule source or data source under a licence that is neither allowlisted nor accepted is not run or
   // loaded (factory doctor and `factory analysis check` fail on it and say why).
   const allTools = new Map(tools);
-  const licences = licenceRows({ tools: allTools }, { acceptLicence: a.acceptLicence ?? [], review: a.licenceReview ?? 'default' });
+  const licences = licenceRows({ tools: allTools }, { acceptLicence: a.acceptLicence ?? [], review: a.licenceReview ?? ANALYSIS_DEFAULTS.licenceReview });
   const gone = (r) => !r.ok || r.off;
   const bad = new Set(licences.filter((r) => gone(r) && r.kind === 'tool').map((r) => r.what));
   const dropped = (id, kind, sid) => licences.some((r) => gone(r) && r.kind === kind && (r.what === `${id} ${kind === 'rules' ? 'rules' : 'data'} ${sid}` || r.what.startsWith(`${id} rules ${sid} (`)));
@@ -146,7 +152,7 @@ export function resolveAnalysis(config, { installRoot = INSTALL_ROOT } = {}) {
     blocked,
     tools,
     stages,
-    fixLoop: { bounces: Number.isInteger(a.fixLoop?.bounces) ? a.fixLoop.bounces : FIX_BOUNCES_DEFAULT },
+    fixLoop: { bounces: Number.isInteger(a.maxFixRounds) ? a.maxFixRounds : FIX_BOUNCES_DEFAULT },
     // One pattern per id: a repository's own pattern replaces a pack's or the default of the same id.
     suppressions: [...new Map([...SUPPRESSIONS_DEFAULT, ...packs.suppressions, ...scanners.flatMap((e) => tools.get(e.scanner)?.commercial?.suppressions ?? []), ...(a.suppressions?.inline ?? [])].map((x) => [x.id, x])).values()],
     protect: [...new Set([...packs.protect, ...(a.protect ?? []), ...[...tools.values()].flatMap((t) => t.protect)])],
@@ -155,8 +161,7 @@ export function resolveAnalysis(config, { installRoot = INSTALL_ROOT } = {}) {
     vars: { ...resolveVars(config, { ...packs.vars, ...(a.vars ?? {}) }), ...Object.assign({}, ...scanners.map((e) => e.vars)) },
     commercial: scanners.filter((e) => tools.has(e.scanner) || blocked[e.scanner]).map((e) => ({ ...e, tool: tools.get(e.scanner) ?? null, blocked: blocked[e.scanner] ?? null })),
     varSpecs: { ...packs.vars, ...(a.vars ?? {}) },
-    maxConcurrent: Number.isInteger(a.maxConcurrent) ? a.maxConcurrent : 2,
-    reports: { keep: a.reports?.keep ?? 200 },
+    maxConcurrent: Number.isInteger(a.maxConcurrent) ? a.maxConcurrent : ANALYSIS_DEFAULTS.maxConcurrent,
   };
 }
 
@@ -278,7 +283,7 @@ export function normalizeTool(id, raw, installRoot = INSTALL_ROOT) {
 
 // analysis.commercial: one scanner ({ scanner, mode, ... }) or a list of them, normalised:
 //   { scanner, mode: local | server, replaces: [job ids], token: "${NAME}", env: { VENDOR_VAR: "${NAME}" },
-//     severity: { critical|high|medium|low|info: blocking|major|minor }, check, url, project, timeoutMin, stages, vars }
+//     severity: { critical|high|medium|low|info: blocking|major|minor }, check, url, project, timeoutSec, stages, vars }
 const refNames = (values) => [...new Set(values.flatMap((v) => [...String(v ?? '').matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1])))];
 const JOB_ALIASES = { sca: 'dependencies', dependency: 'dependencies', secret: 'secrets' };
 export function commercialEntries(section) {
@@ -294,7 +299,7 @@ export function commercialEntries(section) {
     check: e.check ?? null,
     url: e.url ?? null,
     project: e.project ?? null,
-    timeoutMin: Number.isInteger(e.timeoutMin) && e.timeoutMin > 0 ? e.timeoutMin : 60,
+    timeoutSec: Number.isInteger(e.timeoutSec) && e.timeoutSec > 0 ? e.timeoutSec : COMMERCIAL_TIMEOUT_SEC,
     stages: Array.isArray(e.stages) ? e.stages.filter((s) => SLOTS.includes(s) && s !== 'ci') : ['story', 'prCheck'],
     jobName: e.jobName ?? null,
     vars: { ...(isObject(e.vars) ? e.vars : {}), ...(e.project ? { project: e.project } : {}), ...(e.url ? { url: e.url } : {}) },
@@ -313,7 +318,7 @@ function commercialTool(def, e) {
     enabled: true,
     env,
     severity: { ...(def.severity ?? {}), ...e.severity },
-    commercial: { ...c, mode: e.mode, check: e.check ?? c.check ?? null, url: e.url ?? c.server?.url ?? null, project: e.project, timeoutMin: e.timeoutMin },
+    commercial: { ...c, mode: e.mode, check: e.check ?? c.check ?? null, url: e.url ?? c.server?.url ?? null, project: e.project, timeoutSec: e.timeoutSec },
     ...(server ? { run: c.server?.submit ?? null, submitOnly: true, parse: 'lines', output: 'stdout' } : {}),
   };
 }
@@ -334,12 +339,12 @@ function precheckTool(config, raw = {}) {
   return {
     ...normalizeTool(PRECHECK_TOOL, { parse: 'lines', scope: 'changed-lines', baseline: 'lines', lens: 'correctness', block: { levels: ['error', 'warning'] }, ...raw, run: null }),
     builtin: PRECHECK_TOOL,
-    lint: config.precheck?.lint ?? {},
-    fixers: config.precheck?.fix ?? {},
+    lint: config.featureVerification?.precheck?.lint ?? {},
+    fixers: config.featureVerification?.precheck?.fix ?? {},
   };
 }
 
-// A CI job, provider-neutral: { id, name, tools, required, when, fetchDepth, toolchain, timeoutMin }.
+// A CI job, provider-neutral: { id, name, tools, required, when, fetchDepth, toolchain, timeoutSec }.
 export function normalizeJob(job) {
   return {
     id: job.id,
@@ -349,7 +354,7 @@ export function normalizeJob(job) {
     when: job.when ?? ['pull_request'],
     fetchDepth: job.fetchDepth ?? 0,
     toolchain: Boolean(job.toolchain),
-    timeoutMin: job.timeoutMin ?? 30,
+    timeoutSec: job.timeoutSec ?? CI_JOB_TIMEOUT_SEC,
     description: job.description ?? null,
     // The CI secrets the job's tools read (a commercial scanner's token): each CI system's renderer exposes exactly
     // these names from its own secret store; a job without any renders as before.
@@ -435,9 +440,9 @@ export function analysisProblems(section, { packTools = {}, precheck = false } =
         else for (const id of ids) if (!known.has(id)) p.push(`analysis.stages.${slot} names "${id}", which is not a tool (${[...known].join(', ') || 'none declared'})`);
       }
   }
-  if (section.fixLoop !== undefined) {
-    const b = section.fixLoop?.bounces;
-    if (!isObject(section.fixLoop) || (b !== undefined && !(Number.isInteger(b) && b >= 0 && b <= 10))) p.push('analysis.fixLoop.bounces must be a whole number from 0 to 10');
+  if (section.maxFixRounds !== undefined) {
+    const b = section.maxFixRounds;
+    if (!(Number.isInteger(b) && b >= 0 && b <= 10)) p.push('analysis.maxFixRounds must be a whole number from 0 to 10');
   }
   if (section.suppressions !== undefined) {
     const inline = section.suppressions?.inline;
@@ -507,7 +512,7 @@ function commercialProblems(section, packTools) {
       if (!SEVERITIES.includes(v)) p.push(`${at}.severity.${k} must be ${SEVERITIES.join(', ')}`);
     }
     if (e.replaces !== undefined && (!Array.isArray(e.replaces) || e.replaces.some((j) => typeof j !== 'string'))) p.push(`${at}.replaces must list CI job ids (sast, dependencies, secrets, ...)`);
-    if (e.timeoutMin !== undefined && !(Number.isInteger(e.timeoutMin) && e.timeoutMin > 0)) p.push(`${at}.timeoutMin must be a whole number of minutes`);
+    if (e.timeoutSec !== undefined && !(Number.isInteger(e.timeoutSec) && e.timeoutSec > 0)) p.push(`${at}.timeoutSec must be a whole number of seconds`);
   });
   return p;
 }
@@ -530,7 +535,7 @@ function installProblems(install, at) {
 // Validation against the loaded config (the packs of its languages).
 export function configAnalysisProblems(config, installRoot = INSTALL_ROOT) {
   if (config?.analysis === undefined) return [];
-  return analysisProblems(config.analysis, { packTools: packAnalysis(config.project?.languages ?? [], installRoot).tools, precheck: Object.keys(config.precheck?.lint ?? {}).length > 0 });
+  return analysisProblems(config.analysis, { packTools: packAnalysis(config.project?.languages ?? [], installRoot).tools, precheck: Object.keys(config.featureVerification?.precheck?.lint ?? {}).length > 0 });
 }
 
 // Whether a finding of `rule` at `level` blocks under a tool's block list (a rule ending in * matches a prefix).

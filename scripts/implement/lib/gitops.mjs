@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { addWorktree, git, revExists } from '../../pipeline/lib/git.mjs';
 import { gateStaged } from '../../pipeline/lib/analysis/commit-gate.mjs';
+import { repoSettings } from '../../pipeline/lib/config.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 export const commitEnv = { ...process.env, PIPELINE_DISABLE: '1' };
 export const mustGit = (cwd, args) => git(cwd, args, { allowFail: false, env: commitEnv });
@@ -34,7 +36,7 @@ export function commitAll(cwd, message, specs = ['.', ...HARNESS_EXCLUDES]) {
 // The pipeline's records of the work (PR check rounds, run conditions, usage) committed with it (council C8: a PR
 // check that passed in one round left its record untracked in the worktree, so the PR branch had no PR check).
 export function commitRecords(cwd, message = 'Pipeline records') {
-  const dir = '.factory/metrics';
+  const dir = setting(repoSettings(cwd), 'metricsDir');
   try {
     if (!fs.existsSync(path.join(cwd, dir))) return false;
   } catch {

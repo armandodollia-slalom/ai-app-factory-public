@@ -240,7 +240,11 @@ export async function intercomDoctor(config, { probeBind = canBindPort } = {}) {
   const c = config?.council;
   const targets = [];
   if (c && resolveIntercom(c).enabled) targets.push({ label: 'council.intercom', settings: resolveIntercom(c) });
-  for (const stage of Object.keys(c?.stages ?? {})) if (c.stages[stage]?.intercom && resolveIntercom(c, stage).enabled) targets.push({ label: `council.stages.${stage}.intercom`, settings: resolveIntercom(c, stage) });
+  // A stage section's own override (`<section>.councilIntercom`).
+  for (const section of ['implement', 'architectureReview', 'testPlan', 'testAutomation', 'prCheck']) {
+    const own = config?.[section]?.councilIntercom;
+    if (own && resolveIntercom(c, own).enabled) targets.push({ label: `${section}.councilIntercom`, settings: resolveIntercom(c, own) });
+  }
   if (!targets.length) return { rows: [['council intercom', true, c ? 'disabled (council.intercom.enabled is not true)' : 'disabled (no council configured)']], warnings: [] };
   const rows = [];
   const warnings = [];

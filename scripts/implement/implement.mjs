@@ -27,6 +27,8 @@ import { requeue } from './lib/requeue.mjs';
 import { stopRun } from './lib/stop.mjs';
 import { lspAdapter } from './lib/lsp.mjs';
 import { isReopened, prIsOpen } from './lib/reopen.mjs';
+import { setting } from '../pipeline/lib/settings.mjs';
+import { exportSlots } from '../feature-verification/lib/slots.mjs';
 
 setLogTag('implement');
 const SCRIPT = fileURLToPath(import.meta.url);
@@ -49,7 +51,7 @@ const USAGE = `Usage: node scripts/implement/implement.mjs <command> [options]
         its stories run from one epic branch and merge into it, and the epic gets ONE PR (a bug epic: one
         PR per group of bugs the orchestrator chose; --grouping). A feature epic: --pr-split (implement.epic.prSplit)
         epic (one PR, default), story (one PR per story) or groups (PRs of stories the orchestrator groups, at most
-        implement.epic.maxStoriesPerGroup each). --delivery story keeps a branch and PR
+        implement.epic.maxTicketsPerGroup each). --delivery story keeps a branch and PR
         per story. A single ticket of an epic with an epic run in progress joins that epic's branch
         unless --standalone.
   resume [KEY] [--parallel N] [--pr] [--keep] [--background] [--stopped]
@@ -106,6 +108,9 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
   process.env.PIPELINE_DELIVERY = delivery;
   // feature verification leases its own stack slot per story when several run at once (scripts/feature-verification/lib/slots.mjs).
   process.env.IMPLEMENT_PARALLEL = String(parallel);
+  // featureVerification.slots.enabled (FV_USE_SLOTS 0 or 1 overrides it) decides for every agent of the run: the stack
+  // guard and teststack read it from FV_USE_SLOTS.
+  exportSlots(config);
   const stories = plan(config, inputs, { base, force, resumeStopped, checkPrState: !dryRun });
   if (!dryRun) {
     // The board: closed stories to Done and epics in step, then this machine claims the cards it runs.
@@ -122,7 +127,7 @@ async function runStories(config, inputs, { base, force = false, takeover = fals
   if (epicRun) {
     const { epic, only } = epicRun;
     const join = only ? ` (joining the in-progress run of ${epic.key})` : '';
-    const split = deliveryShape(stories, epicRun.grouping ?? config.implement.epic?.grouping ?? 'auto', epicRun.prSplit ?? config.implement.epic?.prSplit ?? 'epic');
+    const split = deliveryShape(stories, epicRun.grouping ?? setting(config, 'implement.epic.grouping'), epicRun.prSplit ?? setting(config, 'implement.epic.prSplit'));
     console.log(`Delivery: ${epicRun.groups ? (split.feature ? `feature epic split into PRs (${split.planned ? 'groups the orchestrator chooses' : 'one per story'})` : 'bug groups') : 'epic'}${join}. ${epicRun.groups ? (split.feature ? 'Each PR group gets its own branch and PR; the cross-story journeys are verified on one of them.' : 'Bug epic: the orchestrator groups the tickets into PRs.') : `One branch ${epicBranchFor(config, epic.key)} and one PR for ${epic.key}.`}`);
     console.log(stories.map((s, i) => `${String(i + 1).padStart(2)}. ${s.key.padEnd(10)} ${s.skip ? `skip: ${s.skip}` : `${s.branch} <- ${epicRun.groups ? 'its group branch' : "the epic's branch"}`}${s.blockedBy.length ? `  (blocked by ${s.blockedBy.join(', ')})` : ''}`).join('\n'));
   } else console.log(describePlan(stories));
@@ -252,7 +257,7 @@ async function main() {
       if (!flags['dry-run']) await recoverDeadRun(config);
       // --epic <EPIC> stands for the epic's stories on the board (its sub-issues), fetched into the cache.
       let epicDir = null;
-      const delivery = String(flags.delivery ?? config.implement.delivery ?? 'epic');
+      const delivery = String(flags.delivery ?? setting(config, 'implement.delivery'));
       if (!['epic', 'story'].includes(delivery)) {
         console.error(`--delivery must be epic or story, not "${delivery}".`);
         return 2;
@@ -278,7 +283,7 @@ async function main() {
         if (epic) epicDir = config.abs(epic.dir);
         console.log(`Epic ${epic?.key ?? flags.epic}${epic ? ` (${epic.title})` : ''}: ${stories.map((s) => s.key).join(', ')}`);
         positional.push(...stories.map((s) => s.key).filter((k) => !positional.includes(k)));
-        if (delivery === 'epic') epicRun = { epic: epicInfo(epic, stories[0].epic ?? flags.epic), tickets: stories, grouping, prSplit, groups: deliveryShape(stories, grouping ?? config.implement.epic?.grouping ?? 'auto', prSplit ?? config.implement.epic?.prSplit ?? 'epic').kind === 'groups' };
+        if (delivery === 'epic') epicRun = { epic: epicInfo(epic, stories[0].epic ?? flags.epic), tickets: stories, grouping, prSplit, groups: deliveryShape(stories, grouping ?? setting(config, 'implement.epic.grouping'), prSplit ?? setting(config, 'implement.epic.prSplit')).kind === 'groups' };
       }
       if (!positional.length) {
         console.error(`Give story keys, --epic <EPIC>, or story files.\n\n${USAGE}`);
@@ -349,7 +354,7 @@ async function main() {
       if (batch.epic?.key) {
         const epic = loadTicket(config, batch.epic.key, { fetch: false });
         const tickets = collectStories(inputs).map((s) => loadTicket(config, s.key, { fetch: false })).filter(Boolean);
-        epicRun = { epic: epicInfo(epic, batch.epic.key), tickets, only: batch.epic.only ?? null, grouping: batch.epic.grouping ?? null, prSplit: batch.epic.prSplit ?? null, groups: deliveryShape(tickets, batch.epic.grouping ?? config.implement.epic?.grouping ?? 'auto', batch.epic.prSplit ?? config.implement.epic?.prSplit ?? 'epic').kind === 'groups' };
+        epicRun = { epic: epicInfo(epic, batch.epic.key), tickets, only: batch.epic.only ?? null, grouping: batch.epic.grouping ?? null, prSplit: batch.epic.prSplit ?? null, groups: deliveryShape(tickets, batch.epic.grouping ?? setting(config, 'implement.epic.grouping'), batch.epic.prSplit ?? setting(config, 'implement.epic.prSplit')).kind === 'groups' };
       }
       return runStories(config, inputs, { base: batch.base, parallel, pr: Boolean(flags.pr ?? batch.pr), keep: Boolean(flags.keep ?? batch.keep), extraSources: batch.extraSources ?? [], epicRun, delivery: batch.delivery ?? 'story', resumeStopped: Boolean(flags.stopped) });
     }

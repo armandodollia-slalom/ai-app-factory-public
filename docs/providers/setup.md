@@ -93,11 +93,10 @@ Generated from `scripts/factory/lib/interview.mjs`. "When it applies" questions 
 | Merging and reviews | `review.enforce` | Will a repository admin let `factory review-gate enforce` require review-quorum and the CI checks on the default branch? (yes: doctor warns until it is done; no: reviews are advisory and doctor says so) | bool | always |
 | Agents | `agents.local` | Which agent CLIs are installed and signed in on this machine? | list | always |
 | Agents | `agents.ci` | Which agent CLIs may run in CI (the PR check, the retro)? | list | always |
-| Agents | `agents.default` | The default agent CLI for the pipeline's agents? | `claude`, `codex`, `copilot` | always |
-| Agents | `agents.models.claude` | Which models may claude use (aliases: opus, sonnet, sol, ...; your subscription decides)? | list | when it applies |
-| Agents | `agents.models.codex` | Which models may codex use (aliases: opus, sonnet, sol, ...; your subscription decides)? | list | when it applies |
-| Agents | `agents.models.copilot` | Which models may copilot use (aliases: opus, sonnet, sol, ...; your subscription decides)? | list | when it applies |
-| Agents | `council.seat` | Seat a council of verifiers from those CLIs and models (review and PR check)? | bool | always |
+| Agents | `agents.models.claude` | Which models may claude use (opus, sonnet, sol, or the CLI's own model ids; your subscription decides)? | list | when it applies |
+| Agents | `agents.models.codex` | Which models may codex use (opus, sonnet, sol, or the CLI's own model ids; your subscription decides)? | list | when it applies |
+| Agents | `agents.models.copilot` | Which models may copilot use (opus, sonnet, sol, or the CLI's own model ids; your subscription decides)? | list | when it applies |
+| Agents | `council.seat` | Seat a council of several verifiers from those models (architecture review and PR check)? | bool | always |
 | UI verification | `browser.available` | Is a browser (Playwright) and the test stack (Docker) available for UI verification and feature videos? | bool | always |
 | Observability | `metrics.sink` | Where do agent metrics go: none, directory, http, otlp or command? | `none`, `directory`, `http`, `otlp`, `command` | always |
 | Observability | `metrics.target` | The store's path, URL or command? | text | when it applies |

@@ -12,6 +12,7 @@ import { loadConfig } from '../../pipeline/lib/config.mjs';
 import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { createContext, orchestrate } from '../lib/orchestrate.mjs';
 import { isResolvesQuestion, RESOLVES_ANSWER } from '../../pipeline/test/fixtures/resolves-question.mjs';
+import { councilSettings } from '../../pipeline/test/fixtures/pool.mjs';
 
 const sh = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -24,7 +25,7 @@ const write = (root, rel, text) => {
 };
 const result = (o) => `Working...\nAGENT_RESULT: ${JSON.stringify(o)}\n`;
 const done = (extra = {}) => result({ status: 'done', reason: 'ok', ...extra });
-const sub = (id, owns) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], modelClass: 'medium', verify: 'code', modelReason: 'normal', verifyReason: 'code', expectedFiles: 1, expectedLoc: 5, confidence: 0.9, alternatives: [] });
+const sub = (id, owns) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], model: 'opus', verify: 'code', modelReason: 'normal', verifyReason: 'code', expectedFiles: 1, expectedLoc: 5, confidence: 0.9, alternatives: [] });
 const plan = (subtasks) => result({ mode: 'delegate', modeReason: 'several services', splitReason: 'per service', subtasks });
 const verdict = (score, findings = []) => result({ verdict: findings.some((f) => f.severity !== 'minor') ? 'CHANGES_REQUESTED' : 'APPROVED', summary: 's', score, findings });
 
@@ -48,13 +49,17 @@ function makeRepo() {
   return { repo, storyFile: path.join(repo, storyRel) };
 }
 
+// The council's members are the pool; the pair verifier council seats as many as it lists (councilSettings).
 function makeConfig(repo, council, over = {}) {
   const base = loadConfig('implement', repo);
+  const settings = council ? councilSettings(council) : {};
   return {
     ...base,
-    agent: { ...base.agent, cmd: null, cli: 'claude', models: { default: null, implementer: null }, modelIds: { ...base.agent.modelIds, codex: { sol: 'gpt-6.1-sol' } } },
-    implement: { ...base.implement, checks: [], unitTests: null, prepareCmd: null, lsp: { enabled: false }, ...over },
-    council,
+    ...settings,
+    agent: { ...base.agent, cmd: null },
+    // These councils were written for a pass score of 9 (the default is 9.5).
+    implement: { ...base.implement, checks: [], unitTests: null, prepareCmd: null, councilPassScore: 9, ...settings.implement, ...over },
+    council: { ...base.council, ...settings.council },
   };
 }
 
@@ -90,6 +95,10 @@ const adjudicationYes = async (o) => answerAll(o.task, 'yes');
 test('a three-member council on claude, codex and copilot verifies a pair: parallel members, one merged finding, then approval', async () => {
   const env = makeRepo();
   const council = { members: MEMBERS, stages: { pairVerify: {} } };
+  // The seats the stage's orchestrator kept for the ticket (the fill would hold an exploration seat).
+  const seats = path.join(env.repo, '.factory/state/council/seats/pairVerify--DEMO-1.json');
+  fs.mkdirSync(path.dirname(seats), { recursive: true });
+  fs.writeFileSync(seats, JSON.stringify({ members: [{ name: 'opus', entry: 'opus', lens: 'correctness' }, { name: 'sol', entry: 'sol', lens: 'acceptance' }, { name: 'tests', entry: 'tests', lens: 'security' }] }));
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'v1'), writeIn('src/Catalog.API/Api.cs', 'v2')],
@@ -103,10 +112,11 @@ test('a three-member council on claude, codex and copilot verifies a pair: paral
   const members = agents.calls.filter((c) => c.member);
   assert.equal(members.length, 6, 'three members, two rounds');
   const first = Object.fromEntries(members.slice(0, 3).map((c) => [c.member, c]));
-  assert.deepEqual([first.opus.cli, first.opus.model, first.opus.effort, first.opus.mode], ['claude', 'opus', 'high', 'read']);
-  assert.deepEqual([first.sol.cli, first.sol.model, first.sol.effort], ['codex', 'sol', 'high']);
-  assert.deepEqual([first.tests.cli, first.tests.model, first.tests.effort], ['copilot', 'sonnet', null]);
-  assert.match(first.sol.task, /You are \*\*sol\*\*; your lens is \*\*security\*\*[\s\S]*### The council skill/);
+  // Each member runs on its seat's pool entry (its CLI, model id and effort come from the entry).
+  assert.deepEqual([first.opus.entry, first.opus.mode], ['opus', 'read']);
+  const entry = (n) => ctx.config.models.pool.find((e) => e.name === first[n].entry);
+  assert.deepEqual(['opus', 'sol', 'tests'].map((n) => [entry(n).cli, entry(n).model, entry(n).effort]), [['claude', 'claude-opus-5-5', 'high'], ['codex', 'gpt-6.1-sol', 'high'], ['copilot', 'claude-sonnet-5.5', 'high']]);
+  assert.match(first.sol.task, /You are \*\*sol\*\*; your lens is \*\*acceptance\*\*[\s\S]*### The council skill/);
   // The implementer gets the defect once, with both members.
   const second = agents.calls.filter((c) => c.name === 'pair-implementer')[1];
   assert.equal((second.task.match(/the owner check is missing/g) ?? []).length, 1);
@@ -117,19 +127,19 @@ test('a three-member council on claude, codex and copilot verifies a pair: paral
   assert.deepEqual(rounds.map((x) => [x.stage, x.step, x.round, x.pass, x.members.map((m) => m.score).join(',')]), [['pairVerify', 'api', 1, false, '6,5,9'], ['pairVerify', 'api', 2, true, '9,10,9']]);
 });
 
-test('the council\'s rounds replace implement.maxPairRounds, and at the limit the pair escalates exactly as before', async () => {
+test('implement.maxCouncilRounds limits the pair for any council size, and at the limit the pair escalates exactly as before', async () => {
   const env = makeRepo();
-  const council = { rounds: 2, members: MEMBERS.slice(0, 2), stages: { pairVerify: {} } };
+  const council = { members: MEMBERS.slice(0, 2), stages: { pairVerify: {} } };
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])]), async (o) => (assert.match(o.task, /Escalation for story DEMO-1/), result({ action: 'fail', reason: 'needs a person' }))],
     'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'v1'), writeIn('src/Catalog.API/Api.cs', 'v2'), writeIn('src/Catalog.API/Api.cs', 'v3')],
     'pair-verifier@opus': [async () => verdict(4, [bug])],
     'pair-verifier@sol': [async () => verdict(9)],
   });
-  const r = await orchestrate(context(env, makeConfig(env.repo, council, { maxPairRounds: 5 }), agents));
+  const r = await orchestrate(context(env, makeConfig(env.repo, council, { maxCouncilRounds: 2 }), agents));
   assert.equal(r.ok, false);
   assert.equal(r.outcome, 'pair-exhausted');
-  assert.equal(agents.calls.filter((c) => c.name === 'pair-implementer').length, 2, 'two council rounds, not five');
+  assert.equal(agents.calls.filter((c) => c.name === 'pair-implementer').length, 2, 'two council rounds');
   assert.match(agents.calls.filter((c) => c.name === 'pair-implementer')[1].task, /Round 2 of at most 2/);
 });
 
@@ -178,20 +188,27 @@ test('an unavailable member stops the story under onUnavailable fail; under repo
   }
 });
 
-test('without a council the pair runs its single verifier exactly as before', async () => {
+// GEN-8: with no members configured, the pair seats its own verifier as a council of one.
+test('without council members the pair seats its own verifier as a council of one, which reviews every lens', async () => {
   const env = makeRepo();
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'v1')],
-    'pair-verifier': [async () => result({ verdict: 'APPROVED', summary: 'ok', findings: [] })],
+    'pair-verifier': [async () => result({ verdict: 'APPROVED', summary: 'ok', findings: [], score: 9.5 })],
   });
-  const r = await orchestrate(context(env, makeConfig(env.repo, undefined), agents));
-  assert.ok(r.ok);
-  assert.equal(agents.calls.filter((c) => c.name === 'pair-verifier').length, 1);
-  assert.ok(!fs.existsSync(path.join(env.repo, '.factory/metrics/council-rounds.jsonl')));
+  const r = await orchestrate(context(env, makeConfig(env.repo, undefined, { councilPassScore: 9.5 }), agents));
+  assert.ok(r.ok, JSON.stringify(r));
+  const calls = agents.calls.filter((c) => c.name === 'pair-verifier');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].member, undefined, 'it runs on the verifier role\'s own CLI and model');
+  // Council r1 (sol-14): its usage rows still name its seat and lens, so the scorecard counts its cost.
+  assert.deepEqual([calls[0].usage?.member, calls[0].usage?.lens], ['verifier', 'all']);
+  assert.match(calls[0].task, /You are the council's only member/);
+  const rows = fs.readFileSync(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((x) => [x.stage, x.members.length, x.members[0].lens, x.passScore, x.pass]), [['pairVerify', 1, 'all', 9.5, true]]);
 });
 
-test('with a council, a protected test the pair implementer deletes is restored and the round fails with a finding; the council instructions reach the implementer only with a council', async () => {
+test('a protected test the pair implementer deletes is restored and the round fails with a finding; the council instructions reach the implementer for any council size', async () => {
   const env = makeRepo();
   write(env.repo, 'src/Catalog.API/Tests/DEMO-7.Api.spec.ts', "test('TC-DEMO-7-01 another story', () => {});\n");
   sh(env.repo, 'add', '-A');
@@ -200,39 +217,42 @@ test('with a council, a protected test the pair implementer deletes is restored 
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [async (o) => (write(o.cwd, 'src/Catalog.API/Api.cs', 'v1'), fs.rmSync(path.join(o.cwd, 'src/Catalog.API/Tests/DEMO-7.Api.spec.ts')), done()), writeIn('src/Catalog.API/Api.cs', 'v2')],
-    'pair-verifier@opus': [async () => verdict(10)],
+    // One seat: the stage's own verifier sits alone.
+    'pair-verifier': [async () => verdict(10)],
   });
   const r = await orchestrate(context(env, makeConfig(env.repo, council), agents));
   assert.ok(r.ok, JSON.stringify(r));
   const impl = agents.calls.filter((c) => c.name === 'pair-implementer');
   assert.match(impl[0].task, /### Council findings: deleting tests and rewrites/);
   assert.match(impl[1].task, /src\/Catalog\.API\/Tests\/DEMO-7\.Api\.spec\.ts \(TC-DEMO-7-01\), which is protected: it belongs to another story \(DEMO-7\)\. The harness restored the file/);
-  assert.equal(agents.calls.filter((c) => c.member).length, 1, 'the round with the deleted test never reached the council');
+  assert.equal(agents.calls.filter((c) => c.name === 'pair-verifier').length, 1, 'the round with the deleted test never reached the council');
   assert.equal(fs.readFileSync(path.join(env.repo, 'src/Catalog.API/Tests/DEMO-7.Api.spec.ts'), 'utf8'), "test('TC-DEMO-7-01 another story', () => {});\n", 'merged back into the story branch intact');
 
-  // Without a council: the same deletion is not the harness's business, and the task has no council text.
+  // A council of one (no members configured) can ask for a test to be deleted too: the implementer gets the same text.
   const env2 = makeRepo();
   const agents2 = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'v1')],
-    'pair-verifier': [async () => result({ verdict: 'APPROVED', summary: 'ok', findings: [] })],
+    'pair-verifier': [async () => result({ score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] })],
   });
   await orchestrate(context(env2, makeConfig(env2.repo, undefined), agents2));
-  assert.doesNotMatch(agents2.calls.find((c) => c.name === 'pair-implementer').task, /Council findings|DELETE TEST/);
+  assert.match(agents2.calls.find((c) => c.name === 'pair-implementer').task, /### Council findings: deleting tests and rewrites/);
 });
 
-test('an implement role\'s env (beside its cli) reaches that role\'s agent runs only', async () => {
+// GEN-9: every implement agent runs on a pool entry (and so with that entry's env: pipeline/test/models.test.mjs).
+test('each implement agent runs on its pool entry: the pair verifier on its own, the pair implementer on its subtask\'s', async () => {
   const env = makeRepo();
   const agents = fakeAgents({
-    implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
+    implementer: [async () => plan([{ ...sub('api', ['src/Catalog.API/**']), model: 'tests' }])],
     'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'v1')],
-    'pair-verifier': [async () => result({ verdict: 'APPROVED', summary: 'ok', findings: [] })],
+    'pair-verifier': [async () => result({ verdict: 'APPROVED', summary: 'ok', score: 10, findings: [] })],
   });
-  const config = makeConfig(env.repo, undefined);
-  config.implement.roles = { ...config.implement.roles, verifier: { ...config.implement.roles.verifier, env: { CODEX_HOME: '~/.codex-personal' } } };
-  await orchestrate(context(env, config, agents));
-  assert.equal(agents.calls.find((c) => c.name === 'pair-verifier').extraEnv.CODEX_HOME, path.join(os.homedir(), '.codex-personal'));
-  assert.equal(agents.calls.find((c) => c.name === 'pair-implementer').extraEnv.CODEX_HOME, undefined);
+  const config = makeConfig(env.repo, { members: MEMBERS });
+  config.models = { ...config.models, agents: { ...config.models.agents, 'pair-verifier': 'sol' } };
+  const r = await orchestrate(context(env, config, agents));
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.deepEqual(['implementer', 'pair-implementer', 'pair-verifier'].map((n) => agents.calls.find((c) => c.name === n).entry), ['opus', 'tests', 'sol']);
+  assert.equal(readJsonl(path.join(env.repo, '.factory/metrics/subtask-runs.jsonl'))[0].model, 'tests', 'the run record names the entry');
 });
 
 test('a pair that ends because a blocking member gave no verdict says so (C9 proof run TYPE-1)', async () => {
@@ -276,7 +296,7 @@ test('a pair council does not block, in a later round, the change an earlier rou
 
 test('a pair council: the same objection stands when one member does not accept it on adjudication', async () => {
   const env = makeRepo();
-  const council = { members: MEMBERS.slice(0, 2), stages: { pairVerify: { rounds: 2 } } };
+  const council = { members: MEMBERS.slice(0, 2), stages: { pairVerify: {} } };
   const crash = { severity: 'blocking', category: 'correctness', file: 'src/Catalog.API/Api.cs', line: 2, issue: 'a non-numeric id throws FormatException: an unhandled 500', fix: 'answer 400 for an id that is not a number' };
   const scope = { severity: 'blocking', category: 'acceptance', lens: 'acceptance', file: 'src/Catalog.API/Api.cs', line: 4, issue: 'adds a 400 response no ticket line asks for', fix: 'remove the 400 branch' };
   const agents = fakeAgents({
@@ -289,7 +309,7 @@ test('a pair council: the same objection stands when one member does not accept 
     'pair-verifier@opus': [async () => verdict(9), async () => verdict(8, [scope]), adjudicationYes],
     'pair-verifier@sol': [async () => verdict(6, [crash]), async () => verdict(9), async (o) => answerAll(o.task, 'no')],
   });
-  const ctx = context(env, makeConfig(env.repo, council), agents);
+  const ctx = context(env, makeConfig(env.repo, council, { maxCouncilRounds: 2 }), agents);
   const r = await orchestrate(ctx);
   assert.equal(r.ok, false);
   const rounds = readJsonl(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'));
@@ -302,7 +322,7 @@ test('a pair council: the same objection stands when one member does not accept 
 // the pass. A passing council round is terminal: the signature check is answered before the council sits.
 test('a passing council round ends the pair: nothing is scheduled after it, the signature check included', async () => {
   const env = makeRepo();
-  const council = { passScore: 9, blockOn: 'any', members: MEMBERS.slice(0, 2), stages: { pairVerify: { rounds: 3 } } };
+  const council = { blockQuorum: 'any', members: MEMBERS.slice(0, 2), stages: { pairVerify: {} } };
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [
@@ -326,4 +346,23 @@ test('a passing council round ends the pair: nothing is scheduled after it, the 
   const run = readJsonl(path.join(env.repo, '.factory/metrics/subtask-runs.jsonl'))[0];
   assert.deepEqual(run.rounds.map((x) => x.verdict), ['CHANGES_REQUESTED', 'APPROVED']);
   assert.equal(run.rounds[1].codeIntelligence.answer, 'GiftMessage is a new member with no callers');
+});
+
+// Council r1 (A1): the code verifier sat the harness's seating, not the seats kept for the ticket.
+test('the pair code verifier seats the pick kept for the ticket, with its lenses', async () => {
+  const env = makeRepo();
+  const council = { members: MEMBERS, stages: { pairVerify: {} } };
+  const seats = path.join(env.repo, '.factory/state/council/seats/pairVerify--DEMO-1.json');
+  fs.mkdirSync(path.dirname(seats), { recursive: true });
+  fs.writeFileSync(seats, JSON.stringify({ stage: 'pairVerify', subject: 'DEMO-1', chooser: 'orchestrator', members: [{ name: 'sol', entry: 'sol', lens: 'acceptance', blocking: true }, { name: 'tests', entry: 'tests', lens: 'correctness', blocking: true }] }));
+  const agents = fakeAgents({
+    implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
+    'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'v1')],
+    'pair-verifier@sol': [async () => verdict(10)],
+    'pair-verifier@tests': [async () => verdict(10)],
+  });
+  const r = await orchestrate(context(env, makeConfig(env.repo, council), agents));
+  assert.ok(r.ok, JSON.stringify(r));
+  const sat = agents.calls.filter((c) => c.name === 'pair-verifier').map((c) => [c.member, c.extraEnv?.PIPELINE_COUNCIL_LENS]);
+  assert.deepEqual(sat, [['sol', 'acceptance'], ['tests', 'correctness']]);
 });

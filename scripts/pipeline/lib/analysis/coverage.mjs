@@ -2,6 +2,7 @@
 // gate. Off unless a pack or the repository declares `analysis.coverage` ({ run, format: lcov | cobertura, output }),
 // a command that runs the tests with coverage and writes the report to {out}.
 import fs from 'node:fs';
+import { setting } from '../settings.mjs';
 import path from 'node:path';
 import { changedLines } from '../lint.mjs';
 import { runAsync } from '../util.mjs';
@@ -73,7 +74,7 @@ export async function coverageFor(config, coverage, { cwd, base, outDir, exec = 
   const target = expand(coverage.output ?? '{out}', { out });
   const cmd = expand(coverage.run, { out, root: cwd });
   const [c, a] = Array.isArray(cmd) ? [cmd[0], cmd.slice(1)] : process.platform === 'win32' ? ['cmd.exe', ['/d', '/s', '/c', cmd]] : ['sh', ['-c', cmd]];
-  await exec(c, a, { cwd, timeoutSec: coverage.timeoutSec ?? 1800, signal });
+  await exec(c, a, { cwd, timeoutSec: coverage.timeoutSec ?? setting(config, 'analysis.coverageTimeoutSec'), signal });
   if (!fs.existsSync(target)) return null;
   const text = fs.readFileSync(target, 'utf8');
   const cov = coverage.format === 'cobertura' ? parseCobertura(text, cwd) : parseLcov(text, cwd);

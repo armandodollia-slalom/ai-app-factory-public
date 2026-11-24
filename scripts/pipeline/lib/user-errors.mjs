@@ -27,10 +27,11 @@ export const describesWeakerAuthz = (text) => AUTHZ.some((re) => re.test(String(
 const textOf = (f) => [f.issue, f.title, f.detail, f.reason].filter(Boolean).join(' ');
 
 // Returns the findings with every `minor` one that describes a user-visible error raised to `to`, and the raised ones.
+// Feedback from a non-blocking council member (`feedback`, the shadow seat) is never raised: it has no say in a verdict.
 export function raiseUserErrors(findings, { to, from = 'minor' } = {}) {
   const raised = [];
   const out = (findings ?? []).map((f) => {
-    if (f?.severity !== from) return f;
+    if (f?.severity !== from || f.feedback) return f;
     const authz = describesWeakerAuthz(textOf(f));
     if (!authz && !describesUserError(textOf(f))) return f;
     const r = { ...f, severity: to, raisedBy: 'harness', raisedReason: authz ? `filed as ${from}, but it says access is weaker than required; an authorization rule weaker than the ticket's is never ${from}` : `filed as ${from}, but it describes an error a user hits; such an error is never ${from}` };

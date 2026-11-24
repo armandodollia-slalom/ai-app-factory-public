@@ -9,6 +9,7 @@ import { metricsFile, readMetricsLocal } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, nowIso, readJson, readJsonl } from '../../pipeline/lib/util.mjs';
 import { OUTCOMES_FILE, bugStoriesFor, humanCommitStats, lateOutcomeRecord } from '../../implement/lib/decisions.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 export function recordLateOutcome(config, key, { listStories, host = hostFor(config) }) {
   const run = readJson(path.join(config.root, config.stateDir, 'implement', `${key}.json`), null);
@@ -21,7 +22,7 @@ export function recordLateOutcome(config, key, { listStories, host = hostFor(con
   // A ticket delivered in a group or epic PR: that PR's head is the unit branch the story was based on and merged
   // into (dogfood C2: a ticket's auto-merged group PR was recorded as "PR not merged").
   const unitBranch = String(run.epicBranch ?? run.base ?? '').replace(/^origin\//, '');
-  if (!prs.some((p) => p.state === 'merged') && unitBranch && unitBranch !== run.branch && unitBranch !== String(config.baseRef ?? '').replace(/^origin\//, '')) {
+  if (!prs.some((p) => p.state === 'merged') && unitBranch && unitBranch !== run.branch && unitBranch !== String(setting(config, 'baseRef')).replace(/^origin\//, '')) {
     const unitPrs = prsFor(unitBranch);
     if (unitPrs.length) prs = unitPrs;
   }

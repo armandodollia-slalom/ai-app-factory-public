@@ -17,12 +17,13 @@ import { loadConfig as loadStackConfig, slotPorts } from '../stack/lib/ports.mjs
 import { changedSpecs, embedSections, keyFolder, prFolder, publishFolder, readPrBody, renderSection, stageVideos, writePrSection } from './lib/pr-video.mjs';
 import { produceLocal } from './lib/local.mjs';
 import { defaultSlotDeps } from '../feature-verification/lib/slots.mjs';
+import { defaultSettings, setting } from '../pipeline/lib/settings.mjs';
 
 // The host ports of the test stack slot in use, or null when the repository has no stack.
 function stackPorts(root) {
   try {
-    const config = loadStackConfig(root);
-    return Object.keys(config.ports ?? {}).length ? slotPorts(process.env.TESTSTACK_SLOT || '0', config) : null;
+    const stack = loadStackConfig(root);
+    return Object.keys(stack.ports ?? {}).length ? slotPorts(process.env.TESTSTACK_SLOT || '0', stack) : null;
   } catch {
     return null;
   }
@@ -92,7 +93,7 @@ async function main() {
   const config = loadConfig('pr-video', root);
   // The code host the PR lives on (GitHub's GITHUB_REPOSITORY wins, as before the adapters).
   const prHost = hostFor(config, process.env.GITHUB_REPOSITORY ? { repo: process.env.GITHUB_REPOSITORY } : {});
-  const settings = { specPatterns: [], videosDir: 'artifacts/e2e-videos', storageBranch: 'pr-videos', ...(config.prVideo ?? {}) };
+  const settings = { ...defaultSettings().prVideo, ...(config.prVideo ?? {}) };
   const branch = flags.branch ?? settings.storageBranch;
   const pr = Number(flags.pr);
 
@@ -104,7 +105,7 @@ async function main() {
     const deps = {
       // One slot for the whole step: the base's stack (a bug's before-the-fix run) and the branch's, one after the other.
       stackUp: async (dir = root) => {
-        if (!lease?.ok) lease = await defaultSlotDeps.lease(`video-${flags.key}`, root, Number(config.prVideo?.slotWaitSec ?? 3600));
+        if (!lease?.ok) lease = await defaultSlotDeps.lease(`video-${flags.key}`, root, Number(setting(config, 'prVideo.slotWaitSec')));
         if (!lease?.ok) throw new Error('no free test-stack slot for the demo video');
         process.env.TESTSTACK_SLOT = String(lease.slot);
         return spawnSyncStack(dir, lease.slot, ['up']);

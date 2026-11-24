@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // Visual evidence from recorded e2e runs. e2e/video-reporter.ts writes a manifest listing every test with
 // its status, errors, video and labelled keyframes (screenshots taken at each step, demo checkpoint and at
 // the end or failure of the test). Agents can't watch the video but can open the keyframe images.
 
-export const manifestPath = (config) => path.join(config.root, config.evidence?.manifest ?? 'artifacts/e2e-videos/manifest.json');
+export const manifestPath = (config) => path.join(config.root, setting(config, 'featureVerification.evidence.manifest'));
 
 // Tests from the manifest whose title contains `casePrefix`, only if the run started at or after `since`
 // (so a manifest left over from an older run is never shown as evidence for this one).

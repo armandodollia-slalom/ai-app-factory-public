@@ -11,6 +11,7 @@ import { recordBuiltImages } from '../../factory/lib/prune.mjs';
 import { EXIT, TestStackError, log, sleep, usage } from './common.mjs';
 import { formatEnv, parseEnv } from './context.mjs';
 import { capture } from './runner.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 import { composeOrThrow, wait, publicCheck } from './readiness.mjs';
 
 const read = file => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null);
@@ -221,7 +222,7 @@ async function adoptBuild(ctx, services, vars) {
     if (!image.env || (services && !services.includes(service))) continue;
     const name = image.name ?? (values[image.env] ? stripTag(values[image.env]) : service);
     const target = `${name}:${ctx.info.imageTag}`;
-    const built = `${name}:${ctx.stack.build.builtTag ?? 'latest'}`;
+    const built = `${name}:${setting(ctx, 'stack.build.builtTag')}`;
     if (built !== target) {
       const tagged = await ctx.runner.run(['tag', built, target]);
       if (tagged.status !== 0) throw new TestStackError(`built image ${built} not found`);
@@ -280,7 +281,8 @@ export async function build(ctx, { force = false } = {}) {
 
 // Whether the base commit builds with the same command: tells "this change breaks the build" from "the build
 // environment is broken" (dogfood C5: an agent blamed the toolchain for a failure main did not have).
-export async function baselineVerdict(ctx, { base = process.env.PIPELINE_BASE_REF || 'origin/main', run = runCommand } = {}) {
+// `base`: baseRef (PIPELINE_BASE_REF overrides it), from the settings' one default.
+export async function baselineVerdict(ctx, { base = process.env.PIPELINE_BASE_REF || setting({}, 'baseRef'), run = runCommand } = {}) {
   if (!ctx.stack.build.all) return 'No baseline build: the stack has no stack.build.all command.';
   const g = (args) => spawnSync('git', args, { cwd: ctx.root, encoding: 'utf8', timeout: 300_000 });
   const sha = g(['merge-base', 'HEAD', base]).stdout.trim();

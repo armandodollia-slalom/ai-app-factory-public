@@ -8,7 +8,7 @@ const OFF = new Set(['0', 'off', 'false', 'no']);
 export function gateConfig(root = repoRoot()) {
   const impl = loadConfig('implement', root);
   const board = loadConfig('board', root);
-  return { ...impl, board: board.board, agent: { ...impl.agent, models: { ...board.agent?.models, ...impl.agent?.models } } };
+  return { ...impl, board: board.board };
 }
 
 // Why the gate must not touch GitHub here, or null: switched off (`reviewGate.enabled`, REVIEW_GATE=0),

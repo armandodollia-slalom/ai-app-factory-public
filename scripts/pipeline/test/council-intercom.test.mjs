@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { cliInvocation, runAgentAsync } from '../lib/agents.mjs';
 import { loadConfig } from '../lib/config.mjs';
 import { INTERCOM_DEFAULTS, intercomProblems, isLoopbackHost, isValidHost, isWildcardHost } from '../lib/council-config.mjs';
-import { councilFor, mergeCouncil, normalizeFinding, recordCouncilRound, runCouncil, treeFingerprint } from '../lib/council.mjs';
+import { mergeCouncil, normalizeFinding, recordCouncilRound, runCouncil, treeFingerprint } from '../lib/council.mjs';
 import { IntercomRoom, ensureFindingIds, readJournal, resolveFactEvidence, shouldDiscuss } from '../lib/intercom-room.mjs';
 import { INTERCOM_TOOLS, IntercomServer, intercomDoctor } from '../lib/intercom-server.mjs';
 import { applyRulings, discussionTask, leaseListener, listenerState, rulingTask, runIntercomDiscussion } from '../lib/intercom.mjs';
@@ -25,6 +25,7 @@ import { councilArchitectureReview } from '../../review/lib/review.mjs';
 import { councilVerifier, demoteUrlCaptionGaps } from '../../feature-verification/lib/verify.mjs';
 import { ownerEscalation } from '../../feature-verification/lib/workflows.mjs';
 import { runPrCheck } from '../../pr-check/lib/loop.mjs';
+import { councilSettings, poolSettings, seatedCouncil } from './fixtures/pool.mjs';
 
 const INSTALL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const FACTORY = path.join(INSTALL, 'bin/factory.mjs');
@@ -35,7 +36,7 @@ const M = {
   extra: { name: 'extra', cli: 'claude', model: 'opus', lens: 'rewrite', blocking: true },
   gone: { name: 'gone', cli: 'claude', model: 'opus', lens: 'rewrite', blocking: true },
 };
-const councilOf = (names, intercom = {}) => ({ stage: 'review', rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'report', intercom: { ...INTERCOM_DEFAULTS, enabled: true, ...intercom }, members: names.map((n) => M[n]) });
+const councilOf = (names, intercom = {}) => ({ stage: 'review', maxCouncilRounds: 3, councilPassScore: 9, blockQuorum: 'any', onUnavailable: 'report', intercom: { ...INTERCOM_DEFAULTS, enabled: true, ...intercom }, members: names.map((n) => M[n]) });
 const finding = (id, line = 2, extra = {}) => ({ id, severity: 'blocking', file: 'src/a.js', line, issue: `issue ${id} at line ${line}`, evidence: `src/a.js:${line}`, ...extra });
 const ok = (name, score, findings = []) => ({ member: M[name], status: 'ok', score, verdict: findings.length ? 'CHANGES_REQUESTED' : 'APPROVED', summary: `${name} summary`, findings: findings.map((f) => normalizeFinding(f, M[name])) });
 const quiet = () => {};
@@ -549,13 +550,13 @@ test('factory council review --rulings: checks room, stage, checkout and every e
     'else console.log(\'AGENT_RESULT: {"score": 10, "verdict": "APPROVED", "summary": "s", "findings": []}\');',
   ].join('\n'));
   const cmd = (name) => `MEMBER=${name} "${process.execPath}" "${member}"`;
-  fs.writeFileSync(path.join(repo, '.factory/config.json'), JSON.stringify({ baseRef: 'main', council: { intercom: { enabled: true }, members: [{ name: 'opus', cli: 'custom', cmd: cmd('opus'), lens: 'correctness' }, { name: 'sol', cli: 'custom', cmd: cmd('sol'), lens: 'security' }], stages: { review: {}, testPlan: {} } } }));
+  fs.writeFileSync(path.join(repo, '.factory/config.json'), JSON.stringify({ baseRef: 'main', ...councilSettings({ intercom: { enabled: true }, members: [{ name: 'opus', cli: 'custom', cmd: cmd('opus'), lens: 'correctness' }, { name: 'sol', cli: 'custom', cmd: cmd('sol'), lens: 'security' }], stages: { architectureReview: {}, testPlan: {} } }) }));
   spawnSync('git', ['checkout', '-qb', 'feat'], { cwd: repo });
   fs.writeFileSync(path.join(repo, 'src/a.js'), 'a1\nchanged\na3\na4\na5\n');
   spawnSync('git', ['commit', '-qam', 'change'], { cwd: repo });
   const env = noNetworkEnv();
   const factory = (...args) => spawnSync(process.execPath, [FACTORY, 'council', ...args], { cwd: repo, env, encoding: 'utf8', timeout: 120_000 });
-  const first = factory('review', '--stage', 'review', '--json');
+  const first = factory('review', '--stage', 'architectureReview', '--json');
   assert.equal(first.status, 1, first.stderr);
   const out1 = JSON.parse(first.stdout);
   const roomId = out1.intercom.roomId;
@@ -563,7 +564,7 @@ test('factory council review --rulings: checks room, stage, checkout and every e
   const runs = () => fs.readFileSync(counter, 'utf8').split('\n').filter(Boolean).length;
   // Printed by hand, a finding awaiting a ruling is listed under its split only, never as a finding that stands; the
   // same round again reuses the saved room.
-  const text = factory('review', '--stage', 'review');
+  const text = factory('review', '--stage', 'architectureReview');
   assert.match(text.stdout, new RegExp(`Splits awaiting a ruling \\(room ${roomId};`));
   assert.equal(text.stdout.includes('Findings that stand'), false);
   const ran = runs();
@@ -572,7 +573,7 @@ test('factory council review --rulings: checks room, stage, checkout and every e
 
   // The rulings file lives outside the working tree: a new file there is a changed checkout.
   const file = path.join(repo, '.factory/state/rulings.json');
-  const rule = (rulings, stage = 'review') => {
+  const rule = (rulings, stage = 'architectureReview') => {
     fs.writeFileSync(file, JSON.stringify({ roomId, rulings }));
     return factory('review', '--stage', stage, '--rulings', file, '--json');
   };
@@ -589,7 +590,7 @@ test('factory council review --rulings: checks room, stage, checkout and every e
   // A reason is checked as given, never trimmed into shape first.
   for (const reason of ['\nleading newline', `${' '.repeat(10)}${'x'.repeat(295)}`]) assert.match(rule([{ ...good[0], reason }]).stderr, /reason must be one non-empty line of at most 300/);
   // The wrong stage, a changed checkout or a held lock refuse the whole call before anything is written.
-  assert.match(rule(good, 'testPlan').stderr, /the room was a review council; pass --stage review/);
+  assert.match(rule(good, 'testPlan').stderr, /the room was a architectureReview council; pass --stage architectureReview/);
   fs.writeFileSync(path.join(repo, 'notes.txt'), 'new\n');
   assert.match(rule(good).stderr, /the checkout changed since the council reviewed it/);
   fs.rmSync(path.join(repo, 'notes.txt'));
@@ -603,7 +604,7 @@ test('factory council review --rulings: checks room, stage, checkout and every e
     const own = path.join(repo, `.factory/state/rulings-${ruling}.json`);
     fs.writeFileSync(own, JSON.stringify({ roomId, rulings: [{ ...good[0], ruling }] }));
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, [FACTORY, 'council', 'review', '--stage', 'review', '--rulings', own, '--json'], { cwd: repo, env });
+      const child = spawn(process.execPath, [FACTORY, 'council', 'review', '--stage', 'architectureReview', '--rulings', own, '--json'], { cwd: repo, env });
       let out = '';
       child.stdout.on('data', (d) => (out += d));
       child.stderr.resume();
@@ -699,16 +700,18 @@ test('PR check: an owner question from the discussion ends the check at QUESTION
   ].join('\n'));
   const base = loadConfig('pr-check', repo);
   const cmd = `"${process.execPath}" "${agent}"`;
+  const PR_SEATS = [{ name: 'opus', cli: 'custom', cmd, lens: 'correctness' }, { name: 'sol', cli: 'custom', cmd, lens: 'security' }];
   const config = {
     ...base,
     root: repo,
     agent: { ...base.agent, cmd },
-    prCheck: { ...base.prCheck, maxRounds: 3, debateTurns: 1, timeoutSec: 30, fixTimeoutSec: 30 },
-    council: { intercom: { enabled: true }, members: [{ name: 'opus', cli: 'custom', cmd, lens: 'correctness' }, { name: 'sol', cli: 'custom', cmd, lens: 'security' }], stages: { prCheck: {} } },
+    prCheck: { ...base.prCheck, maxRounds: 3, maxDebateTurns: 1, timeoutSec: 30, fixTimeoutSec: 30 },
+    ...poolSettings(PR_SEATS),
+    council: { intercom: { enabled: true } },
   };
   fs.writeFileSync(path.join(repo, 'src/a.js'), 'a1\nb2\na3\nb4\na5\n');
   spawnSync('git', ['commit', '-qam', 'change'], { cwd: repo });
-  const ctx = { id: 'PR-1', branch: 'main', baseRef: 'HEAD~1', baseRev: spawnSync('git', ['rev-parse', 'HEAD~1'], { cwd: repo, encoding: 'utf8' }).stdout.trim(), workRoot: repo, runDir: path.join(repo, '.factory/state/pr-check/PR-1'), story: { key: 'SHOP-1', file: 'story.md' }, storyTitle: 'Gift cards', isFrontend: false, conventions: [], mockups: [], video: { videos: [], unreadable: [] }, diff: { diff: 'diff --git a/src/a.js b/src/a.js\n', stat: 'src/a.js | 1 +\n', files: ['src/a.js'] } };
+  const ctx = { council: seatedCouncil(config, 'prCheck', PR_SEATS), id: 'PR-1', branch: 'main', baseRef: 'HEAD~1', baseRev: spawnSync('git', ['rev-parse', 'HEAD~1'], { cwd: repo, encoding: 'utf8' }).stdout.trim(), workRoot: repo, runDir: path.join(repo, '.factory/state/pr-check/PR-1'), story: { key: 'SHOP-1', file: 'story.md' }, storyTitle: 'Gift cards', isFrontend: false, conventions: [], mockups: [], video: { videos: [], unreadable: [] }, diff: { diff: 'diff --git a/src/a.js b/src/a.js\n', stat: 'src/a.js | 1 +\n', files: ['src/a.js'] } };
   const out = await runPrCheck(config, ctx, { fix: true });
   assert.equal(out.verdict, 'QUESTION');
   assert.ok(out.history[0].upheld.some((f) => f.severity !== 'minor'), 'a major was left to fix');
@@ -738,8 +741,8 @@ test('hosts are parsed by the platform: malformed IPv6 is refused and every wild
 
 test('doctor reports the setting with or without a council, and warns on a non-loopback bind', async () => {
   assert.deepEqual((await intercomDoctor(null)).rows, [['council intercom', true, 'disabled (no council configured)']]);
-  assert.deepEqual((await intercomDoctor({ council: { members: [M.opus] } })).rows, [['council intercom', true, 'disabled (council.intercom.enabled is not true)']]);
-  const remote = await intercomDoctor({ council: { members: [M.opus], intercom: { enabled: true, host: '0.0.0.0', allowInsecureRemote: true, advertiseHost: '198.51.100.7' } } }, { probeBind: async () => ({ ok: true, port: 1 }) });
+  assert.deepEqual((await intercomDoctor({ council: { members: 1 } })).rows, [['council intercom', true, 'disabled (council.intercom.enabled is not true)']]);
+  const remote = await intercomDoctor({ council: { members: 1, intercom: { enabled: true, host: '0.0.0.0', allowInsecureRemote: true, advertiseHost: '198.51.100.7' } } }, { probeBind: async () => ({ ok: true, port: 1 }) });
   assert.equal(remote.rows[0][1], true);
   assert.match(remote.warnings[0][1], /ssh -R/);
 });
@@ -752,23 +755,26 @@ const USAGE_0_2_95 = `Usage: factory council <command> [options]
                      default baseRef) and print the merged result; exits 0 when the council passes, 1 when not
   check [--json]     validate the council section of .factory/config.json and list who sits for each stage
 
-Stages: pairVerify, pairUiVerify, review, testPlan, testAutomation, prCheck (pairUiVerify needs a leased app stack and runs only in the pipeline).
+Stages: pairVerify, pairUiVerify, architectureReview, testPlan, testAutomation, prCheck (pairUiVerify needs a leased app stack and runs only in the pipeline).
 `;
 
 test('off: usage and every council output are what v0.2.95 printed when the setting is absent or false; --rulings is listed only when on', () => {
   const repo = gitRepo();
   const env = noNetworkEnv();
   const factory = (...args) => spawnSync(process.execPath, [FACTORY, 'council', ...args], { cwd: repo, env, encoding: 'utf8' });
-  const council = { members: [{ name: 'own', cli: 'custom', cmd: 'true', lens: 'correctness' }], stages: { review: {} } };
+  // Two families in the pool (a custom entry is its own), one seat: no one-family warning in the outputs compared.
+  const council = { members: [{ name: 'own', cli: 'custom', cmd: 'true', lens: 'correctness' }, { name: 'other', cli: 'custom', cmd: 'true', lens: 'security' }], stages: { architectureReview: { members: ['own'] } } };
   const outputs = (intercom) => {
     fs.mkdirSync(path.join(repo, '.factory'), { recursive: true });
-    fs.writeFileSync(path.join(repo, '.factory/config.json'), JSON.stringify({ council: intercom === undefined ? council : { ...council, intercom } }));
+    fs.writeFileSync(path.join(repo, '.factory/config.json'), JSON.stringify(councilSettings(intercom === undefined ? council : { ...council, intercom })));
     return [factory(), factory('help'), factory('bogus'), factory('check'), factory('check', '--json')].map((r) => [r.status, r.stdout, r.stderr]);
   };
   const absent = outputs(undefined);
   assert.equal(absent[0][1], USAGE_0_2_95);
   assert.equal(absent[2][2], `Unknown command "bogus".\n\n${USAGE_0_2_95}`);
-  assert.deepEqual(JSON.parse(absent[4][1]), { ok: true, stages: [{ stage: 'review', rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail', members: ['own'] }] });
+  const checked = JSON.parse(absent[4][1]);
+  assert.deepEqual(checked.stages.map((x) => x.stage), ['pairVerify', 'pairUiVerify', 'architectureReview', 'testPlan', 'testAutomation', 'prCheck'], 'every verifier stage is a council');
+  assert.deepEqual(checked.stages.find((x) => x.stage === 'architectureReview'), { stage: 'architectureReview', seats: 1, maxCouncilRounds: 5, councilPassScore: 9.5, blockQuorum: 'any', onUnavailable: 'fail', members: ['its own verifier (own)'] });
   assert.equal(/intercom/i.test(absent[3][1]), false);
   assert.deepEqual(outputs({ enabled: false }), absent, 'enabled: false is byte-identical to absent');
   const on = outputs({ enabled: true });
@@ -776,7 +782,7 @@ test('off: usage and every council output are what v0.2.95 printed when the sett
   assert.match(on[3][1], /council intercom \(council\.intercom\)/);
 
   // The merge and round 1 are unchanged too: no new keys, no raw results kept.
-  const off = councilFor({ council: { members: [M.opus, M.sol], stages: { review: {} } } }, 'review');
+  const off = seatedCouncil(poolSettings([M.opus, M.sol]), 'architectureReview', [M.opus, M.sol]);
   const legacy = { ...off };
   delete legacy.intercom;
   const results = [ok('opus', 6, [finding('F1')]), ok('sol', 10)];
@@ -818,15 +824,15 @@ test('member CLIs get the room through their own MCP options and the environment
   const probe = path.join(repo, 'env.mjs');
   fs.writeFileSync(probe, 'console.log(JSON.stringify({ url: process.env.FACTORY_INTERCOM_URL, same: process.env.FACTORY_INTERCOM_TOKEN === process.env.EXPECTED }));\n');
   const base = loadConfig(null, repo);
-  const res = await runAgentAsync({ ...base, root: repo, agent: { ...base.agent, cmd: null } }, { name: 'architecture-reviewer', task: 't', mode: 'read', cmd: `"${process.execPath}" "${probe}"`, cwd: repo, timeoutSec: 30, extraEnv: { FACTORY_INTERCOM_TOKEN: 'overridden', FACTORY_INTERCOM_URL: 'http://evil.invalid', EXPECTED: token }, intercom });
+  const res = await runAgentAsync({ ...base, root: repo, agent: { ...base.agent, cmd: null } }, { name: 'architecture-reviewer', task: 't', mode: 'read', entry: { name: 'probe', cli: 'custom', cmd: `"${process.execPath}" "${probe}"`, effort: 'low' }, cwd: repo, timeoutSec: 30, extraEnv: { FACTORY_INTERCOM_TOKEN: 'overridden', FACTORY_INTERCOM_URL: 'http://evil.invalid', EXPECTED: token }, intercom });
   assert.deepEqual(JSON.parse(res.output.trim().split('\n').at(-1)), { url: intercom.url, same: true });
   fs.rmSync(repo, { recursive: true, force: true });
 });
 
 // ---- fix round (council round 3) -------------------------------------------------------------------------------------
 
-test('a disposed finding never bridges a cluster, counts for blockOn or makes a synthetic score finding; the earlier disposition wins', () => {
-  const council = { ...councilOf(['opus', 'sol', 'tests']), blockOn: 'majority' };
+test('a disposed finding never bridges a cluster, counts for blockQuorum or makes a synthetic score finding; the earlier disposition wins', () => {
+  const council = { ...councilOf(['opus', 'sol', 'tests']), blockQuorum: 'majority' };
   const text = (id, line, issue) => ({ ...finding(id, line), issue });
   const results = [ok('opus', 10, [text('A', 10, 'parser accepts a negative quantity')]), ok('sol', 10, [text('B', 7, 'cache refresh races with writes')]), ok('tests', 10, [text('C', 13, 'totals ignore the discount cap')])];
   ensureFindingIds(results);

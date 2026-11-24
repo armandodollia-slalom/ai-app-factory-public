@@ -10,24 +10,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { genericHits, redactText } from '../../pipeline/lib/redact.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
-export const SCRIPT_DEFAULTS = {
-  // Which videos get a script by the agent: the headline demos (the main happy-path case of each story and an epic's
-  // journey), every video, or none (every video keeps the automatic lines).
-  scope: 'headline',
-  // The model the narrator runs on; null: the test-automation model (agent.models.automation).
-  model: null,
-  timeoutSec: 600,
-  maxSegmentChars: 280,
-  maxOpeningChars: 240,
-  maxCloseChars: 200,
-  maxTotalChars: 2400,
-  maxSegments: 16,
-  // The words a sentence needs per user action it covers, so several actions are never crammed into a short line.
-  minWordsPerAction: 5,
-  // Evidence videos (not headline demos) are subtitled with the automatic lines and silent unless this is true.
-  speakEvidence: false,
-};
+// The defaults are in scripts/pr-video/config.json (`video.script`).
+export const SCRIPT_DEFAULTS = defaultSettings().video.script;
 
 export const scriptSettings = (config = {}) => ({ ...SCRIPT_DEFAULTS, ...(config.video?.script ?? {}) });
 
@@ -45,8 +31,10 @@ export function recordedEvents(stepsLog, { env = process.env } = {}) {
   const log = stepsLog ?? {};
   const steps = log.steps ?? [];
   const pacing = log.pacing ?? {};
-  const cursorMs = Number(pacing.cursorMs ?? 600);
-  const holdMs = Number(pacing.holdMs ?? 1500);
+  // The step log records the pacing it was recorded with (milliseconds; scripts/pr-video/lib/local.mjs).
+  const P = defaultSettings().video.pacing;
+  const cursorMs = Number(pacing.cursorMs ?? P.cursorSec * 1000);
+  const holdMs = Number(pacing.holdMs ?? P.holdSec * 1000);
   const out = [];
   const actions = log.actions ?? [];
   actions.forEach((a, k) => {
@@ -125,7 +113,7 @@ const coversCount = (v) => {
 
 // The cases of every test plan in the checkout: { id, plan (the plan folder's ticket key), type, layer, priority, covers,
 // demo, title, why, file }.
-export function planCases(root, plansDir = '.factory/plans') {
+export function planCases(root, plansDir = defaultSettings().featureVerification.plansDir) {
   const dir = path.join(root, plansDir);
   const out = [];
   if (!fs.existsSync(dir)) return out;
@@ -389,14 +377,13 @@ export function scriptVideos({ root, config, videos, runAgent, settings = script
     const other = inputs.find((y) => y !== x && y.pair?.key === x.pair.key);
     x.given.pair = { side: x.pair.side, with: other?.given.id ?? null };
   }
-  const model = settings.model ?? config.agent?.models?.narrator ?? config.agent?.models?.automation ?? null;
   let pending = inputs;
   let feedback = null;
   const story = videos[0]?.key ?? null;
   for (let round = 1; round <= 2 && pending.length; round++) {
     let res;
     try {
-      res = runAgent(config, { name: 'demo-narrator', task: narratorTask(pending.map((p) => p.given), settings, feedback), mode: 'read', model, timeoutSec: settings.timeoutSec, usage: { stage: 'demo-narration', story, round, step: 'narration scripts' } });
+      res = runAgent(config, { name: 'demo-narrator', task: narratorTask(pending.map((p) => p.given), settings, feedback), mode: 'read', timeoutSec: settings.timeoutSec, usage: { stage: 'demo-narration', story, round, step: 'narration scripts' } });
     } catch (error) {
       res = { ok: false, error: String(error?.message ?? error).split('\n')[0] };
     }

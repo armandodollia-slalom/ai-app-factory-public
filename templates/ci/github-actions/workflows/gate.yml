@@ -23,7 +23,7 @@ jobs:
         token: ${{ secrets.FACTORY_TOKEN }}
     - name: Generated files are in step (never edited by hand)
       run: factory check
-    - name: Configured models are allowed (agent.allowedModels)
+    - name: Every agent names a pool entry (models.pool)
       run: factory models check
     - name: "Toolchain (yours: .github/actions/factory-toolchain), for a stack published from the application"
       if: hashFiles('.factory/stack/**') != '' && hashFiles('.github/actions/factory-toolchain/action.yml') != ''

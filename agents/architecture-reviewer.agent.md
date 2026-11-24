@@ -30,4 +30,6 @@ The ticket's Expected behaviour and acceptance criteria are the contract. The st
 
 End your final message with one line (valid JSON, no code fence):
 
-`AGENT_RESULT: {"verdict": "APPROVED|CHANGES_REQUESTED", "summary": "<one or two sentences: why this verdict>", "findings": [{"severity": "blocking|minor", "category": "fit|correctness|security|data|resilience|maintainability", "file": "<path>", "line": <number or null>, "issue": "<what is wrong>", "fix": "<what to change>"}]}`
+`AGENT_RESULT: {"score": <0-10>, "verdict": "APPROVED|CHANGES_REQUESTED", "summary": "<one or two sentences: why this verdict>", "findings": [{"severity": "blocking|minor", "category": "fit|correctness|security|data|resilience|maintainability", "file": "<path>", "line": <number or null>, "issue": "<what is wrong>", "fix": "<what to change>"}]}`
+
+`score` is required: how well the change meets the ticket, from 0 to 10 (one decimal place is allowed). A result without a score does not pass.

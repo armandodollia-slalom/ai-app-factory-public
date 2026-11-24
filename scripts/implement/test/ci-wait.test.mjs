@@ -72,7 +72,10 @@ test('a red check gets one fixing round with its log as the finding; still red i
   const wait = async () => ({ state: states.shift(), failing: ['feature-verification / check'], pending: [] });
   const ran = [];
   const gh = (args) => (args[0] === 'run' && args[1] === 'list' ? { stdout: JSON.stringify([{ databaseId: 7, conclusion: 'failure' }]) } : args[0] === 'run' ? { stdout: 'check\tstep\t2026Z FAIL BUG-4 plan=stale story changed since the plan was written\n' } : { stdout: '[]' });
-  const r = await ciGate({ gh, repo: 'a/b', pr: 'https://github.com/a/b/pull/9', branch: 'bugfix/x', cwd: dir, prCheckCli: 'pr-check.mjs', targetArgs: ['--stories', 'BUG-4'], base: 'origin/main', seedFile: path.join(dir, 'seed.json'), run: (cmd, args) => (ran.push(args), {}), wait, flakyOf: () => [] });
+  // Council r3 (sol-06): the fixing round is announced (and charged in the run record) before its fixer runs.
+  const announced = [];
+  const r = await ciGate({ gh, repo: 'a/b', pr: 'https://github.com/a/b/pull/9', branch: 'bugfix/x', cwd: dir, prCheckCli: 'pr-check.mjs', targetArgs: ['--stories', 'BUG-4'], base: 'origin/main', seedFile: path.join(dir, 'seed.json'), run: (cmd, args) => (ran.push(args), {}), wait, flakyOf: () => [], beforeFix: () => announced.push(ran.length) });
+  assert.deepEqual(announced, [0], 'announced once, before the fixer ran');
   assert.equal(r.state, 'success');
   assert.equal(r.fixed, true);
   assert.ok(ran[0].includes('--fix-first') && ran[0].includes('--push'));
@@ -175,7 +178,7 @@ test('the CI fix round knows its PR and is checked after its fix; an unchecked f
   await ciGate({ gh: () => ({ stdout: '[]' }), repo: 'a/b', pr: 'https://github.com/a/b/pull/120', branch: 'b', cwd: dir, prCheckCli: 'x', targetArgs: ['--story', 'ORDD-1'], base: 'origin/main', seedFile: path.join(dir, 's.json'), run: (c, args) => (ran.push(args), {}), wait: async () => ({ state: 'success', failing: [], pending: [] }), flakyOf: () => ['TC-06'] });
   const args = ran[0];
   assert.equal(args[args.indexOf('--pr') + 1], '120');
-  assert.equal(args[args.indexOf('--max-rounds') + 1], '2', 'a check after the fix');
+  assert.ok(!args.includes('--max-rounds'), 'the fixing run gets prCheck.maxCouncilRounds, so a check follows the fix');
   const green = { state: 'success', failing: [] };
   assert.equal(deliveryDecision({ ...green, fixRun: { verdict: 'PASS', commits: ['fc0b602'], fixerNotes: [] } }), null);
   assert.equal(deliveryDecision({ ...green, fixRun: { verdict: 'ACCEPTED', commits: ['fc0b602'], fixerNotes: [] } }), null);
@@ -184,14 +187,26 @@ test('the CI fix round knows its PR and is checked after its fix; an unchecked f
   assert.match(unchecked.reason, /the fix round's commits were not accepted by a check after them \(FAIL\)/);
 });
 
-test('implement.ciFixRounds 0 sends a retry-only pass straight to a person; the env overrides one run', async () => {
+test('implement.ci.maxFixRounds 0 sends a retry-only pass straight to a person; the env overrides one run', async () => {
   const { ciFixRounds, deliveryDecision } = await import('../lib/ci-wait.mjs');
-  assert.equal(ciFixRounds({}, {}), 1);
-  assert.equal(ciFixRounds({ ciFixRounds: 0 }, {}), 0);
-  assert.equal(ciFixRounds({ ciFixRounds: 2 }, { PIPELINE_CI_FIX_ROUNDS: '0' }), 0);
-  assert.equal(ciFixRounds({}, { PIPELINE_CI_FIX_ROUNDS: 'x' }), 1);
+  assert.equal(ciFixRounds({}, {}), 2, 'the default: two rounds in all');
+  assert.equal(ciFixRounds({ ci: { maxFixRounds: 0 } }, {}), 0);
+  assert.equal(ciFixRounds({ ci: { maxFixRounds: 2 } }, { PIPELINE_CI_FIX_ROUNDS: '0' }), 0);
+  assert.equal(ciFixRounds({}, { PIPELINE_CI_FIX_ROUNDS: 'x' }), 2);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-nofix-'));
   const ci = await ciGate({ fixRounds: 0, gh: () => ({ stdout: '[]' }), repo: 'a/b', pr: 'p', branch: 'b', cwd: dir, prCheckCli: 'x', targetArgs: [], base: 'b', seedFile: path.join(dir, 's.json'), run: () => assert.fail('no fixing round'), wait: async () => ({ state: 'success', failing: [], pending: [] }), flakyOf: () => ['TC-01'] });
   assert.deepEqual([ci.state, ci.rounds], ['flaky', 0]);
   assert.equal(deliveryDecision(ci).outcome, 'ci-flaky');
+});
+
+// Council r3/r4 (T10): `pr-check --wait-ci` waited with the wait's built-in numbers, not implement.ci.wait.*. The wait it
+// runs receives the repository's settings, and its answer is the result.
+test('pr-check --wait-ci waits with the repository\'s implement.ci.wait settings', async () => {
+  const { waitForPrCi } = await import('../lib/ci-wait.mjs');
+  const config = { root: os.tmpdir(), implement: { ci: { wait: { timeoutSec: 1234, pollSec: 7, settleSec: 3 } }, reviewGate: { ci: { required: ['build'] } } } };
+  const seen = [];
+  const wait = async (target, repo, pr, opts) => (seen.push({ repo, pr, opts }), { state: 'failure', failing: ['build'], pending: [] });
+  const out = await waitForPrCi(config, 42, { target: { host: { repo: 'acme/shop' } }, wait });
+  assert.deepEqual([seen[0].repo, seen[0].pr, seen[0].opts.timeoutSec, seen[0].opts.pollSec, seen[0].opts.settleSec, seen[0].opts.ciOptions], ['acme/shop', 42, 1234, 7, 3, { ciSettings: { required: ['build'] } }]);
+  assert.deepEqual([out.state, out.failing], ['failure', ['build']]);
 });

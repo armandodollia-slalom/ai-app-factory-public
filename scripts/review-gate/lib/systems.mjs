@@ -58,7 +58,7 @@ export function systemsFor(settings, project = settings?.project ?? null) {
 }
 
 // Test roots touch no system: a test-only change is not a change to a service.
-const testRootIgnores = (config) => [...new Set([...(config.project?.testRoots ?? []), ...(config.testRoots ?? [])])].filter((r) => r && r !== '.').map((r) => `${String(r).replace(/\/+$/, '')}/**`);
+export const testRootIgnores = (config) => [...new Set(config.project?.testRoots ?? [])].filter((r) => r && r !== '.').map((r) => `${String(r).replace(/\/+$/, '')}/**`);
 
 // `config.implement.reviewGate` with its systems resolved against `config.project` and the test roots ignored.
 export function gateSystemsSettings(config) {

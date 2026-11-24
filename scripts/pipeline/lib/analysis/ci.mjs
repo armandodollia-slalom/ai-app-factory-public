@@ -1,5 +1,5 @@
 // The analysis CI jobs (secret scan, dependency audit, ...), declared once as provider-neutral data
-// ({ id, name, tools, required, when, fetchDepth, toolchain, timeoutMin }) and rendered for each CI system. Every job only
+// ({ id, name, tools, required, when, fetchDepth, toolchain, timeoutSec }) and rendered for each CI system. Every job only
 // calls one generated Node script (.factory/bin/analysis/ci.mjs), which installs the pinned, checksum-verified tools
 // and runs them on the pull request against its base: no marketplace action for a scanner, no hosted service, no
 // account, and the job gets no secret (read access to the repository only).
@@ -30,7 +30,7 @@ export function renderGithubActions(jobs) {
   const secrets = jobs.some((j) => j.secrets?.length);
   const lines = [HEADER.trimEnd(), `name: ${GITHUB_WORKFLOW_NAME}`, '', secrets ? '# Read access only. The open-source scanners get no secret; a commercial scanner\'s job gets its own token from the repository secrets (never on fork pull requests: GitHub withholds secrets there).' : '# Read access only: the scanners get no token and no secret.', 'permissions:', '  contents: read', '', 'on:', '  pull_request:', '', 'jobs:'];
   for (const j of jobs) {
-    lines.push(`  ${j.id}:`, `    name: ${q(j.name)}`, '    runs-on: ubuntu-latest', `    timeout-minutes: ${j.timeoutMin}`, '    steps:', `    - uses: actions/checkout@${CHECKOUT_SHA} # v4.3.1`, '      with:', `        fetch-depth: ${j.fetchDepth}`, '        persist-credentials: false', `    - uses: actions/setup-node@${SETUP_NODE_SHA} # v4.4.0`, '      with:', '        node-version: 20.x');
+    lines.push(`  ${j.id}:`, `    name: ${q(j.name)}`, '    runs-on: ubuntu-latest', `    timeout-minutes: ${Math.ceil(j.timeoutSec / 60)}`, '    steps:', `    - uses: actions/checkout@${CHECKOUT_SHA} # v4.3.1`, '      with:', `        fetch-depth: ${j.fetchDepth}`, '        persist-credentials: false', `    - uses: actions/setup-node@${SETUP_NODE_SHA} # v4.4.0`, '      with:', '        node-version: 20.x');
     if (j.toolchain) lines.push('    - name: "Toolchain (yours: .github/actions/factory-toolchain)"', "      if: hashFiles('.github/actions/factory-toolchain/action.yml') != ''", '      uses: ./.github/actions/factory-toolchain');
     // The base branch reaches the shell through the environment, never by template expansion into the script.
     lines.push(`    - name: ${q(j.name)}`, '      env:', '        BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}', ...(j.secrets ?? []).map((n) => `        ${n}: \${{ secrets.${n} }}`), `      run: FACTORY_CACHE_DIR="$RUNNER_TEMP/factory-cache" ${cmd(j, '"origin/$BASE_REF"')}`);
@@ -49,7 +49,7 @@ export function renderGitlabCi(jobs) {
       `  # ${j.name}${j.required ? ' (required: keep "Pipelines must succeed" on)' : ''}`,
       '  stage: test',
       '  image: node:20',
-      `  timeout: ${j.timeoutMin}m`,
+      `  timeout: ${Math.ceil(j.timeoutSec / 60)}m`,
       '  rules:',
       "    - if: '$CI_PIPELINE_SOURCE == \"merge_request_event\"'",
       ...(j.required ? [] : ['      allow_failure: true']),
@@ -74,7 +74,7 @@ export function renderAzurePipelines(jobs) {
     lines.push(
       `- job: ${j.id.replace(/-/g, '_')}`,
       `  displayName: ${q(j.name)}`,
-      `  timeoutInMinutes: ${j.timeoutMin}`,
+      `  timeoutInMinutes: ${Math.ceil(j.timeoutSec / 60)}`,
       ...(j.required ? [] : ['  continueOnError: true']),
       '  pool:',
       '    vmImage: ubuntu-latest',
@@ -104,18 +104,18 @@ export function renderAzurePipelines(jobs) {
 // in the factory's definition at its markers (render.mjs), each calling the generated script.
 export function jenkinsSnippets(jobs) {
   if (!jobs.length) return null;
-  return { 'factory:analysis': jobs.map((j) => [`stage(${q(j.name)}) {`, ...(j.secrets?.length ? ['  environment {', ...j.secrets.map((n) => `    ${n} = credentials('${n.toLowerCase().replace(/_/g, '-')}')`), '  }'] : []), `  options { timeout(time: ${j.timeoutMin}, unit: 'MINUTES') }`, `  steps { ${j.required ? '' : "catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') { "}sh 'FACTORY_CACHE_DIR="$WORKSPACE/.factory-cache" ${cmd(j, '"origin/${CHANGE_TARGET:-main}"')}'${j.required ? '' : ' }'} }`, '}'].join('\n')).join('\n') };
+  return { 'factory:analysis': jobs.map((j) => [`stage(${q(j.name)}) {`, ...(j.secrets?.length ? ['  environment {', ...j.secrets.map((n) => `    ${n} = credentials('${n.toLowerCase().replace(/_/g, '-')}')`), '  }'] : []), `  options { timeout(time: ${j.timeoutSec}, unit: 'SECONDS') }`, `  steps { ${j.required ? '' : "catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') { "}sh 'FACTORY_CACHE_DIR="$WORKSPACE/.factory-cache" ${cmd(j, '"origin/${CHANGE_TARGET:-main}"')}'${j.required ? '' : ' }'} }`, '}'].join('\n')).join('\n') };
 }
 export function circleciSnippets(jobs) {
   if (!jobs.length) return null;
   return {
-    'factory:analysis-jobs': jobs.map((j) => [`factory-analysis-${j.id}:`, '  executor: factory', '  steps:', '    - checkout', `    - run:`, `        name: ${q(j.name)}`, `        no_output_timeout: ${j.timeoutMin}m`, `        command: FACTORY_CACHE_DIR="$HOME/.factory-cache" ${cmd(j, '"origin/main"')}`].join('\n')).join('\n'),
+    'factory:analysis-jobs': jobs.map((j) => [`factory-analysis-${j.id}:`, '  executor: factory', '  steps:', '    - checkout', `    - run:`, `        name: ${q(j.name)}`, `        no_output_timeout: ${Math.ceil(j.timeoutSec / 60)}m`, `        command: FACTORY_CACHE_DIR="$HOME/.factory-cache" ${cmd(j, '"origin/main"')}`].join('\n')).join('\n'),
     'factory:analysis-workflow': jobs.map((j) => `- factory-analysis-${j.id}: { context: [factory] }`).join('\n'),
   };
 }
 export function bitbucketSnippets(jobs) {
   if (!jobs.length) return null;
-  return { 'factory:analysis-steps': jobs.map((j) => [`- step:`, `    name: ${q(j.name)}`, `    max-time: ${j.timeoutMin}`, '    script:', `      - git fetch --quiet origin "$BITBUCKET_PR_DESTINATION_BRANCH"`, `      - FACTORY_CACHE_DIR="$BITBUCKET_CLONE_DIR/.factory-cache" ${cmd(j, '"origin/$BITBUCKET_PR_DESTINATION_BRANCH"')}`].join('\n')).join('\n') };
+  return { 'factory:analysis-steps': jobs.map((j) => [`- step:`, `    name: ${q(j.name)}`, `    max-time: ${Math.ceil(j.timeoutSec / 60)}`, '    script:', `      - git fetch --quiet origin "$BITBUCKET_PR_DESTINATION_BRANCH"`, `      - FACTORY_CACHE_DIR="$BITBUCKET_CLONE_DIR/.factory-cache" ${cmd(j, '"origin/$BITBUCKET_PR_DESTINATION_BRANCH"')}`].join('\n')).join('\n') };
 }
 
 export const RENDERERS = {

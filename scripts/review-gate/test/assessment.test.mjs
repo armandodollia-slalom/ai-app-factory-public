@@ -215,3 +215,16 @@ test("governance paths are a floor whatever the repository's own floor.paths lis
   const other = ['.gitlab-ci.yml', '.gitlab/ci/factory-gate.yml', '.gitlab/CODEOWNERS', '.azure-pipelines/factory-pr.yml', '.azure-pipelines/templates/factory-setup.yml', '.factory/ci/toolchain.sh'];
   assert.deepEqual(overridePathsHit(other, settings).map((h) => h.path), ['.gitlab-ci.yml', '.gitlab/ci/**', '.gitlab/CODEOWNERS', '.azure-pipelines/**', '.factory/ci/**'], 'GitLab CI and Azure Pipelines files are governance too');
 });
+
+// Council r3 (sol-24): the PR check's confidence criterion reads each round's recorded pass decision, never a bare 10.
+test('confidence counts PR check rounds to the recorded pass: a 9.5 that passed counts, a 10 recorded as not passed does not', async () => {
+  const { ticketSignals } = await import('../lib/confidence.mjs');
+  const row = (round, score, pass) => ({ ts: `2026-11-0${round}T00:00:00Z`, story: 'BUG-1', round, score, pass });
+  assert.equal(ticketSignals('BUG-1', { prChecks: [row(1, 9.5, true)] }).prCheckRounds, 1);
+  assert.equal(ticketSignals('BUG-1', { prChecks: [row(1, 10, false)] }).prCheckRounds, null, 'not judged: 10 without a pass');
+  assert.equal(ticketSignals('BUG-1', { prChecks: [row(1, 8, false), row(2, 9.6, true)] }).prCheckRounds, 2);
+  // Council r4 (sol-24): the notice shows the pass at its actual score, never a 9.5 as 10/10.
+  const { criteria, describeSignals } = await import('../lib/confidence.mjs');
+  const signals = ticketSignals('BUG-1', { prChecks: [row(1, 9.5, true)] });
+  assert.ok(describeSignals(signals, criteria(signals)).includes('PR check passed: met (passed at 9.5/10 in round 1)'), describeSignals(signals, criteria(signals)).join('\n'));
+});

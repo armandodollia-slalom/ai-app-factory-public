@@ -12,12 +12,13 @@ import { treeFingerprint } from './council.mjs';
 import { DISPUTE_EFFECTS, appendToJournal, ensureFindingIds, newRoomId, readJournal, roomPrefix, safeSlug, scrub, shouldDiscuss } from './intercom-room.mjs';
 import { IntercomServer } from './intercom-server.mjs';
 import { extractResult, log as defaultLog, run, sha } from './util.mjs';
+import { setting } from './settings.mjs';
 
 const oneLineOf = (text) => String(text ?? '').replace(/\s+/g, ' ').slice(0, 300);
 
 export { shouldDiscuss };
 
-export const intercomStateDir = (config) => (config?.root ? path.join(config.root, config.stateDir ?? '.factory/state', 'council', 'intercom') : null);
+export const intercomStateDir = (config) => (config?.root ? path.join(config.root, setting(config, 'stateDir'), 'council', 'intercom') : null);
 
 // ---- one listener per process --------------------------------------------------------------------------------------
 let shared = null; // { key, server, starting, refs }

@@ -14,31 +14,10 @@ import { caseIdOf, parseResult, planCases } from './script.mjs';
 // The recorded test of a case (its last attempt), with or without a video.
 export const apiTestOfCase = (manifest, caseId) => (manifest?.tests ?? []).filter((t) => caseIdOf(t.title) === caseId).sort((a, b) => (a.retry ?? 0) - (b.retry ?? 0)).at(-1) ?? null;
 import { isBug } from './bugpair.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
-export const API_EVIDENCE_DEFAULTS = {
-  enabled: true,
-  // Response and request headers shown (others are left out); credentials are masked by name whatever this says.
-  headers: [
-    'content-type',
-    'location',
-    'allow',
-    'retry-after',
-    'accept',
-    'x-requestid',
-    'x-request-id',
-    'idempotency-key',
-    'x-idempotency-key',
-    'x-correlation-id',
-    'if-match',
-    'if-none-match',
-  ],
-  maxBodyBytes: 1500,
-  // Exchange pairs shown per bug in the PR; the rest are collapsed.
-  maxPairs: 3,
-  // A payment exchange (card data by name or by shape anywhere in it): `withhold` (the guarantee) publishes its method,
-  // path without the query and status only; `mask` publishes it with card data masked (best effort, see the docs).
-  paymentBodies: 'withhold',
-};
+// The defaults are in scripts/pr-video/config.json (`video.apiEvidence`).
+export const API_EVIDENCE_DEFAULTS = defaultSettings().video.apiEvidence;
 export const apiEvidenceSettings = (config = {}) => ({ ...API_EVIDENCE_DEFAULTS, ...(config.video?.apiEvidence ?? {}) });
 
 const SECRET_NAME = /authorization|cookie|(?<!(?:continuation|page|next|cursor)[-_.]?)token|secret|password|passwd|passphrase|(?:^|[-_.])(?:pass|pwd)(?:$|[-_.])|(?:api|access|private|auth|encryption|signing|subscription|functions?|master|host|client|app)[-_.]?key|client[-_.]?principal|session|credential|signature|(?:^|[-_.])pat$/i;
@@ -1173,7 +1152,7 @@ export function writeProse({ config, bugs, runAgent, log = () => {}, env = proce
   for (let round = 1; round <= 2 && pending.length && runAgent && settings.scope !== 'none'; round++) {
     let res;
     try {
-      res = runAgent(config, { name: 'demo-narrator', task: proseTask(pending) + (feedback ? `\n\nYour previous answer did not pass the checks; fix exactly these:\n${feedback.map((f) => `- ${f}`).join('\n')}` : ''), mode: 'read', model: settings.model ?? config.agent?.models?.narrator ?? config.agent?.models?.automation ?? null, timeoutSec: settings.timeoutSec ?? 600, usage: { stage: 'demo-narration', story: pending[0].key, round, step: 'reproduction steps' } });
+      res = runAgent(config, { name: 'demo-narrator', task: proseTask(pending) + (feedback ? `\n\nYour previous answer did not pass the checks; fix exactly these:\n${feedback.map((f) => `- ${f}`).join('\n')}` : ''), mode: 'read', timeoutSec: setting(config, 'video.script.timeoutSec'), usage: { stage: 'demo-narration', story: pending[0].key, round, step: 'reproduction steps' } });
     } catch (error) {
       res = { ok: false, error: String(error?.message ?? error) };
     }

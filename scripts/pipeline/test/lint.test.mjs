@@ -46,10 +46,10 @@ test('util.run hands stdin over so the child always sees end-of-file (spawnSync 
 test('lintChanged never skips in silence: a configured linter that is missing is skipped, an engine default is a note', () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lint-skip-')));
   fs.mkdirSync(path.join(root, '.factory'));
-  fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({ precheck: { lint: { '.md': ['node_modules/.bin/markdownlint', '{files}'] } } }));
+  fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({ featureVerification: { precheck: { lint: { '.md': ['node_modules/.bin/markdownlint', '{files}'] } } } }));
   fs.writeFileSync(path.join(root, 'a.md'), '# a\n');
   fs.writeFileSync(path.join(root, 'b.ts'), 'x\n');
-  const config = { root, precheck: { lint: { '.md': ['node_modules/.bin/markdownlint', '{files}'], '.ts': ['node_modules/.bin/eslint', '{files}'] } } };
+  const config = { root, featureVerification: { precheck: { lint: { '.md': ['node_modules/.bin/markdownlint', '{files}'], '.ts': ['node_modules/.bin/eslint', '{files}'] } } } };
   const skipped = [];
   const notes = [];
   const errors = lintChanged(config, ['a.md', 'b.ts'], { skipped, notes, runner: () => assert.fail('nothing can run') });
@@ -63,8 +63,8 @@ test('lintChanged never skips in silence: a configured linter that is missing is
 
 test('lintable: vendored, minified and generated code is never linted; the application\'s own browser scripts are', () => {
   const files = ['src/WebApp/wwwroot/js/cart.js', 'src/WebApp/wwwroot/lib/bootstrap/dist/js/bootstrap.js', 'src/Identity.API/wwwroot/js/site.min.js', 'web/node_modules/x/index.js', '.factory/bin/factory.mjs', 'e2e/a.spec.ts'];
-  assert.deepEqual(lintable({ precheck: {} }, files), ['src/WebApp/wwwroot/js/cart.js', 'e2e/a.spec.ts']);
-  assert.deepEqual(lintable({ precheck: { lintExclude: ['e2e/**'] } }, files).includes('e2e/a.spec.ts'), false, 'a repository may set its own list');
+  assert.deepEqual(lintable({ featureVerification: { precheck: {} } }, files), ['src/WebApp/wwwroot/js/cart.js', 'e2e/a.spec.ts']);
+  assert.deepEqual(lintable({ featureVerification: { precheck: { lintExclude: ['e2e/**'] } } }, files).includes('e2e/a.spec.ts'), false, 'a repository may set its own list');
 });
 
 test('lint messages name the linter, not its interpreter', async () => {

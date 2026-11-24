@@ -1,11 +1,12 @@
 // Pure logic of the orchestrated implement flow: the orchestrator's plan (parsing and validation), the
 // `owns` globs (matching, overlap, scope enforcement), dependency order, verifier verdicts and model
 // classes. No I/O, so all of it is unit tested.
-import { resolveModel as resolvePipelineModel } from '../../pipeline/lib/agents.mjs';
 import { extractResult } from '../../pipeline/lib/util.mjs';
 import { frontendPatterns, frontendServices, matchesAnyPath } from './project.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
-export const MODEL_CLASSES = ['small', 'medium', 'large'];
+// A story's estimated size (the planner's `features.estimatedSize`).
+export const SIZES = ['small', 'medium', 'large'];
 export const VERIFY_KINDS = ['code', 'ui'];
 const ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -158,15 +159,15 @@ export const scopeViolations = (files, owns) => files.filter((f) => !matchesAny(
 //   titleTags     tags that open the title's bracket: `[FE - ...]` (default ["FE"])
 //   components    names in the title's component list `[XX - A, B]`; null = the names of the services
 //                 with `kind: "frontend"`
-//   filePatterns  path patterns (extension, folder or glob) of files that, named anywhere in the story,
-//                 make it a UI story; null = `project.frontendPaths` plus the frontend services' paths
+//   filePatterns  path patterns of files that, named anywhere in the story, make it a UI story:
+//                 `project.frontendPaths` plus the frontend services' paths
 export function uiRules(config) {
   const given = config?.implement?.uiStory ?? {};
   const project = config?.project ?? {};
   return {
-    titleTags: given.titleTags ?? ['FE'],
+    titleTags: given.titleTags ?? setting(config, 'implement.uiStory.titleTags'),
     components: given.components ?? frontendServices(project).map((s) => s.name),
-    filePatterns: given.filePatterns ?? frontendPatterns(project),
+    filePatterns: frontendPatterns(project),
   };
 }
 
@@ -222,7 +223,6 @@ export function selfSubtask(plan, { uiStory }) {
     acceptance: Array.isArray(given.acceptance) && given.acceptance.length ? given.acceptance : ['Every acceptance criterion of the story'],
     owns: ['**'],
     dependsOn: [],
-    modelClass: 'large',
     verify: given.verify === 'ui' && uiStory ? 'ui' : 'code',
     scenario: given.scenario ?? null,
     self: true,
@@ -233,7 +233,7 @@ export function selfSubtask(plan, { uiStory }) {
 // `fatal` errors (too many subtasks) fail the story without asking again; the others go back to the
 // orchestrator once. `plan` is the normalized plan when ok.
 export function validatePlan(raw, { storyText = '', limits = {} } = {}) {
-  const { maxSubtasks = 4, maxLargeSubtasks = 1 } = limits;
+  const maxSubtasks = limits.maxSubtasks ?? defaultSettings().implement.maxSubtasks;
   const errors = [];
   const fatal = [];
   // A ticket with mockups is a UI story too (limits.hasMockups, from the ticket's mockups folder).
@@ -246,7 +246,7 @@ export function validatePlan(raw, { storyText = '', limits = {} } = {}) {
 
   if (!nonEmptyString(raw.modeReason)) errors.push('`modeReason` is required: one short sentence on why delegate or self');
   const features = raw.features && typeof raw.features === 'object' ? raw.features : {};
-  if (features.estimatedSize != null && !MODEL_CLASSES.includes(features.estimatedSize)) errors.push('`features.estimatedSize` must be small, medium or large');
+  if (features.estimatedSize != null && !SIZES.includes(features.estimatedSize)) errors.push('`features.estimatedSize` must be small, medium or large');
   const planDecision = {
     modeReason: raw.modeReason ?? null,
     splitReason: raw.splitReason ?? null,
@@ -290,10 +290,9 @@ export function validatePlan(raw, { storyText = '', limits = {} } = {}) {
         if (n === '**' || n === '' || n === '*') errors.push(`${at}: owns "${g}" covers the whole repo; use self mode instead`);
       }
     if (s.dependsOn != null && (!Array.isArray(s.dependsOn) || !s.dependsOn.every((d) => typeof d === 'string'))) errors.push(`${at}: \`dependsOn\` must be a list of subtask ids`);
-    if (!MODEL_CLASSES.includes(s.modelClass)) errors.push(`${at}: \`modelClass\` must be one of ${MODEL_CLASSES.join(', ')}`);
-    if (s.modelClass === 'large' && !nonEmptyString(s.justification)) errors.push(`${at}: modelClass "large" needs a \`justification\``);
-    // An explicit model alias (for example "sol" on Copilot) overrides the class; it must be allowed.
-    if (s.model != null && (!nonEmptyString(s.model) || (limits.allowedModels && !limits.allowedModels.includes(s.model)))) errors.push(`${at}: \`model\` must be one of the allowed models (${(limits.allowedModels ?? []).join(', ') || 'agent.allowedModels'}) or left out`);
+
+    // The pool entry its pair implementer runs on: one the planner may give a subtask (implement.subtaskModels).
+    if (!nonEmptyString(s.model) || (limits.subtaskModels && !limits.subtaskModels.includes(s.model))) errors.push(`${at}: \`model\` must name the models.pool entry its pair implementer runs on, one of ${(limits.subtaskModels ?? []).join(', ') || 'implement.subtaskModels'}`);
     if (!VERIFY_KINDS.includes(s.verify)) errors.push(`${at}: \`verify\` must be "code" or "ui"`);
     if (s.verify === 'ui' && !uiStory) errors.push(`${at}: verify "ui" is only allowed for UI stories`);
     if (s.scenario != null && !nonEmptyString(s.scenario)) errors.push(`${at}: \`scenario\` must be an app-stack scenario name`);
@@ -305,17 +304,13 @@ export function validatePlan(raw, { storyText = '', limits = {} } = {}) {
       acceptance: s.acceptance,
       owns: s.owns,
       dependsOn: s.dependsOn ?? [],
-      modelClass: s.modelClass,
-      ...(s.model ? { model: s.model } : {}),
+      model: s.model,
       verify: s.verify,
       justification: s.justification ?? null,
       scenario: s.scenario ?? null,
       decision: decisionFields(s, null),
     });
   });
-
-  const large = norm.filter((s) => s.modelClass === 'large');
-  if (large.length > maxLargeSubtasks) errors.push(`at most ${maxLargeSubtasks} subtask(s) may use modelClass "large" (got ${large.map((s) => s.id).join(', ')})`);
 
   for (const s of norm) for (const d of s.dependsOn) if (!ids.has(d) || d === s.id) errors.push(`subtask ${s.id}: dependsOn "${d}" is not another subtask`);
   errors.push(...ownsOverlaps(norm));
@@ -361,52 +356,18 @@ export function ownsOverlaps(subtasks) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Models and CLIs
+// Rewrites
 // ---------------------------------------------------------------------------------------------
-
-// The CLI a role runs on: `implement.roles.<role>.cli`, else the pipeline's agent CLI.
-export const roleCli = (config, role) => config.implement?.roles?.[role]?.cli || config.agent.cli;
-
-// The model alias for a model class (`modelClasses` in scripts/implement/config.json maps small, medium
-// and large to aliases from agent.allowedModels). It is checked against the role's CLI here, through the
-// pipeline's one model check (resolveModel in scripts/pipeline/lib/agents.mjs), so a plan that needs a
-// model the CLI may not run (a disallowed alias, or Codex, which has no allowed model ids) fails at plan
-// validation instead of halfway through the story. runAgent maps the alias to the CLI's own id.
-export function resolveModel(config, role, modelClass) {
-  const alias = config.modelClasses?.[modelClass] ?? config.agent.models?.default ?? null;
-  if (!config.agent.cmd) resolvePipelineModel(config, alias, roleCli(config, role));
-  return alias;
-}
-
-// THE place the implement harness picks a model for an agent run: every orchestrator, pair and verifier
-// run goes through here. The orchestrator uses `agent.models.implementer` when set, else its role's
-// model class; other roles use the class they are given (planner's choice, or the verifier's fixed one).
-export function resolveModelForRole(config, role, modelClass = null, explicit = null) {
-  // A subtask's explicit `model` alias (the planner's choice, e.g. sol) wins over its class.
-  if (explicit) {
-    if (!config.agent.cmd) resolvePipelineModel(config, explicit, roleCli(config, role));
-    return explicit;
-  }
-  if (role === 'orchestrator') {
-    const pinned = config.agent.models?.implementer;
-    if (pinned) {
-      if (!config.agent.cmd) resolvePipelineModel(config, pinned, roleCli(config, role));
-      return pinned;
-    }
-    return resolveModel(config, role, config.implement?.roles?.orchestrator?.modelClass ?? 'large');
-  }
-  return resolveModel(config, role, modelClass ?? config.implement?.roles?.[role]?.modelClass ?? 'medium');
-}
 
 // A subtask the orchestrator rewrote after an escalation: the same checks as a plan, against the
 // subtasks it must not overlap. Its reasoning fields carry over from the original when not given.
 export function validateRewrite(original, proposed, others, { storyText = '', limits = {} } = {}) {
-  const allowed = ['goal', 'acceptance', 'owns', 'modelClass', 'model', 'justification', 'verify', 'scenario', 'modelReason', 'verifyReason', 'expectedFiles', 'expectedLoc', 'confidence', 'alternatives'];
+  const allowed = ['goal', 'acceptance', 'owns', 'model', 'justification', 'verify', 'scenario', 'modelReason', 'verifyReason', 'expectedFiles', 'expectedLoc', 'confidence', 'alternatives'];
   const flat = (s) => ({ ...s, ...(s.decision ?? {}), dependsOn: [] });
   const candidate = { ...flat(original), ...Object.fromEntries(Object.entries(proposed ?? {}).filter(([k]) => allowed.includes(k))), id: original.id };
   const v = validatePlan(
     { mode: 'delegate', modeReason: '-', splitReason: '-', subtasks: [candidate, ...others.map(flat)] },
-    { storyText, limits: { ...limits, maxSubtasks: Infinity, maxLargeSubtasks: Infinity } },
+    { storyText, limits: { ...limits, maxSubtasks: Infinity } },
   );
   if (!v.ok) return { ok: false, errors: v.errors };
   return { ok: true, subtask: { ...v.plan.subtasks[0], dependsOn: original.dependsOn ?? [] } };

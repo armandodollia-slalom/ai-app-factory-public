@@ -30,11 +30,12 @@ import { log as defaultLog, readJson, run, tail } from './util.mjs';
 import { withDerivedClasses } from './policy-classes.mjs';
 import { mergeLatestBase } from './base-merge.mjs';
 import { omittedNote, postOmitted, sendWithReductionAsync } from './hosts/refusal.mjs';
+import { defaultSettings, setting } from './settings.mjs';
 
 export const API = 'https://api.github.com';
 // GitHub App names are global and at most 34 characters.
 export const MAX_APP_NAME = 34;
-export const BOT_DEFAULTS = { enabled: true, namePattern: 'dev-bot-{login}', credentialsDir: '~/.config/ai-app-factory' };
+export const BOT_DEFAULTS = defaultSettings().bot;
 const SETUP_CMD = 'factory bot setup';
 const REFRESH_MS = 5 * 60 * 1000;
 
@@ -389,7 +390,7 @@ export async function openPullRequest(publisher, { cwd, branch, base, title, bod
   const pushed = pushBranch(publisher, { cwd, branch, base }, { mergeBase });
   if (!pushed.pushed) return { url: null, pushed: false, env: publisher.env, reason: pushed.reason };
   const host = publisherHost(publisher, { cwd, ...(r ? { run: r } : {}) });
-  const records = prOpenRecords(cwd, branch, publisher.config?.stateDir ?? '.factory/state');
+  const records = prOpenRecords(cwd, branch, setting(publisher.config, 'stateDir'));
   const record = (data) => {
     try {
       fs.mkdirSync(path.dirname(records.json), { recursive: true });

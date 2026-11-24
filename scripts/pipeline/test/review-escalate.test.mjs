@@ -16,7 +16,7 @@ function config(response) {
   fs.mkdirSync(path.join(root, '.factory/state'), { recursive: true });
   const script = path.join(root, 'policy.mjs');
   fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(JSON.stringify(response))});`);
-  return { root, installRoot: INSTALL, stateDir: '.factory/state', metricsDir: '.factory/metrics', review: { policy: { enabled: true, agent: script, command: [process.execPath, script], requester: 'implementer', timeoutSec: 30, categories: {} } } };
+  return { root, installRoot: INSTALL, stateDir: '.factory/state', metricsDir: '.factory/metrics', architectureReview: { policy: { enabled: true, agent: script, command: [process.execPath, script], requester: 'implementer', timeoutSec: 30, categories: {} } } };
 }
 const item = (extra) => ({ finding_id: 'ARCH-001-x', rule_id: 'ARCH-001', rule_title: 'Layers', category: 'architecture', outcome: 'BLOCK', status: 'fail', file: 'src/Odd/Odd.csproj', message: 'Project is not classified: it fits none of the conventions.', fix: 'a person must extend the policy profile', ...extra });
 

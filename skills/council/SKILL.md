@@ -1,6 +1,6 @@
 ---
 name: council
-description: "Review a change as a council of independent verifiers from several models and CLIs, not one. USE FOR: \"council\", \"review this as a council\", \"get other models' opinions on this branch\", and every verification stage of the AI pipeline. Members, lenses, CLIs, models, pass score and rounds come from `council` in `.factory/config.json`."
+description: "Review a change as a council of independent verifiers from several models and CLIs, not one. USE FOR: \"council\", \"review this as a council\", \"get other models' opinions on this branch\", and every verification stage of the AI pipeline. Members come from the model pool (`models.pool` in `.factory/config.json`: CLI, model, effort), how many sit from `council.members` or the stage's `<stage>.councilMembers`, one entry per model family first; each stage's pass score and round limit from its own section (`<stage>.councilPassScore`, `<stage>.maxCouncilRounds`)."
 ---
 
 # Council
@@ -23,10 +23,13 @@ fixes to code that is being replaced.
 
 ## Seating (orchestrator)
 
-- Seat the members `council` configures for this stage: each with its own
-  CLI, model, reasoning effort and lens. If the user names members, use those.
-  With no configuration, use one flagship model from each of three different
-  providers, at high effort.
+- Seat as many members as the stage's setting says (`<stage>.councilMembers`,
+  else `council.members`), from the model pool (`models.pool`): pick one entry
+  and one lens per seat, with a reason, favouring different model families
+  (never one family twice while another has no seat), with the stage's core
+  lens seated. Keep the pick for every round. If the user names members, use
+  those. With no configuration, use one flagship model from each of three
+  different providers, at high effort.
 - Start all members in parallel. Give each the request, the ticket, the diff
   and this file. Members are read-only.
 - If a member's CLI or model is unavailable, report it. Never substitute
@@ -35,8 +38,8 @@ fixes to code that is being replaced.
 - Do not wait idle. When a result arrives, check its findings against the
   code at once and decide what to fix while the others run. Do not edit a
   checkout a member is still reviewing.
-- Do not wait for a member marked `blocking: false`. Treat its late result as
-  feedback and do not record its score.
+- Do not wait for a non-blocking member. Treat its late result as feedback and
+  do not record its score.
 
 ## What every member must know
 
@@ -122,16 +125,18 @@ End with one line:
 Each finding: `id`, `lens`, `severity` (`blocking` | `major` | `minor`),
 `action` (`fix` | `delete-test` | `rewrite`), `title`, `evidence`, `where`.
 Keep a finding's `id` whenever you raise it again. Score the change against
-the ticket through your lens. If you cannot score it, say why and give no
-score.
+the ticket through your lens. Always give a score: a result without one does
+not pass the council. If something stops you from scoring the change fairly,
+score it low and name what stops you in a blocking finding.
 
 ## Rounds
 
 - One full review pass by the council is one round. A fresh review after
   fixes starts a new round.
-- The council passes when every blocking member scores `passScore` or more
-  and no blocking finding stands.
-- At most `rounds` rounds. If the council has not passed by then, stop and
+- The council passes when every blocking member scores the stage's pass
+  score (`<stage>.councilPassScore`; one decimal place allowed) or more and no
+  blocking finding stands.
+- At most the stage's round limit (`<stage>.maxCouncilRounds`). If the council has not passed by then, stop and
   escalate to a person with the open findings. Do not keep going.
 - From round 2 a member's task lists the implementer's disputes: findings it
   did not act on because it calls them a nit or out of scope. Rule on each:
@@ -179,7 +184,7 @@ MCP server `council_intercom`
    council with an owner question or an awaiting ruling does not pass.
 1. Merge findings that name the same defect; keep every member's evidence.
 2. Drop findings that break rules 2 or 3 above, and say which rule.
-3. Apply `blockOn` to decide what blocks.
+3. Apply `blockQuorum` to decide what blocks.
 4. When members contradict each other, state both positions and decide with
    evidence, or escalate as an owner question. Never pick one silently.
 5. An upheld `rewrite` replaces the fix list for the regions it deletes: do

@@ -10,6 +10,7 @@ import { epicTickets, loadTicket, mockupFiles } from '../../pipeline/lib/tickets
 import { log } from '../../pipeline/lib/util.mjs';
 import { fetchPullRequest } from './github.mjs';
 import { gateStaged } from '../../pipeline/lib/analysis/commit-gate.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 const toPosix = (p) => p.replace(/\\/g, '/');
 const excludeSpecs = (config) => ['--', '.', ...config.prCheck.exclude.map((p) => `:(exclude)${p}`)];
@@ -137,9 +138,8 @@ export async function resolveTarget(config, { pr: prNumber, story: storyArg, sto
   const { files } = prDiff(config, ctx);
   // Inferred from the project model, a frontend file is a UI file inside a frontend service: a configuration or
   // server class of a service that also serves pages is not UI (council C4: a token-scope change in the identity
-  // service made a backend bug a "frontend story" with the design and video lenses). `prCheck.frontendPaths` is exact.
-  const explicit = Array.isArray(config.prCheck?.frontendPaths);
-  const frontendHit = (f) => matchesAnyPath(f, frontendPathsOf(config)) && (explicit || UI_FILE.test(f));
+  // service made a backend bug a "frontend story" with the design and video lenses).
+  const frontendHit = (f) => matchesAnyPath(f, frontendPathsOf(config)) && UI_FILE.test(f);
   ctx.isFrontend = tickets.some((t) => t.frontend) || mockups.length > 0 || files.some(frontendHit);
   ctx.frontendHit = frontendHit;
   return ctx;
@@ -147,11 +147,10 @@ export async function resolveTarget(config, { pr: prNumber, story: storyArg, sto
 
 export const UI_FILE = /\.(razor|cshtml|html?|css|scss|less|jsx?|tsx?|vue|svelte)$|(^|\/)(Components|Pages|Views|wwwroot|Layout|Shared)\//i;
 
-// What counts as a frontend file for the check: `prCheck.frontendPaths` when it is set (folders ending in
-// "/", extensions or suffixes starting with ".", or globs), else the project model (`project.frontendPaths`
-// plus the paths of the services with kind "frontend"). With neither, only the ticket and its mockups
-// decide whether the design critic runs.
-export const frontendPathsOf = (config) => (Array.isArray(config.prCheck?.frontendPaths) ? config.prCheck.frontendPaths : frontendPatterns(config.project));
+// What counts as a frontend file for the check: the project model (`project.frontendPaths`, folders ending in "/",
+// extensions or suffixes starting with ".", or globs, plus the paths of the services with kind "frontend"). With
+// neither, only the ticket and its mockups decide whether the design critic runs.
+export const frontendPathsOf = (config) => frontendPatterns(config.project);
 
 // The PR's changes: the working tree of the checkout (so uncommitted work counts) against the merge
 // base, including new untracked files, minus pipeline bookkeeping.
@@ -187,7 +186,7 @@ export function commitFixes(config, ctx, message) {
   git(ctx.workRoot, ['reset', '-q', '--', ...config.prCheck.exclude], { env });
   if (git(ctx.workRoot, ['diff', '--cached', '--quiet']).status === 0) return null;
   // A file holding a new secret stays out of the commit (analysis/commit-gate.mjs); the next round's scan reports it.
-  gateStaged(ctx.workRoot, { message, stateDir: config.stateDir ?? '.factory/state', metricsDir: config.metricsDir ?? '.factory/metrics' });
+  gateStaged(ctx.workRoot, { message, stateDir: setting(config, 'stateDir'), metricsDir: setting(config, 'metricsDir') });
   if (git(ctx.workRoot, ['diff', '--cached', '--quiet']).status === 0) return null;
   git(ctx.workRoot, ['commit', '--quiet', '-m', message], { allowFail: false, env });
   return git(ctx.workRoot, ['rev-parse', '--short', 'HEAD']).stdout.trim();

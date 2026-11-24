@@ -17,7 +17,7 @@ test('autoSize: small machines get one ticket and one pair; CPUs and maxParallel
   const small = autoSize({ totalGb: 8, freeGb: 4, dockerGb: null }, { cpus: 4 });
   assert.deepEqual([small.parallel, small.maxConcurrentPairs, small.teststackSlots], [1, 1, null]);
   assert.equal(autoSize({ totalGb: 128, freeGb: 100, dockerGb: 64 }, { cpus: 4 }).parallel, 4);
-  assert.equal(autoSize({ totalGb: 128, freeGb: 100, dockerGb: 64 }, { cpus: 32, resources: { maxParallel: 5 } }).parallel, 5);
+  assert.equal(autoSize({ totalGb: 128, freeGb: 100, dockerGb: 64 }, { cpus: 32, maxParallel: 5 }).parallel, 5);
   assert.equal(autoSize({ totalGb: 128, freeGb: 100, dockerGb: 64 }, { cpus: 8 }).maxConcurrentPairs, 2, 'CPU-bound: room for a second pair per ticket');
 });
 
@@ -31,11 +31,12 @@ test('memoryInfo: macOS counts inactive and purgeable pages; Docker MemTotal is 
 });
 
 test('parallelFor: a number wins; auto exports the derived limits; env overrides them', () => {
-  const config = { implement: { parallel: 'auto', maxConcurrentPairs: 2 }, resources: {} };
+  const config = { implement: { maxParallel: null, maxConcurrentPairs: 2 }, resources: {} };
   assert.equal(parallelFor(config, '3', { print: () => {} }), 3);
   const saved = { ...process.env };
   try {
     delete process.env.LSP_MAX_SERVERS;
+    delete process.env.LSP_SIZED_SERVERS;
     delete process.env.TESTSTACK_SLOTS;
     process.env.TESTSTACK_SLOTS = '2';
     const lines = [];
@@ -43,7 +44,7 @@ test('parallelFor: a number wins; auto exports the derived limits; env overrides
     assert.equal(p, 6);
     assert.match(lines[0], /Resources \(auto\): .*parallel 6/);
     assert.equal(process.env.TESTSTACK_SLOTS, '2', 'an explicit TESTSTACK_SLOTS wins');
-    assert.ok(Number(process.env.LSP_MAX_SERVERS) >= 6);
+    assert.ok(Number(process.env.LSP_SIZED_SERVERS) >= 6, 'the memory-based number, which lsp.maxLanguageServers caps');
     const c2 = applyResources({ implement: { maxConcurrentAgents: 6, maxConcurrentPairs: 2 } });
     assert.equal(c2.implement.maxConcurrentAgents, JSON.parse(process.env.IMPLEMENT_RESOURCES).maxConcurrentAgents);
     process.env.IMPLEMENT_MAX_PAIRS = '2';

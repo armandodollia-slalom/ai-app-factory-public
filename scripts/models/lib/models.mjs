@@ -1,25 +1,22 @@
-// Model allowlist for the AI pipeline, seen per agent CLI, and the models the CLIs installed on this
-// machine can actually serve (discovery, cached for 24 hours).
+// The model pool for the AI pipeline (`models.pool`, scripts/models/config.json), seen per agent CLI, and the models the
+// CLIs installed on this machine can actually serve (discovery, cached for 24 hours).
 //
-// The policy itself lives in scripts/pipeline/config.json: `agent.allowedModels` (aliases such as opus
-// and sonnet), `agent.modelIds` (each alias's id for each CLI), `agent.models.default` and
-// `agent.strictModels`. Every agent run checks its model through resolveModel in
-// scripts/pipeline/lib/agents.mjs; this module derives the per-CLI view from the same config and
-// resolves through that same function, so `models check`, plan validation and the runs never disagree.
-// scripts/models/config.json only holds discovery settings.
+// Every agent run takes its CLI, model id and effort from one pool entry (scripts/pipeline/lib/pool.mjs); this module
+// derives the per-CLI view from the same pool: a CLI's allowed ids are its entries' ids, so `models check`, plan
+// validation and the runs never disagree.
 //
 // Policy functions (allowedModels, resolveModel, assertProviderUsable) are synchronous and never spawn
 // anything. Discovery (discoverModels, availableModels) is async and spawns the CLIs; its result is
 // cached under the git common dir.
 //
-// Every function takes an optional last `opts` argument so tests can inject the pipeline config, a
+// Every function takes an optional last `opts` argument so tests can inject the models section, a
 // command runner, fetch, a cache file and a clock. See docs/ai-pipeline/models.md.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveModel as resolvePipelineModel } from '../../pipeline/lib/agents.mjs';
+import { poolProblems, poolWarnings } from '../../pipeline/lib/pool.mjs';
 
 export const MODELS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const REPO_ROOT = path.resolve(MODELS_DIR, '..', '..');
@@ -92,34 +89,31 @@ export function matchModel(ids, requested, aliases = {}) {
   return null;
 }
 
-// The policy per CLI, derived from scripts/pipeline/config.json (or `opts.pipelineConfig`): each CLI's
-// allowed ids are agent.allowedModels mapped through agent.modelIds for that CLI; a CLI with no ids
-// (codex today) allows nothing. Discovery settings come from scripts/models/config.json.
+// The policy per CLI, derived from the pool (scripts/models/config.json, or `opts.models`, the models section): each
+// CLI's allowed ids are the ids of its pool entries, and an entry's name resolves to its id. A CLI with no entry allows
+// nothing. The default is the id of `models.agents.default` when that entry is on the CLI.
 export function loadPolicy(opts = {}) {
-  const root = opts.root ?? REPO_ROOT;
-  const pipelineFile = path.join(root, 'scripts', 'pipeline', 'config.json');
-  const pipeline = opts.pipelineConfig ?? readJson(pipelineFile);
-  if (!pipeline?.agent) throw new ModelPolicyError(`Model policy (agent section of ${pipelineFile}) not found.`);
-  const settings = readJson(path.join(opts.configDir ?? MODELS_DIR, 'config.json')) ?? {};
-  const agent = { ...pipeline.agent };
-  const allowedAliases = [...(agent.allowedModels ?? [])];
+  const file = path.join(opts.configDir ?? MODELS_DIR, 'config.json');
+  const models = opts.models ?? readJson(file);
+  if (!Array.isArray(models?.pool)) throw new ModelPolicyError(`Model pool (models.pool in ${file}) not found.`);
+  const pool = models.pool;
   const warnings = [];
   const providers = {};
-  for (const name of [...new Set([...PROVIDERS, ...Object.keys(agent.modelIds ?? {})])]) {
-    const ids = agent.modelIds?.[name] ?? {};
+  const defaultEntry = pool.find((e) => e?.name === models.agents?.default) ?? null;
+  for (const name of [...new Set([...PROVIDERS, ...pool.map((e) => e?.cli).filter((c) => c && c !== 'custom')])]) {
     const aliases = {};
     const allowed = [];
-    for (const alias of allowedAliases) {
-      if (!ids[alias]) continue;
-      aliases[alias] = ids[alias];
-      if (!allowed.includes(ids[alias])) allowed.push(ids[alias]);
+    for (const e of pool.filter((x) => x?.cli === name && x.model)) {
+      aliases[e.name] = e.model;
+      if (!allowed.includes(e.model)) allowed.push(e.model);
     }
-    for (const alias of Object.keys(ids)) {
-      if (!allowedAliases.includes(alias)) warnings.push(`${name}: agent.modelIds maps "${alias}", which is not in agent.allowedModels; ignored`);
-    }
-    providers[name] = { allowed, default: ids[agent.models?.default] ?? allowed[0] ?? null, aliases };
+    // The default entry's model on this CLI (its own spelling: claude-sonnet-5-5 on Claude Code, claude-sonnet-5.5 on
+    // Copilot), else the CLI's first entry.
+    const same = defaultEntry?.model ? allowed.find((id) => modelKey(id) === modelKey(defaultEntry.model)) : null;
+    providers[name] = { allowed, default: same ?? allowed[0] ?? null, aliases };
   }
-  return { providers, agent, strict: Boolean(agent.strictModels), cacheTtlHours: settings.cacheTtlHours ?? 24, warnings };
+  warnings.push(...poolWarnings({ models: { pool } }));
+  return { providers, pool, agents: models.agents ?? {}, subtaskModels: opts.subtaskModels ?? null, cacheTtlSec: models.cacheTtlSec, warnings };
 }
 
 function providerPolicy(provider, opts) {
@@ -143,29 +137,28 @@ export function assertProviderUsable(provider, opts = {}) {
   const p = providerPolicy(provider, opts);
   if (p.allowed.length === 0) {
     throw new ProviderDisabledError(
-      `no allowed models configured for ${provider}: agent.modelIds in scripts/pipeline/config.json maps none of agent.allowedModels for it, so the ${provider} CLI cannot be used. Pick another agent CLI or add its ids.`,
+      `no allowed models configured for ${provider}: models.pool has no entry on it, so the ${provider} CLI cannot be used. Add an entry or use another CLI.`,
       { provider, allowed: [] },
     );
   }
   return true;
 }
 
-// The CLI's own id for `requested` (an allowed alias, or an id an allowed alias maps to), or the policy
-// default when it is null, empty or "default". Resolves through the pipeline's resolveModel, the same
-// check every agent run makes; throws ModelNotAllowedError listing the allowed models otherwise.
+// The CLI's own id for `requested` (a pool entry's name, or the id of an entry on this CLI), or the default when it is
+// null, empty or "default". Throws ModelNotAllowedError listing the CLI's entries otherwise.
 export function resolveModel(provider, requested, opts = {}) {
   const policy = opts.policy ?? loadPolicy(opts);
   const p = providerPolicy(provider, { policy });
   assertProviderUsable(provider, { policy });
   const wanted = requested == null || requested === '' || String(requested).toLowerCase() === 'default' ? null : String(requested).trim();
-  try {
-    return resolvePipelineModel({ agent: { ...policy.agent, cli: provider, cmd: null, strictModels: true } }, wanted, provider) ?? p.default;
-  } catch (e) {
-    throw new ModelNotAllowedError(
-      `Model "${requested}" is not allowed for ${provider}. Allowed: ${Object.keys(p.aliases).map((a) => `${a} (${p.aliases[a]})`).join(', ')} (agent.allowedModels and agent.modelIds in scripts/pipeline/config.json).`,
-      { provider, requested, allowed: [...p.allowed], cause: e },
-    );
-  }
+  if (wanted == null) return p.default;
+  // An entry's name, or exactly one of this CLI's ids (another CLI's spelling is not this CLI's id).
+  const hit = p.aliases[wanted] ?? (p.allowed.includes(wanted) ? wanted : null);
+  if (hit) return hit;
+  throw new ModelNotAllowedError(
+    `Model "${requested}" is not in models.pool for ${provider}. Its entries: ${Object.keys(p.aliases).map((a) => `${a} (${p.aliases[a]})`).join(', ')} (models.pool in scripts/models/config.json, or a repository's .factory/config.json).`,
+    { provider, requested, allowed: [...p.allowed] },
+  );
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -290,12 +283,12 @@ function readCache(file) {
 }
 
 // {provider, installed, version, source, models:[{id, aliases, source, hidden?}], error, at, cached}.
-// Results are cached per provider for cacheTtlHours; `refresh` bypasses the cache. A "not installed"
+// Results are cached per provider for cacheTtlSec (models.cacheTtlSec); `refresh` bypasses the cache. A "not installed"
 // result is never cached, so installing a CLI shows up on the next call.
 export async function discoverModels(provider, { refresh = false, ...opts } = {}) {
   if (!DISCOVERERS[provider]) throw new UnknownProviderError(`Unknown model provider "${provider}".`, { provider });
   const now = opts.now ?? Date.now;
-  const ttlMs = (opts.ttlHours ?? (opts.policy ?? loadPolicy(opts)).cacheTtlHours) * 3600 * 1000;
+  const ttlMs = (opts.ttlSec ?? (opts.policy ?? loadPolicy(opts)).cacheTtlSec) * 1000;
   const file = cacheFile(opts);
   const cache = readCache(file);
   const hit = cache.providers?.[provider];
@@ -371,10 +364,11 @@ const listDir = (dir, filter) => (fs.existsSync(dir) ? fs.readdirSync(dir).filte
 
 export function checkConfigs(opts = {}) {
   const root = opts.root ?? REPO_ROOT;
-  const policy = opts.policy ?? loadPolicy({ ...opts, root });
+  const policy = opts.policy ?? loadPolicy({ ...opts, configDir: opts.configDir ?? path.join(root, 'scripts', 'models') });
   const problems = [];
   const checked = [];
   const rel = (f) => path.relative(root, f);
+  const scripts = path.join(root, 'scripts');
 
   const verify = (file, where, provider, model) => {
     checked.push({ file: rel(file), where, provider, model });
@@ -385,54 +379,13 @@ export function checkConfigs(opts = {}) {
       problems.push({ file: rel(file), where, provider, model, message: e.message });
     }
   };
-  const usable = (file, where, provider) => {
-    try {
-      assertProviderUsable(provider, { policy });
-    } catch (e) {
-      problems.push({ file: rel(file), where, provider, model: null, message: e.message });
-    }
-  };
 
-  // Pipeline stage configs: scripts/pipeline/config.json is the base, scripts/<stage>/config.json and
-  // the matching config.local.json files are merged on top by the pipeline.
-  const scripts = path.join(root, 'scripts');
-  const baseFile = path.join(scripts, 'pipeline', 'config.json');
-  const base = readJson(baseFile) ?? {};
-  const baseCli = base.agent?.cli ?? 'claude';
-  if (fs.existsSync(baseFile)) usable(baseFile, 'agent.cli', baseCli);
-  for (const stage of listDir(scripts, (d) => d !== 'models' && fs.statSync(path.join(scripts, d)).isDirectory())) {
-    for (const name of ['config.json', 'config.local.json']) {
-      const file = path.join(scripts, stage, name);
-      const cfg = readJson(file);
-      if (!cfg) continue;
-      const cli = cfg.agent?.cli ?? baseCli;
-      if (cfg.agent?.cli && cfg.agent.cli !== baseCli) usable(file, 'agent.cli', cfg.agent.cli);
-      for (const [role, value] of Object.entries(cfg.agent?.models ?? {})) {
-        if (value == null) continue;
-        if (typeof value === 'object') {
-          if (value.model != null) verify(file, `agent.models.${role}`, value.cli ?? cli, value.model);
-        } else verify(file, `agent.models.${role}`, cli, value);
-      }
-      // Implement model classes map to aliases, checked for the pipeline CLI and every role CLI.
-      for (const [cls, model] of Object.entries(cfg.modelClasses ?? {})) {
-        if (model == null) continue;
-        if (typeof model === 'object') {
-          for (const [provider, id] of Object.entries(model)) if (id != null) verify(file, `modelClasses.${cls}.${provider}`, provider, id);
-        } else {
-          for (const provider of new Set([cli, ...Object.values(cfg.implement?.roles ?? {}).map((r) => r?.cli).filter(Boolean)])) verify(file, `modelClasses.${cls}`, provider, model);
-        }
-      }
-      // PR-check role models, per CLI.
-      for (const [provider, roles] of Object.entries(cfg.prCheck?.models ?? {})) {
-        for (const [role, model] of Object.entries(roles ?? {})) if (model != null) verify(file, `prCheck.models.${provider}.${role}`, provider, model);
-      }
-      for (const [role, r] of Object.entries(cfg.implement?.roles ?? {})) {
-        if (!r) continue;
-        const roleCli = r.cli ?? cli;
-        if (r.cli) usable(file, `implement.roles.${role}.cli`, r.cli);
-        if (r.model != null) verify(file, `implement.roles.${role}.model`, roleCli, r.model);
-      }
-    }
+  // The pool itself and every agent's entry: each names an entry in the pool, and the pool's rules hold.
+  const modelsFile = path.join(scripts, 'models', 'config.json');
+  for (const message of poolProblems({ models: { pool: policy.pool, agents: policy.agents }, implement: { subtaskModels: policy.subtaskModels } })) problems.push({ file: rel(modelsFile), where: 'models', provider: null, model: null, message });
+  for (const [agent, name] of Object.entries(policy.agents ?? {})) {
+    const e = policy.pool.find((x) => x?.name === name);
+    if (e) checked.push({ file: rel(modelsFile), where: `models.agents.${agent}`, provider: e.cli, model: e.model ?? e.name });
   }
 
   // Agent definitions. agents/*.agent.md are read by Copilot CLI and generated into

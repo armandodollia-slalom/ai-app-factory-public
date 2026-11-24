@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { genericHits, redactText, writeText } from '../../pipeline/lib/redact.mjs';
 import { stepRecord } from '../../pipeline/lib/util.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 import { automaticScript, recordedEvents } from './script.mjs';
 
 const NARRATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'narrate.py');
@@ -53,7 +54,8 @@ export function probe(ffmpeg, file) {
 //
 // The subtitles come from the same timeline (cue = segment, from its start to its end) and are drawn by the renderer,
 // so the text on screen, the .vtt and the voice can never drift apart.
-export const PACE_DEFAULTS = { pauseSec: 0.6, minStepSec: 1.2, maxWindowSec: 4.5, minTailSec: 0.25 };
+// The pause after each narrated line is a setting (video.pacing.pauseSec); the rest are the renderer's own.
+export const PACE_DEFAULTS = { pauseSec: defaultSettings().video.pacing.pauseSec, minStepSec: 1.2, maxWindowSec: 4.5, minTailSec: 0.25 };
 
 const windowOf = (e) => [e.lead / 1000, e.end / 1000];
 
@@ -271,7 +273,7 @@ export function renderVideo({ video, steps, outDir, name, tools, env = process.e
   if (!ffmpeg) return { ok: false, published: false, reason: 'no ffmpeg (factory video install, or set video.ffmpeg)' };
   const p = probe(ffmpeg, video);
   if (!p.seconds) return { ok: false, published: false, reason: `ffmpeg could not read ${path.basename(video)}` };
-  const pace = { ...(tools.settings?.pacing?.pauseMs != null ? { pauseSec: tools.settings.pacing.pauseMs / 1000 } : {}) };
+  const pace = { ...(tools.settings?.pacing?.pauseSec != null ? { pauseSec: tools.settings.pacing.pauseSec } : {}) };
   const events = recordedEvents(steps, { env });
   const segments = (script ?? automaticScript(steps, events)).map((g) => ({ ...g, text: redactText(g.text ?? '', { env }).text }));
   if (!segments.length) return writeReport(outDir, name, { name, source: video, ok: false, published: false, reason: 'the recording has no narrated step (no step log: the test does not use the demo fixture)' });
@@ -302,7 +304,7 @@ export function renderVideo({ video, steps, outDir, name, tools, env = process.e
   const audioInputs = Object.fromEntries(order.map((g, i) => [g.id, i + 1]));
   const burnedIn = hasFilter(ffmpeg, 'ass');
   const assFile = burnedIn ? path.join(work, 'subtitles.ass') : null;
-  if (assFile) writeText(assFile, assText(cues, { width: p.width ?? 1280, height: p.height ?? 720 }));
+  if (assFile) writeText(assFile, assText(cues, { width: p.width ?? defaultSettings().video.size.width, height: p.height ?? defaultSettings().video.size.height }));
   const { graph, withAudio } = filterGraph(segs, steps?.masks ?? [], { scaleX, scaleY, audioInputs: narrationOn ? audioInputs : {}, assFile });
   // Kept for a person reading a failed render; passed inline (ffmpeg 8 and later dropped -filter_complex_script).
   writeText(path.join(work, 'filter.txt'), graph);

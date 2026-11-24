@@ -1,15 +1,4 @@
 {
-  "agent": {
-    "models": {
-      "implementer": null,
-      "bugTriage": "opus"
-    }
-  },
-  "modelClasses": {
-    "small": "sonnet",
-    "medium": "sonnet",
-    "large": "opus"
-  },
   "implement": {
     "worktreeDir": "../{repo}-worktrees",
     "branchPrefix": "feat/",
@@ -18,56 +7,17 @@
       "branchPrefix": "epic/",
       "bugfixPrefix": "bugfix/",
       "grouping": "auto",
-      "planTimeoutSec": 1800,
       "featureVerification": true,
-      "prCheck": "fix",
-      "prCheckTimeoutSec": 14400
+      "prSplit": "epic",
+      "maxTicketsPerGroup": null
     },
-    "prCheck": { "mode": "fix", "fixUntil": "major", "bugFixUntil": "minor", "fixLenses": [], "fixRounds": 3, "returnToImplementation": { "enabled": true, "maxReturns": 2, "minSeverity": "major" } },
-    "maxBugsPerGroup": null,
-    "parallel": "auto",
-    "implementerTimeoutSec": 5400,
-    "maxImplementerRuns": 8,
-    "maxBugFixCycles": 2,
-    "fvTimeoutSec": 14400,
-    "fvPollSec": 5,
-    "maxWorkerRetries": 2,
-    "retryDelaySec": 30,
-    "orchestrate": true,
     "maxSubtasks": 4,
     "selfModeMaxFiles": 6,
     "maxConcurrentPairs": 2,
     "maxConcurrentAgents": 6,
-    "maxPairRounds": 3,
     "maxTakeovers": 1,
-    "maxLargeSubtasks": 1,
     "maxAgentRunsPerStory": 20,
     "storyWallClockSec": 10800,
-    "timeouts": {
-      "plannerSec": 1800,
-      "orchestratorSec": 3600,
-      "pairImplementerSec": 1800,
-      "codeVerifierSec": 600,
-      "uiVerifierSec": 1200,
-      "checkSec": 1800
-    },
-    "roles": {
-      "orchestrator": {
-        "cli": null,
-        "modelClass": "large"
-      },
-      "pairImplementer": {
-        "cli": null
-      },
-      "verifier": {
-        "cli": null,
-        "modelClass": "medium"
-      },
-      "uiVerifier": {
-        "cli": null,
-        "modelClass": "large"
-      }
-    },
     "prepareCmd": null,
     "checks": [],
     "unitTests": {
@@ -77,15 +27,15 @@
       "titleTags": [
         "FE"
       ],
-      "components": null,
-      "filePatterns": null
+      "components": null
     },
     "pathHints": {
       "roots": [],
       "extensions": []
     },
     "requeue": {
-      "envKeys": []
+      "envKeys": [],
+      "outageCooldownSec": 3600
     },
     "ui": {
       "slotsCmd": [
@@ -97,19 +47,13 @@
       "leaseRetrySec": 30,
       "stackTimeoutSec": 2400,
       "screenshotsDir": "artifacts/pairs",
-      "renewEverySec": 1800
-    },
-    "lsp": {
-      "enabled": true,
-      "setupCmd": [
-        "node",
-        "scripts/lsp/setup.mjs"
-      ],
-      "lspdCmd": [
-        "node",
-        "scripts/lsp/lspd.mjs"
-      ],
-      "timeoutSec": 300
+      "renewEverySec": 1800,
+      "artifactDirs": [
+        "artifacts",
+        "test-results",
+        "playwright-report",
+        "blob-report"
+      ]
     },
     "decisions": {
       "smallDiffLoc": 60,
@@ -133,7 +77,6 @@
         "**/*.md"
       ],
       "floor": {
-        "level": "High",
         "paths": [
           ".github/workflows/**",
           ".github/CODEOWNERS",
@@ -154,15 +97,16 @@
           "payments",
           "migration",
           "security"
-        ]
+        ],
+        "minLevel": "High",
+        "sharedMinLevel": "High"
       },
       "manySystems": 3,
-      "sharedFloor": "High",
       "confidence": {
-        "highMin": 85,
-        "maxPairRounds": 2,
-        "maxPrCheckRounds": 2,
-        "agentWeight": 0.2
+        "agentWeight": 0.2,
+        "implementRoundsAtMost": 2,
+        "prCheckRoundsAtMost": 2,
+        "highMinScore": 85
       },
       "approvals": {
         "default": 1,
@@ -175,7 +119,8 @@
         "approvals": "approvals:{n}",
         "needsHuman": "needs-human",
         "autoMerged": "auto-merged",
-        "reopened": "reopened"
+        "reopened": "reopened",
+        "mergeFailed": "merge-failed"
       },
       "substantiveCommentChars": 20,
       "retro": {
@@ -183,15 +128,69 @@
         "raiseFindRate": 0.3,
         "raiseEscapeRate": 0.2,
         "lowerFindRate": 0.05
-      }
+      },
+      "enforced": true,
+      "requiredChecks": null
     },
     "autoMerge": {
-      "native": false,
       "enabled": true,
       "identity": "gh-user",
       "method": "squash",
-      "appTokenEnv": "REVIEW_GATE_APP_TOKEN"
-    }
+      "appTokenEnv": "REVIEW_GATE_APP_TOKEN",
+      "hostAutoMerge": {
+        "enabled": false
+      }
+    },
+    "preOpen": {
+      "branches": null,
+      "afterOpen": "draft",
+      "wipLabel": "work-in-progress"
+    },
+    "ci": {
+      "maxFixRounds": 2,
+      "wait": {
+        "timeoutSec": 10800,
+        "pollSec": 30,
+        "settleSec": 60,
+        "enabled": true
+      },
+      "parity": {
+        "enabled": true
+      }
+    },
+    "worker": {
+      "maxRetries": 2,
+      "retryDelaySec": 30
+    },
+    "maxOrchestratorRuns": 8,
+    "maxBugFixReturns": 2,
+    "maxParallel": null,
+    "waitSec": {
+      "prCheck": 14400,
+      "prCheckStart": 300,
+      "featureVerification": 14400
+    },
+    "pollSec": {
+      "featureVerification": 5
+    },
+    "timeoutsSec": {
+      "planner": 1800,
+      "orchestrator": 3600,
+      "pairImplementer": 1800,
+      "pairVerifier": 600,
+      "pairUiVerifier": 1200,
+      "checks": 1800,
+      "orchestratorFix": 5400,
+      "epicPlanner": 1800
+    },
+    "maxCouncilRounds": 3,
+    "councilPassScore": 9.5,
+    "councilMembers": null,
+    "orchestrator": {
+      "model": null,
+      "effort": null
+    },
+    "subtaskModels": null
   },
   "resources": {
     "reserveGb": 6,
@@ -200,7 +199,6 @@
     "lspServerGb": 0.8,
     "stackGb": 1.6,
     "dockerOverheadGb": 1,
-    "maxParallel": null,
     "waitPollSec": 15,
     "maxWaitSec": 1800
   }

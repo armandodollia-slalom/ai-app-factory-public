@@ -9,7 +9,7 @@ Read next, as needed:
 - [internals.md](internals.md): the dispatcher, hooks, guards, agent definitions, shared state, adding a stage.
 - [providers/contracts.md](providers/contracts.md) and [providers/custom.md](providers/custom.md): the adapter contracts.
 - [ai-pipeline/ci-parity.md](ai-pipeline/ci-parity.md): every CI job needs a pre-PR equivalent.
-- [ai-pipeline/agents.md](ai-pipeline/agents.md#changing-an-agent) and [ai-pipeline/models.md](ai-pipeline/models.md#changing-the-list): changing an agent or the model list.
+- [ai-pipeline/agents.md](ai-pipeline/agents.md#changing-an-agent) and [ai-pipeline/models.md](ai-pipeline/models.md#changing-the-pool): changing an agent or the model list.
 - [code-intelligence.md](code-intelligence.md) and [ai-pipeline/analysis.md](ai-pipeline/analysis.md): adding a language server or an analysis tool to a pack.
 
 ## Run the tests

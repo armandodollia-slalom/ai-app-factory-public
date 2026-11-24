@@ -1,0 +1,20 @@
+{
+  "$comment": "What every setting in this section does, its type and allowed values; defaults are in config.json beside this file. See scripts/pipeline/lib/settings.mjs.",
+  "prune.enabled": { "does": "Runs the automatic disk prune; the free-space check at the start of a run stays.", "type": "boolean", "env": "FACTORY_PRUNE", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.minFreeGb": { "does": "The free disk space a run needs to start or go on (`null`: no check).", "type": "number", "min": 0, "unit": "GB", "nullable": true, "env": "FACTORY_DISK_MIN_GB", "readBy": "scripts/factory/factory.mjs" },
+  "prune.buildDirs": { "does": "Build folders removed from idle pipeline worktrees.", "type": "list", "items": "folder", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.buildDirNames": { "does": "Git-ignored folder names removed from idle pipeline worktrees.", "type": "list", "items": "folder name", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.slotMaxGb": { "does": "Leftovers of a stack copy larger than this may be cleaned up (`null`: no size cap).", "type": "number", "min": 0, "unit": "GB", "nullable": true, "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.worktreeDays": { "does": "A ticket's worktree is removed this long after its PR merged or closed (`null`: never).", "type": "integer", "min": 0, "unit": "days", "nullable": true, "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.keepInstalls": { "does": "The newest engine installs that are always kept.", "type": "integer", "min": 0, "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.installRepos": { "does": "Other repositories on this machine whose pinned engine installs are kept.", "type": "list", "items": "path", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.analysisCacheDays": { "does": "Analysis tools and rule sources unused this long are removed from the machine's cache.", "type": "integer", "min": 0, "unit": "days", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.analysisReports": { "does": "Analysis reports beyond the newest this many commits are removed.", "type": "integer", "min": 0, "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.analysisBaseDays": { "does": "Analysis merge-base caches unused this long are removed.", "type": "integer", "min": 0, "unit": "days", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.afterDelivery": { "does": "Alpha: removes what a delivered run made on this machine once the delivery remote confirms it.", "type": "boolean", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.keepLocal": { "does": "Keeps what a delivered run made, for debugging (with `afterDelivery` on).", "type": "boolean", "env": "FACTORY_KEEP_LOCAL", "readBy": "scripts/factory/lib/prune.mjs" },
+  "e2e.dir": { "does": "The folder of the repository's e2e tests, where `factory render` keeps the shared e2e fixtures.", "type": "string", "readBy": "scripts/factory/lib/render.mjs" },
+  "prune.idleSec": { "does": "Files a run touched more recently than this are never cleaned up.", "type": "integer", "min": 0, "unit": "seconds", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.slotMaxAgeSec": { "does": "Leftovers of a stack copy older than this may be cleaned up.", "type": "integer", "min": 0, "unit": "seconds", "readBy": "scripts/factory/lib/prune.mjs" },
+  "prune.imageMinAgeSec": { "does": "Old app images younger than this are kept.", "type": "integer", "min": 0, "unit": "seconds", "readBy": "scripts/factory/lib/prune.mjs" }
+}

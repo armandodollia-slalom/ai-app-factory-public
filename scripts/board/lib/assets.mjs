@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sha256 } from './ticket-format.mjs';
-import { describeCall, externalKind, externalRetries, externalTimeoutSec, noteExternal, retrySafe, transientFailure } from '../../pipeline/lib/external.mjs';
+import { describeCall, externalKind, externalRetries, externalRetryPauseMs, externalTimeoutSec, noteExternal, retrySafe, transientFailure } from '../../pipeline/lib/external.mjs';
 
 // Runs a command; `binary` returns stdout as a Buffer. Same shape as util.run: { status, stdout, stderr }. gh and git
 // follow the external-call rule (pipeline/lib/external.mjs): a timeout, and retries when a repeat is safe.
@@ -30,7 +30,7 @@ export function exec(cmd, args, { cwd, input, env, binary = false } = {}) {
       return { ...out, stderr: `${out.stderr}\n${describeCall(cmd, args)}: ${what}`, attempts: attempt };
     }
     noteExternal({ call: describeCall(cmd, args), event: `attempt ${attempt} of ${tries} ${out.timedOut ? 'timed out' : 'failed'}, retrying`, detail: what, attempt });
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FACTORY_EXTERNAL_PAUSE_MS ?? 2000) * 2 ** (attempt - 1));
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, externalRetryPauseMs(attempt));
   }
 }
 

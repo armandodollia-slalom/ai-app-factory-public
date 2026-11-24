@@ -240,7 +240,7 @@ test('local cleanup after a delivery is alpha and off by default: nothing is rem
   const r = await pruneRunLocal(w.wt, (g) => removeBaseCheckout(g, w.wt, base), { label: 'BUG-1', log: () => {}, env: {}, context: async () => w.g() });
   assert.equal(r.skipped, 'prune.afterDelivery is off');
   assert.ok(exists(base.dir));
-  assert.deepEqual(pruneProblems({ afterDelivery: 'yes' }), ['prune.afterDelivery must be true or false']);
+  assert.deepEqual(pruneProblems({ afterDelivery: 'yes' }), ['prune.afterDelivery is "yes"; allowed: `true`, `false`']);
 });
 
 test('stacked work: a blocker\'s branch stays while a ticket or a saved resume builds on it; a later start resolves it from the remote (ADV2-08)', async (t) => {
@@ -275,7 +275,7 @@ test('--keep reaches a background resume; --keep, prune.keepLocal and prune.enab
   const r = await pruneRunLocal(w.main, remove, { label: 'BUG-1', log: (m) => logs.push(m), env: {}, context: async () => w.g({ settings: { ...PRUNE_DEFAULTS, afterDelivery: true } }) });
   assert.equal(r.removed.length, 2);
   assert.match(logs.join('\n'), /BUG-1: removed /);
-  assert.deepEqual(pruneProblems({ keepLocal: 'yes' }), ['prune.keepLocal must be true or false']);
+  assert.deepEqual(pruneProblems({ keepLocal: 'yes' }), ['prune.keepLocal is "yes"; allowed: `true`, `false`']);
 });
 
 // ---- round 4 -----------------------------------------------------------------------------------------------------------
@@ -297,7 +297,7 @@ test('the before checkout writes nothing outside itself: a tracked link at its c
     const w = world(t);
     const victim = path.resolve(w.wt, '.factory/state/demo-base/x', scenariosDir);
     fs.mkdirSync(path.join(w.wt, scenariosDir.startsWith('/') ? scenariosDir : '.factory/s'), { recursive: true });
-    fs.writeFileSync(path.join(w.wt, '.factory/config.json'), JSON.stringify({ stack: { scenariosDir } }));
+    fs.writeFileSync(path.join(w.wt, '.factory/config.json'), JSON.stringify({ teststack: { scenariosDir } }));
     assert.throws(() => baseCheckout(w.wt, 'main'), /not a plain path inside it/, scenariosDir);
     assert.ok(!fs.existsSync(path.join(victim, 'seed.json')));
   }

@@ -15,6 +15,7 @@ import { git } from '../git.mjs';
 import { metricsFile } from '../state.mjs';
 import { appendJsonl, nowIso } from '../util.mjs';
 import { onlyInHistory } from './secrets.mjs';
+import { setting } from '../settings.mjs';
 
 const COMMIT = /^[0-9a-f]{40}$/;
 export const REWRITES_METRICS = 'history-rewrites.jsonl';
@@ -83,8 +84,8 @@ function fold(config, cwd, findings, { branch, base, env = process.env, log = nu
   const still = targets.filter((f) => lines(git(cwd, ['rev-list', fresh])).includes(f.vendorFingerprint));
   const record = { ts: nowIso(), kind, branch, from: head, to: fresh, tree, parents: [first, ...merged], dropped: dropped.map((d) => d.sha), findings: targets.map((f) => ({ id: f.id, tool: f.tool, rule: f.rule, file: f.file, line: f.line, commit: f.vendorFingerprint })), treeIdentical: true, stillReachable: still.length };
   try {
-    appendJsonl(metricsFile({ root: cwd, metricsDir: config?.metricsDir ?? '.factory/metrics', stateDir: config?.stateDir ?? '.factory/state' }, REWRITES_METRICS), [record]);
-    const dir = path.join(cwd, config?.stateDir ?? '.factory/state', 'analysis-rewrites');
+    appendJsonl(metricsFile({ root: cwd, metricsDir: setting(config, 'metricsDir'), stateDir: setting(config, 'stateDir') }, REWRITES_METRICS), [record]);
+    const dir = path.join(cwd, setting(config, 'stateDir'), 'analysis-rewrites');
     fs.mkdirSync(dir, { recursive: true });
     writeText(path.join(dir, `${fresh}.json`), `${JSON.stringify(record, null, 1)}\n`);
   } catch {

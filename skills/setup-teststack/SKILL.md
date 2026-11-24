@@ -43,7 +43,6 @@ Find and write down before you change anything:
    Publish again until it succeeds. An override that no longer applies, or a parameter left without a value, fails the publish. Never declare an override to hide wiring the AppHost has; change the AppHost instead.
 4. Steps 3 to 5 below still apply. Their compose-file edits become `publishOverrides` entries.
 
-
 Write `.factory/stack/docker-compose.yaml`. The stack must contain the whole application, not mocks.
 
 **When the repository has a compose file.** Do not edit it if developers use it. Copy it and adapt the copy, or generate the stack file from it when the repository already generates compose files (then record the generator as `stack.publish`). In the copy:
@@ -224,7 +223,7 @@ Common failures:
 | Duplicate key after `load` | A standalone sequence or an in-memory id cache: configure `sequences` or `restartAfterLoad`. |
 | Slot 1 collides with slot 0 | A host port or `container_name` is hard-coded in the compose file. |
 | Sign-in redirects to the wrong port on slot 1 | A browser-facing URL in the compose file does not use the port variable. |
-| `queue:<name>` not ready | The service connects to the broker before it is up and never retries. `wait` restarts it once after `healAfterSeconds`; a retry in the service is the real fix. |
+| `queue:<name>` not ready | The service connects to the broker before it is up and never retries. `wait` restarts it once after `healAfterSec`; a retry in the service is the real fix. |
 
 ## 8. Hand over
 

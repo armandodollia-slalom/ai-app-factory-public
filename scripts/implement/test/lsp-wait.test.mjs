@@ -18,7 +18,7 @@ console.log(JSON.stringify({ ok: true, leased: busy ? 'unavailable' : 'running',
 `);
   return script;
 }
-const config = (dir, script, extra = {}) => ({ root: dir, implement: { lsp: { lspdCmd: [process.execPath, script], leaseWaitPollSec: 0.05, ...extra } } });
+const config = (dir, script, extra = {}) => ({ root: dir, lsp: { client: { lspdCmd: [process.execPath, script], leaseWaitPollSec: 0.05, ...extra } } });
 
 // Dogfood C5: CHK-1 started without the C# server because a finished run held the only slot.
 test('a run waits a bounded time for a free language server slot, and records what it had to go without', async () => {

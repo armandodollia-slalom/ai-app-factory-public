@@ -106,14 +106,14 @@ test('the headline demos come from the test plan: a marked case, else the main e
 
 test('one narrator run for every headline video, one retry with the errors, then the automatic lines; costs recorded as their own stage', () => {
   const videos = [{ name: 'a', title: 'TC-BRAND-2-01 Selecting the Daybird card', steps: log, key: 'feat/x' }, { name: 'b', title: 'TC-BRAND-2-02 Same, second video', steps: log, key: 'feat/x' }];
-  const config = { agent: { models: { automation: 'sonnet' } } };
+  const config = {};
   // a: valid at once; b: invalid twice (a raw path).
   const stub = scriptedNarrator({ write: (v) => (v.id === 'v2' ? { id: 'v2', segments: [good.segments[0], { ...good.segments[1], text: 'The shopper goes to /brands and picks the Daybird card there.' }, good.segments[2]] } : { ...good, id: v.id }) });
   const r = scriptVideos({ root: os.tmpdir(), config, videos, runAgent: stub.runAgent, cases: [] });
   assert.deepEqual(Object.keys(r.scripts), ['a']);
   assert.match(r.fallback.b, /the script failed validation twice \(segment 2 \(walk\) contains a raw URL or path/);
   assert.equal(stub.calls.length, 2);
-  assert.deepEqual(stub.calls.map((c) => [c.name, c.mode, c.model, c.usage.stage, c.usage.round]), [['demo-narrator', 'read', 'sonnet', 'demo-narration', 1], ['demo-narrator', 'read', 'sonnet', 'demo-narration', 2]]);
+  assert.deepEqual(stub.calls.map((c) => [c.name, c.mode, c.usage.stage, c.usage.round]), [['demo-narrator', 'read', 'demo-narration', 1], ['demo-narrator', 'read', 'demo-narration', 2]]);
   assert.match(stub.tasks[1], /did not pass the checks[\s\S]*video v2: segment 2 \(walk\) contains a raw URL/);
   assert.ok(!/## Video v1/.test(stub.tasks[1]), 'the retry carries only the videos that failed');
   // An unavailable agent, and narration by agent switched off: every video falls back, and says why.
@@ -121,10 +121,10 @@ test('one narrator run for every headline video, one retry with the errors, then
   assert.match(down.fallback.a, /the narrator agent is unavailable \(usage limit reached\)/);
   const off = scriptVideos({ root: os.tmpdir(), config: { video: { script: { scope: 'none' } } }, videos, runAgent: () => assert.fail('no agent when off'), cases: [] });
   assert.match(off.fallback.b, /narration by agent is off/);
-  // The model is configurable; the default is the test-automation model.
+  // The narrator runs on its own pool entry (models.agents.demo-narrator), resolved by its agent name.
   const own = scriptedNarrator();
-  scriptVideos({ root: os.tmpdir(), config: { ...config, video: { script: { model: 'haiku' } } }, videos: videos.slice(0, 1), runAgent: own.runAgent, cases: [] });
-  assert.equal(own.calls[0].model, 'haiku');
+  scriptVideos({ root: os.tmpdir(), config, videos: videos.slice(0, 1), runAgent: own.runAgent, cases: [] });
+  assert.deepEqual([own.calls[0].name, own.calls[0].model, own.calls[0].entry], ['demo-narrator', undefined, undefined]);
 });
 
 test('one step, one line: a caption that says what the assertion line said replaces it (the 0.2.88 "Now on" / "Now at" pair)', () => {
@@ -173,13 +173,13 @@ test('D16/ADV-26: video.script.scope has one validator in config.mjs, rejects un
   spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
   fs.mkdirSync(path.join(root, '.factory'), { recursive: true });
   fs.writeFileSync(path.join(root, '.factory/config.json'), JSON.stringify({ video: { script: { scope: 'bogus' } } }));
-  assert.throws(() => loadConfig(null, root), /video\.script\.scope must be one of headline, all, none/);
+  assert.throws(() => loadConfig(null, root), /video\.script\.scope is "bogus"; allowed: `headline`, `all`, `none`/);
 
   // factory doctor must report the bad video.script.scope as a failed row rather than crashing.
   const factoryCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../factory/factory.mjs');
   // Alone this takes seconds; under the parallel full suite it has needed more than a minute, so the bound is generous.
   const doc = spawnSync(process.execPath, [factoryCli, 'doctor'], { cwd: root, encoding: 'utf8', timeout: 180_000 });
-  assert.match(doc.stdout, /MISSING\s+demo video script settings \(video\.script\.scope\)/);
-  assert.match(doc.stdout, /video\.script\.scope must be one of headline, all, none/);
+  assert.match(doc.stdout, /MISSING\s+settings: known names and allowed values/);
+  assert.match(doc.stdout, /video\.script\.scope is "bogus"; allowed: `headline`, `all`, `none`/);
   assert.doesNotMatch(doc.stderr, /Error: \.factory\/config\.json: video\.script\.scope/);
 });

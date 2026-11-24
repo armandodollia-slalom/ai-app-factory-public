@@ -2,7 +2,11 @@
   "tickets": {
     "dir": ".factory/state/board",
     "repo": null,
-    "assetsBranch": "board-assets"
+    "assetsBranch": "board-assets",
+    "spikeEpic": {
+      "key": "epic-research-spikes",
+      "title": "Research spikes"
+    }
   },
   "stateDir": ".factory/state",
   "metricsDir": ".factory/metrics",
@@ -15,45 +19,140 @@
     "credentialsDir": "~/.config/ai-app-factory"
   },
   "storyGuard": {
+    "enabled": true,
     "folders": [
       ".factory/state/board"
-    ]
+    ],
+    "denyPaths": [],
+    "denyHosts": [],
+    "denyRepos": [],
+    "installReadable": false,
+    "networkOpen": false
   },
   "agent": {
-    "cli": "claude",
-    "supervisor": { "idleSec": 1800, "ceilingFactor": 10 },
-    "allowedModels": [
-      "opus",
-      "sonnet",
-      "sol"
-    ],
-    "modelIds": {
-      "claude": {
-        "opus": "claude-opus-5-5",
-        "sonnet": "claude-sonnet-5-5"
-      },
-      "copilot": {
-        "opus": "claude-opus-5.5",
-        "sonnet": "claude-sonnet-5.5",
-        "sol": "gpt-6.1-sol"
-      },
-      "codex": {
-        "sol": "gpt-6.1-sol"
-      }
+    "supervisor": {
+      "idleSec": 1800,
+      "ceilingFactor": 10
     },
-    "strictModels": true,
-    "models": {
-      "default": "sonnet"
-    },
-    "resultParseRetries": 1
+    "resultParseRetries": 1,
+    "claude": {
+      "promptCacheTtlSec": 300,
+      "toolSearch": false
+    }
   },
   "recovery": {
-    "maxAttempts": 3,
-    "backoffSec": 60,
-    "startingGraceSec": 120
+    "startingGraceSec": 120,
+    "maxRetries": 3,
+    "retryDelaySec": 60
   },
   "implExclude": [
     ".factory",
     "graphify-out"
-  ]
+  ],
+  "factoryGuard": {
+    "enabled": true,
+    "protected": [
+      ".factory/config.json",
+      ".factory/factory.json",
+      ".factory/manifest.json",
+      ".factory/bin",
+      ".factory/agents",
+      ".factory/lessons",
+      ".factory/policy",
+      ".factory/githooks"
+    ],
+    "writers": [
+      "retro"
+    ]
+  },
+  "council": {
+    "members": 1,
+    "blockQuorum": "any",
+    "onUnavailable": "fail",
+    "lateGraceSec": 120,
+    "explorationSeat": {
+      "enabled": true
+    },
+    "shadowSeat": {
+      "enabled": false
+    },
+    "scorecard": {
+      "minSeats": 10,
+      "weights": {
+        "prCheckRuling": 1,
+        "miss": 1,
+        "ledToChange": 0.5,
+        "lowWeightMiss": 0.25
+      }
+    },
+    "intercom": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 0,
+      "advertiseHost": null,
+      "allowInsecureRemote": false,
+      "maxTurnsPerMember": 2,
+      "maxEscalations": 3,
+      "onSplit": "orchestrator"
+    }
+  },
+  "orchestrator": {
+    "model": "opus",
+    "effort": null
+  },
+  "retro": {
+    "factory": {
+      "enabled": true,
+      "source": null,
+      "allowedPaths": [
+        "agents/",
+        "docs/",
+        "templates/",
+        "skills/"
+      ],
+      "evidence": "summary"
+    },
+    "enabled": true,
+    "allowedPaths": [
+      ".factory/agents/",
+      ".factory/policy/"
+    ],
+    "windowDays": 7,
+    "intervalDays": 7,
+    "lessons": {
+      "storyThreshold": 3,
+      "maxRules": 15,
+      "retireAfterStories": 10,
+      "revertMinRounds": 6,
+      "examplesPerCategory": 5
+    }
+  },
+  "metrics": {
+    "sink": {
+      "type": "none"
+    }
+  },
+  "experiment": {
+    "testCmd": "npx playwright test -c playwright.teststack.config.ts {file}",
+    "testTimeoutSec": 1800
+  },
+  "analysis": {
+    "maxConcurrent": 2,
+    "coverageTimeoutSec": 1800,
+    "licenceReview": "default",
+    "maxFixRounds": 2
+  },
+  "agentOverlayDir": ".factory/agents",
+  "hooks": {
+    "codeAgents": [
+      "implementer"
+    ]
+  },
+  "project": {
+    "languages": [],
+    "toolPaths": [],
+    "services": [],
+    "frontendPaths": [],
+    "testRoots": []
+  }
 }

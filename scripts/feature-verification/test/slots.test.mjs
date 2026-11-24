@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { holdStorySlot, onLeasedSlot, slotAware, wantsSlot, withAgentSlot } from '../lib/slots.mjs';
+import { exportSlots, holdStorySlot, onLeasedSlot, slotAware, wantsSlot, withAgentSlot } from '../lib/slots.mjs';
+import { stackGuard } from '../../pipeline/lib/story-guard.mjs';
+import { slotZeroRefusal } from '../../teststack/teststack.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-slots-'));
 fs.mkdirSync(path.join(root, 'e2e/teststack'), { recursive: true });
@@ -47,12 +49,13 @@ test('slotAware: specs that name a slot-0 host port of the stack literally stay 
   assert.equal(slotAware(["'http://localhost:18080/'"], []), true, 'a stack without ports has no slot-0 ports');
 });
 
-test('wantsSlot: under implement (even one ticket at a time) and useSlots is on', () => {
-  assert.equal(wantsSlot({}, {}), false, 'a developer\'s own checkout uses slot 0');
-  assert.equal(wantsSlot({}, { IMPLEMENT_PARALLEL: '1' }), true, 'slot 0 was not built from the ticket worktree');
-  assert.equal(wantsSlot({}, { IMPLEMENT_PARALLEL: '4' }), true);
-  assert.equal(wantsSlot({ useSlots: false }, { IMPLEMENT_PARALLEL: '4' }), false);
-  assert.equal(wantsSlot({}, { FV_USE_SLOTS: '1' }), true);
+// GEN-7: featureVerification.slots.enabled allows a slot whenever it is on (it used to need a parallel run or the env).
+test('wantsSlot: whenever featureVerification.slots.enabled is on; FV_USE_SLOTS overrides it', () => {
+  const off = { featureVerification: { slots: { enabled: false } } };
+  assert.equal(wantsSlot({}, {}), true, 'the default is on, outside implement too');
+  assert.equal(wantsSlot(off, {}), false);
+  assert.equal(wantsSlot(off, { FV_USE_SLOTS: '1' }), true, 'the variable overrides the setting for one shell');
+  assert.equal(wantsSlot({}, { FV_USE_SLOTS: '0' }), false);
 });
 
 test('onLeasedSlot: leases, brings the slot up, runs with TESTSTACK_SLOT/URL, then downs and releases it', async () => {
@@ -71,7 +74,7 @@ test('onLeasedSlot: slot 0 (null) for slot-0 specs or no free slot; a stack that
     assert.match(named[0], /name slot 0's host ports literally/);
     assert.deepEqual(legacy.calls, [], 'no lease for slot-0 specs');
     const none = fakeStack({ lease: null });
-    const waited = await onLeasedSlot({ root, slotWaitSec: 60 }, { key: 'X-1', specFiles: ['e2e/teststack/good.spec.ts'] }, run, none.deps);
+    const waited = await onLeasedSlot({ root, featureVerification: { slotWaitSec: 60 } }, { key: 'X-1', specFiles: ['e2e/teststack/good.spec.ts'] }, run, none.deps);
     assert.match(waited[0], /^No free test-stack slot for X-1 after 60 s/);
     assert.match(waited[0], /would not count/);
     assert.deepEqual(none.waits, [60], 'it waits the configured time for a lease');
@@ -84,7 +87,7 @@ test('onLeasedSlot: slot 0 (null) for slot-0 specs or no free slot; a stack that
     assert.match(errors[0], /Baseline: the same build also fails on the base commit abc1234/);
     assert.deepEqual(broken.calls.at(-1), ['release', 3], 'the lease is released even when up fails');
   });
-  assert.equal(await onLeasedSlot({ root }, { key: 'X-1', specFiles: [] }, async () => 'ran', fakeStack().deps), null, 'outside implement run: slot 0');
+  assert.equal(await onLeasedSlot({ root, featureVerification: { slots: { enabled: false } } }, { key: 'X-1', specFiles: [] }, async () => 'ran', fakeStack().deps), null, 'slots off: slot 0');
 });
 
 // Dogfood C6: every concurrent run's test-automation agent ran `factory teststack up` on slot 0, whose images are tagged
@@ -99,12 +102,12 @@ test('withAgentSlot: the automation agent gets a slot of its own, torn down and 
     assert.deepEqual(failing.calls.at(-1), ['release', 3], 'released after a failure too');
     const none = fakeStack({ lease: null });
     let ran = false;
-    const r = await withAgentSlot({ root, slotWaitSec: 45 }, 'X-1', async (env) => ((ran = true), env), none.deps);
+    const r = await withAgentSlot({ root, featureVerification: { slotWaitSec: 45 } }, 'X-1', async (env) => ((ran = true), env), none.deps);
     assert.equal(ran, false, 'no free slot after the wait: the agent does not run on slot 0');
     assert.match(r.noSlot, /^No free test-stack slot for X-1 after 45 s/);
   });
   const outside = fakeStack();
-  assert.deepEqual(await withAgentSlot({ root }, 'X-1', async (env) => env, outside.deps), {}, 'outside implement run: no lease');
+  assert.deepEqual(await withAgentSlot({ root, featureVerification: { slots: { enabled: false } } }, 'X-1', async (env) => env, outside.deps), {}, 'slots off: no lease');
   assert.deepEqual(outside.calls, []);
 });
 
@@ -120,7 +123,7 @@ test('an automation pass holds one slot: the agent and every precheck round use 
   await withEnv({ IMPLEMENT_PARALLEL: '2' }, async () => {
     const f = fakeStack();
     const deps = { ...f.deps, head: () => 'c0ffee' };
-    const config = { root, useSlots: true };
+    const config = { root };
     const seen = [];
     await holdStorySlot(config, 'X-1', async () => {
       seen.push(await withAgentSlot(config, 'X-1', async (env) => env, deps));
@@ -143,7 +146,7 @@ test('an automation pass holds one slot: the agent and every precheck round use 
 test('without a slot for the pass, the agent and the precheck lease their own as before', async () => {
   await withEnv({ IMPLEMENT_PARALLEL: '2' }, async () => {
     const f = fakeStack({ lease: null });
-    const r = await holdStorySlot({ root, useSlots: true }, 'X-2', async () => withAgentSlot({ root, useSlots: true }, 'X-2', async () => 'ran', f.deps), f.deps);
+    const r = await holdStorySlot({ root }, 'X-2', async () => withAgentSlot({ root }, 'X-2', async () => 'ran', f.deps), f.deps);
     assert.deepEqual(r, { noSlot: r.noSlot });
     assert.equal(f.calls.filter((c) => c[0] === 'lease').length, 2);
   });
@@ -152,10 +155,23 @@ test('without a slot for the pass, the agent and the precheck lease their own as
 test('another role (the PR check fixer) leases its own slot with its own owner, stage and wait', async () => {
   await withEnv({ IMPLEMENT_PARALLEL: '2' }, async () => {
     const f = fakeStack();
-    const seen = await withAgentSlot({ root, useSlots: true }, 'X-3', async (env) => env.TESTSTACK_SLOT, f.deps, { stage: 'pr-check fixer', owner: 'pr-check-fixer-pr-9', waitSec: 300 });
+    const seen = await withAgentSlot({ root }, 'X-3', async (env) => env.TESTSTACK_SLOT, f.deps, { stage: 'pr-check fixer', owner: 'pr-check-fixer-pr-9', waitSec: 300 });
     assert.equal(seen, '3');
     assert.deepEqual(f.calls[0], ['lease', 'pr-check-fixer-pr-9']);
     assert.equal(f.waits[0], 300);
     assert.deepEqual(f.calls.slice(-2), [['teststack', 3, 'down'], ['release', 3]]);
   });
+});
+
+// Council r1 (A5): the PR check forced FV_USE_SLOTS=1, so slots.enabled off was ignored by its agents' guards.
+test('a run exports featureVerification.slots.enabled to its agents: off, the stack guard and teststack leave slot 0 open even under implement', () => {
+  const off = { featureVerification: { slots: { enabled: false } } };
+  const env = { IMPLEMENT_PARALLEL: '2' };
+  assert.equal(exportSlots(off, env), '0');
+  const agent = { ...env, PIPELINE_CHILD: '1', PIPELINE_AGENT_NAME: 'pr-check-fixer' };
+  assert.equal(stackGuard({}, { tool_name: 'Bash', tool_input: { command: 'npx playwright test' } }, agent), null);
+  assert.equal(slotZeroRefusal('up', 0, agent), null);
+  assert.equal(exportSlots({}, {}), '1', 'on by default');
+  assert.equal(exportSlots(off, { FV_USE_SLOTS: '1' }), '1', 'FV_USE_SLOTS overrides it');
+  assert.ok(stackGuard({}, { tool_name: 'Bash', tool_input: { command: 'npx playwright test' } }, { PIPELINE_CHILD: '1', PIPELINE_AGENT_NAME: 'pr-check-fixer', FV_USE_SLOTS: exportSlots({}, {}) }), 'on: the guard refuses an agent without a slot');
 });

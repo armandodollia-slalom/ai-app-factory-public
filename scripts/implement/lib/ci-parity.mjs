@@ -93,19 +93,27 @@ export const gitHead = (root) => git(root, ['rev-parse', 'HEAD']).stdout.trim();
 // plans, docs and lint configuration.
 const NOT_PRODUCTION = /^(?:tests?\/|e2e\/|\.factory\/|graphify-out\/|docs\/|[^/]+\.md$|\.markdownlint|\.editorconfig)|(?:^|\/)(?:[^/]*\.(?:Tests?|UnitTests|FunctionalTests)[^/]*)\//;
 
-export function parityGate({ cwd, base, targetArgs, seedFile, prCheckCli, env = process.env, run = defaultRun, checks = parityChecks, findingsOf = parityFindings, log = () => {} }) {
+// `budget` (ci-wait.mjs ciFixBudget): the fix is one of the ticket's CI fixing rounds (implement.ci.maxFixRounds), charged
+// before the fixer starts; with none left no fixer runs and the failing checks stand (a person decides).
+export function parityGate({ cwd, base, targetArgs, seedFile, prCheckCli, budget, env = process.env, run = defaultRun, checks = parityChecks, findingsOf = parityFindings, log = () => {} }) {
+  if (!budget) throw new Error('parityGate needs the ticket\'s CI fixing budget (ciFixBudget)');
   let results = checks(cwd, base, { run });
   const failed = results.filter((r) => !r.ok);
   if (!failed.length) return { results, fixRun: null };
+  if (budget.left() < 1) {
+    log(`CI checks that would fail on the PR: ${failed.map((r) => r.check).join('; ')}; no fixing round left (implement.ci.maxFixRounds): a person decides`);
+    return { results, fixRun: null, noFixRoundLeft: true };
+  }
   log(`CI checks that would fail on the PR: ${failed.map((r) => r.check).join('; ')}; fixing them first`);
+  budget.charge();
   fs.mkdirSync(path.dirname(seedFile), { recursive: true });
   writeText(seedFile, JSON.stringify({ score: 8, lensScores: {}, upheldFindings: findingsOf(results) }, null, 2));
   // The fixer fixes the failing checks; the checks themselves, run again below, are the verification. No critic round
   // follows a fix that touched only tests, the pipeline's records or docs: the PR check already judged the code, and a
   // full round after a mechanical fix cost a bug about $2.30 (council C3, cost). A fix that changed production code gets
-  // one report-only round of the code lenses.
+  // one report-only round of the code lenses. The fixing run's round limit is prCheck.maxCouncilRounds, as in every caller.
   const before = String(run('git', ['rev-parse', 'HEAD'], { cwd }).stdout ?? '').trim();
-  const r = run(process.execPath, [prCheckCli, 'run', ...targetArgs, '--base', base, '--until', 'major', '--max-rounds', '1', '--fix-first', seedFile, '--json'], { cwd, env, timeoutSec: 72000 } /* a ceiling (10x the usual 2 h): its agents end on no progress (agent-supervisor.mjs) */);
+  const r = run(process.execPath, [prCheckCli, 'run', ...targetArgs, '--base', base, '--until', 'major', '--fix-first', seedFile, '--json'], { cwd, env, timeoutSec: 72000 } /* a ceiling (10x the usual 2 h): its agents end on no progress (agent-supervisor.mjs) */);
   let fixRun = null;
   try {
     const out = JSON.parse(String(r.stdout).slice(String(r.stdout).indexOf('{')));

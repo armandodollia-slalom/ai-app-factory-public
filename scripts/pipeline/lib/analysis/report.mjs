@@ -40,19 +40,9 @@ export function readReport(config, sha, slot, { configHash = null, any = false }
   return all.filter((r) => !configHash || r.configHash === configHash).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0] ?? null;
 }
 
-// Keeps the newest `keep` commits' reports (disk: nothing unbounded per worktree). Returns the removed folders.
-export function pruneReports(config, keep = 200) {
-  const dir = reportsDir(config);
-  if (!fs.existsSync(dir)) return [];
-  const entries = fs.readdirSync(dir).map((n) => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs })).sort((a, b) => b.t - a.t);
-  const gone = entries.slice(keep).map((e) => e.n);
-  for (const n of gone) fs.rmSync(path.join(dir, n), { recursive: true, force: true });
-  return gone;
-}
-
 // The report's open findings as harness findings for a pair verdict or a council: `source: tool`, an id stable across
 // rounds, the tool's lens, blocking only for rules on the tool's block list, always `action: fix`. They stand outside
-// the council's votes (blockOn) and cannot be disputed to a model: only a change that makes the tool stop reporting
+// the council's votes (blockQuorum) and cannot be disputed to a model: only a change that makes the tool stop reporting
 // them ends them.
 export function toolFindings(report) {
   return (report?.findings ?? []).map((f) => ({

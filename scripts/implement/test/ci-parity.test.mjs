@@ -6,6 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CI_PARITY, parityFindings, parityGate, paritySection } from '../lib/ci-parity.mjs';
 import { afterFixChecks } from '../../pr-check/lib/loop.mjs';
+import { ciFixBudget } from '../lib/ci-wait.mjs';
+
+const budget = () => ciFixBudget({ ci: { maxFixRounds: 2 } }, {}, {});
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const workflows = path.join(root, 'templates/ci/github-actions/workflows');
@@ -46,20 +49,20 @@ test('parityGate: failing checks go through the fixing loop as findings, then ru
   };
   const pcCalls = () => all.filter((a) => a[1] === 'pr-check.mjs').map((a) => a.slice(1));
   const seedFile = path.join(dir, 'seed.json');
-  const r = parityGate({ cwd: dir, base: 'origin/main', targetArgs: ['--story', 'S-1'], seedFile, prCheckCli: 'pr-check.mjs', run, checks });
+  const r = parityGate({ cwd: dir, base: 'origin/main', targetArgs: ['--story', 'S-1'], seedFile, prCheckCli: 'pr-check.mjs', budget: budget(), run, checks });
   assert.deepEqual(r.fixRun, { verdict: 'ACCEPTED', rounds: 1, commits: ['abc'] });
   assert.ok(r.results.every((x) => x.ok));
   const calls = pcCalls();
   assert.deepEqual(calls[0].slice(0, 4), ['pr-check.mjs', 'run', '--story', 'S-1']);
   assert.ok(calls[0].includes('--fix-first') && calls[0].includes(seedFile));
   // Council C3 (cost): a fix that touched only tests and records is verified by the checks, with no critic round.
-  assert.deepEqual(calls[0].slice(calls[0].indexOf('--max-rounds'), calls[0].indexOf('--max-rounds') + 2), ['--max-rounds', '1']);
+  assert.ok(!calls[0].includes('--max-rounds'), 'the round limit is prCheck.maxCouncilRounds, as in every caller');
   assert.equal(calls.length, 1, 'no review round after a test-only fix');
   // A fix that changed production code gets one report-only round of the code lenses.
   round = 0;
   all.length = 0;
   changed = 'src/Api/Orders.cs\n';
-  const r2 = parityGate({ cwd: dir, base: 'origin/main', targetArgs: ['--story', 'S-1'], seedFile, prCheckCli: 'pr-check.mjs', run, checks });
+  const r2 = parityGate({ cwd: dir, base: 'origin/main', targetArgs: ['--story', 'S-1'], seedFile, prCheckCli: 'pr-check.mjs', budget: budget(), run, checks });
   const review = pcCalls()[1];
   assert.ok(review.includes('--no-fix') && review.includes('acceptance,flow,style'), review.join(' '));
   assert.equal(r2.fixRun.review.score, 10);
@@ -67,7 +70,7 @@ test('parityGate: failing checks go through the fixing loop as findings, then ru
   assert.deepEqual(seed.upheldFindings.map((f) => [f.id, f.severity, f.title]), [['CI-1', 'major', 'CI check fails before the PR: gate.yml lint']]);
   assert.equal(paritySection(r.results), '- CI checks run before this PR: all 2 passed (lint; pipeline: factory check)\n');
   assert.match(paritySection([{ check: 'gate.yml lint', ok: false }]), /1 of 1 still fail \(gate.yml lint\)/);
-  assert.deepEqual(parityGate({ cwd: dir, base: 'b', targetArgs: [], seedFile, prCheckCli: 'x', run: () => assert.fail('no fix run'), checks: () => [{ check: 'c', ok: true }] }).fixRun, null);
+  assert.deepEqual(parityGate({ cwd: dir, base: 'b', targetArgs: [], seedFile, prCheckCli: 'x', budget: budget(), run: () => assert.fail('no fix run'), checks: () => [{ check: 'c', ok: true }] }).fixRun, null);
   assert.equal(parityFindings([{ check: 'c', ok: true }]).length, 0);
 });
 

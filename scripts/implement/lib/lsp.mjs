@@ -16,7 +16,7 @@
 //       -> {"ok":true,"files":{"<path>":[{"severity","line","col","code","message"}] | {"unavailable":"..."}}}
 //   <setupCmd>, run in a new worktree first (checks that the configured servers can be found)
 //   MCP tool calls are logged as JSONL {ts, agent, tool, file, symbol} to <worktree git-dir>/lsp/calls.jsonl.
-// The commands are `implement.lsp.lspdCmd` and `implement.lsp.setupCmd` in the config; relative paths in them
+// The commands are `lsp.client.lspdCmd` and `lsp.client.setupCmd` in the config; relative paths in them
 // are looked up in the engine's install root first, then in the app repo.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,6 +24,7 @@ import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
 import { appendJsonl, nowIso, readJsonl, runAsync } from '../../pipeline/lib/util.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 export function gitDir(worktree) {
   const r = git(worktree, ['rev-parse', '--git-dir']);
@@ -48,7 +49,7 @@ function lastJson(text) {
 }
 
 // Changed lines that declare a non-private member with a parameter list (a function, method or constructor
-// signature) in the common declaration styles. `implement.lsp.signaturePattern` (a regular expression source
+// signature) in the common declaration styles. `lsp.client.signaturePattern` (a regular expression source
 // matched against each changed line, including its leading + or -) replaces it for a codebase it does not fit.
 const SIGNATURE = /^[+-](?![+-])\s*(?:\[[^\]]*\]\s*|@[\w.]+(?:\([^)]*\))?\s*)*(?:public|internal|protected|export|pub|def|func)\b[^=;{]*\(/;
 export const signatureChanges = (diff, pattern = SIGNATURE) =>
@@ -60,7 +61,7 @@ export const signatureChanges = (diff, pattern = SIGNATURE) =>
 const isReferences = (tool) => /referen/i.test(String(tool ?? ''));
 
 export function lspAdapter(config, { mainRoot = INSTALL_ROOT, log = () => {} } = {}) {
-  const lsp = config.implement.lsp ?? {};
+  const lsp = { ...defaultSettings().lsp.client, ...(config.lsp?.client ?? {}) };
   const resolve = (cmd, roots) => {
     if (!Array.isArray(cmd) || !cmd.length) return null;
     const [head, ...rest] = cmd;
@@ -80,7 +81,7 @@ export function lspAdapter(config, { mainRoot = INSTALL_ROOT, log = () => {} } =
   const unavailable = new Map(); // worktree -> [server (reason)] when a run had to go without
 
   const call = async (cmd, args, cwd) => {
-    const r = await runAsync(cmd[0], [...cmd.slice(1), ...args], { cwd, timeoutSec: lsp.timeoutSec ?? 300 });
+    const r = await runAsync(cmd[0], [...cmd.slice(1), ...args], { cwd, timeoutSec: lsp.timeoutSec });
     return { status: r.status, out: lastJson(r.stdout), stderr: r.stderr };
   };
 
@@ -104,10 +105,10 @@ export function lspAdapter(config, { mainRoot = INSTALL_ROOT, log = () => {} } =
       // No free slot for a leased server: wait a bounded time for one (another run may be finishing) rather than
       // start without it (dogfood C5); then go on without, and say so (`unavailable`, in the PR body).
       const busy = (res) => Object.values(res.servers ?? {}).some((s) => s.status !== 'running' && /slots are in use/.test(s.reason ?? ''));
-      const deadline = Date.now() + (lsp.leaseWaitSec ?? 300) * 1000;
+      const deadline = Date.now() + lsp.leaseWaitSec * 1000;
       while (busy(result) && Date.now() < deadline) {
-        log(`lsp: no free language server slot for ${path.basename(worktree)}; waiting for one (up to ${lsp.leaseWaitSec ?? 300} s)`);
-        await new Promise((r) => setTimeout(r, (lsp.leaseWaitPollSec ?? 15) * 1000));
+        log(`lsp: no free language server slot for ${path.basename(worktree)}; waiting for one (up to ${lsp.leaseWaitSec} s)`);
+        await new Promise((r) => setTimeout(r, lsp.leaseWaitPollSec * 1000));
         result = await startOnce();
       }
       if (result.ok) running.set(worktree, result);

@@ -508,7 +508,7 @@ test('`video.apiEvidence.paymentBodies` is validated like the other choices, by 
   spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
   fs.mkdirSync(path.join(dir, '.factory'));
   fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ video: { apiEvidence: { paymentBodies: 'publish' } } }));
-  for (const load of [() => toolConfig('prune', {}, dir), () => loadConfig('implement', dir)]) assert.throws(load, (e) => e instanceof ConfigError && /video\.apiEvidence\.paymentBodies must be one of withhold, mask/.test(e.message));
+  for (const load of [() => toolConfig('prune', {}, dir), () => loadConfig('implement', dir)]) assert.throws(load, (e) => e instanceof ConfigError && /video\.apiEvidence\.paymentBodies is "publish"; allowed: `withhold`, `mask`/.test(e.message));
   fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ video: { apiEvidence: { paymentBodies: 'mask' } } }));
   assert.doesNotThrow(() => toolConfig('prune', {}, dir));
 });

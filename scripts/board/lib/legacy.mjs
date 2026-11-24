@@ -7,6 +7,7 @@ import path from 'node:path';
 import { blockersOf } from '../../implement/lib/batch.mjs';
 import { epicSlugOf } from './board.mjs';
 import { sha256 } from './ticket-format.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 const STORY = /^([A-Z][A-Z0-9]*-\d+)-.+\.md$/;
 const KEY_PREFIX = /^([A-Z][A-Z0-9]*-\d+)(?:-|$)/;
@@ -102,7 +103,7 @@ export function classifyLegacy(config, root = legacyRoot(config)) {
   }
   // 3. Research documents: any other Markdown that is not an index or template becomes a research spike
   //    under the spike epic (a new epic, generated below).
-  const spikeEpic = config.tickets.spikeEpic ?? { key: "epic-research-spikes", title: "Research spikes" };
+  const spikeEpic = setting(config, 'tickets.spikeEpic');
   const spikes = [];
   for (const rel of files.filter((f) => f.endsWith('.md') && !placed.has(f) && !f.startsWith('mockups/') && !INDEX_DOC.test(path.posix.basename(f)) && !(f.startsWith('stories/') && path.posix.dirname(f) === 'stories'))) {
     const stem = path.posix.basename(rel, '.md');

@@ -27,6 +27,7 @@ import { apiEvidenceSettings, apiTestOfCase, backendBugs, cardValuesIn, cleanExc
 import { baseCheckout, bugPairSettings, testOfCase, uiBugs, verifyBefore } from './bugpair.mjs';
 import { automaticScript, caseIdOf, headlineCases, planCases, recordedEvents, scriptSettings, scriptVideos, ticketFor } from './script.mjs';
 import { resolveTools } from './tools.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
 const INSTALL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const REDACT_MODULE = path.join(INSTALL_ROOT, 'scripts/pipeline/lib/redact.mjs');
@@ -41,7 +42,7 @@ export const LOCAL_FOOTER = 'Recorded, narrated and rendered on the machine that
 
 // The command that runs the specs in demo mode; `{specs}` is replaced by the spec paths.
 // Demo pacing makes a spec several times slower than at test speed: its own timeout is lifted (--timeout).
-export const DEFAULT_RECORD_CMD = 'npx playwright test -c playwright.teststack.config.ts --project scenarios --no-deps --timeout 900000 {specs}';
+export const DEFAULT_RECORD_CMD = defaultSettings().prVideo.recordCmd;
 
 // The tickets' titles by key, from the ticket cache (`<state>/board/<KEY>/story.md`, first line "# KEY: title"), for the
 // opening line of each video. Missing cache: the line names the key only.
@@ -68,7 +69,8 @@ export function demoEnv(tools, env = process.env, { tickets = {}, timeoutSec = 9
     E2E_KEEP_VIDEOS: '1',
     E2E_API_LOG: '1',
     E2E_REDACT_MODULE: REDACT_MODULE,
-    E2E_DEMO_PACING: JSON.stringify({ stepDelayMs: p.stepDelayMs, holdMs: p.holdMs, typeDelayMs: p.typeDelayMs, cursorMs: p.cursorMs }),
+    // The e2e demo fixture paces in milliseconds; the settings are seconds (video.pacing.*Sec).
+    E2E_DEMO_PACING: JSON.stringify({ stepDelayMs: Math.round(p.stepDelaySec * 1000), holdMs: Math.round(p.holdSec * 1000), typeDelayMs: Math.round(p.typeDelaySec * 1000), cursorMs: Math.round(p.cursorSec * 1000) }),
     E2E_VIDEO_SIZE: `${size.width}x${size.height}`,
     // A spec's own test.setTimeout cannot cut a demo recording short (e2e/fixtures.ts raises it to this floor).
     E2E_DEMO_TIMEOUT_MS: String(Math.round(Number(timeoutSec) * 1000)),
@@ -84,7 +86,7 @@ export function renderRecorded({ videosDir, stageDir, renderDir, tools, log = de
   const manifestFile = path.join(videosDir, 'manifest.json');
   const manifest = fs.existsSync(manifestFile) ? JSON.parse(fs.readFileSync(manifestFile, 'utf8')) : null;
   const settings = scriptSettings(config);
-  const plan = cases ?? (root ? planCases(root, config.plansDir ?? '.factory/plans') : []);
+  const plan = cases ?? (root ? planCases(root, setting(config, 'featureVerification.plansDir')) : []);
   const headline = headlineCases(plan);
   const entries = [];
   const todo = [];
@@ -246,7 +248,7 @@ function backendEvidence({ root, config, key, backend, before, afterManifest, se
 
 // The whole local step for one story branch. Returns { video, api, entries, note }. Never opens or edits a PR.
 export async function produceLocal({ root, config, base, key, headSha, host, deps = {}, log = defaultLog, env = process.env }) {
-  const settings = { specPatterns: [], videosDir: 'artifacts/e2e-videos', storageBranch: 'pr-videos', recordCmd: DEFAULT_RECORD_CMD, ...(config.prVideo ?? {}) };
+  const settings = { ...defaultSettings().prVideo, ...(config.prVideo ?? {}) };
   const tools = deps.tools ?? resolveTools(config, { env });
   const folder = keyFolder(key);
   const scope = deps.scope ?? changeScope(root, base, config);
@@ -255,13 +257,13 @@ export async function produceLocal({ root, config, base, key, headSha, host, dep
   const sh = deps.sh ?? ((cmd, e) => spawnSync('sh', ['-c', cmd], { cwd: root, env: e, stdio: 'inherit' }).status);
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-video-local-'));
   // Local only (the factory's state folder is never committed): the rendered videos stay here for the run's report.
-  const renderDir = path.join(root, config.stateDir ?? '.factory/state', 'demo-videos', folder);
+  const renderDir = path.join(root, setting(config, 'stateDir'), 'demo-videos', folder);
   fs.mkdirSync(renderDir, { recursive: true });
   const section = (s) => writeText(path.join(stage, 'section.md'), `<!-- head: ${headSha ?? ''} -->\n${s ?? ''}\n`);
   const fileUrl = (file, opts) => host.fileUrl(file, settings.storageBranch, opts);
   try {
-    const stateDir = config.stateDir ?? '.factory/state';
-    const cases = deps.cases ?? planCases(root, config.plansDir ?? '.factory/plans');
+    const stateDir = setting(config, 'stateDir');
+    const cases = deps.cases ?? planCases(root, setting(config, 'featureVerification.plansDir'));
     const pairSettings = bugPairSettings(config);
     const apiSettings = apiEvidenceSettings(config);
     // Backend bugs whose reproduction case a changed spec runs: their requests are captured before and after the fix,
@@ -284,7 +286,7 @@ export async function produceLocal({ root, config, base, key, headSha, host, dep
     const videosDir = path.join(root, settings.videosDir);
     const beforeDir = `${videosDir}-before`;
     // `stackRoot`: the checkout whose stack is up; the specs' own stack calls (loading a scenario) go to it.
-    const record = (files, grep = null, stackRoot = null) => sh(`${settings.recordCmd.replace('{specs}', files.map((s) => JSON.stringify(s)).join(' '))}${grep ? ` --retries 0 --grep ${JSON.stringify(grep)}` : ''}`, { ...demoEnv(tools, env, { tickets: ticketTitles(root, stateDir), timeoutSec: settings.testTimeoutSec ?? 900 }), ...(stackRoot ? { TESTSTACK_ROOT: stackRoot } : {}) });
+    const record = (files, grep = null, stackRoot = null) => sh(`${settings.recordCmd.replace('{specs}', files.map((s) => JSON.stringify(s)).join(' '))}${grep ? ` --retries 0 --grep ${JSON.stringify(grep)}` : ''}`, { ...demoEnv(tools, env, { tickets: ticketTitles(root, stateDir), timeoutSec: settings.testTimeoutSec }), ...(stackRoot ? { TESTSTACK_ROOT: stackRoot } : {}) });
     const timing = (side, seconds, extra = {}) => {
       try {
         appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: new Date().toISOString(), story: key, kind: 'demo-recording', side, seconds: Math.round(seconds), ...extra }]);

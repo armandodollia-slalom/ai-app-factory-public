@@ -502,3 +502,21 @@ test('an owner decision moves a card in review to Failed', async () => {
   assert.equal(nextLane('review', 'failed'), 'failed');
   assert.equal(nextLane('done', 'failed'), null);
 });
+
+// Council r1 (T1): board sync is what records a later bug ticket against the councils that passed the ticket it names.
+test('board sync records a bug ticket that names a delivered ticket as a lower-weight miss of the councils that passed it, once', () => {
+  const f = fixture();
+  try {
+    fs.mkdirSync(path.join(f.root, '.factory/metrics'), { recursive: true });
+    fs.writeFileSync(path.join(f.root, '.factory/metrics/council-rounds.jsonl'), `${JSON.stringify({ ts: 't', stage: 'architectureReview', story: 'DEMO-1', round: 1, pass: true, members: [{ name: 'verifier', entry: 'sonnet', lens: 'all' }] })}\n`);
+    fs.writeFileSync(path.join(f.root, 'demo-1.md'), '# DEMO-1: First\n');
+    fs.writeFileSync(path.join(f.root, 'bug-9.md'), '# BUG-9: DEMO-1 shows the wrong total\n');
+    const stories = () => [{ key: 'DEMO-1', file: 'demo-1.md' }, { key: 'BUG-9', file: 'bug-9.md' }];
+    syncBoard(f.config, { listStories: stories });
+    syncBoard(f.config, { listStories: stories });
+    const misses = fs.readFileSync(path.join(f.root, '.factory/metrics/council-findings.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((r) => r.kind === 'miss');
+    assert.deepEqual(misses.map((m) => [m.story, m.stage, m.seat, m.source, m.finding, m.lowWeight]), [['DEMO-1', 'architectureReview', 'verifier', 'bug-ticket', 'BUG-9', true]]);
+  } finally {
+    f.cleanup();
+  }
+});

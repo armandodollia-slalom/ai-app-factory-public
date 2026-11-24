@@ -43,7 +43,7 @@ test('routing table: what a finding is about decides who fixes it', () => {
   assert.equal(r({ lens: 'acceptance', severity: 'blocking', title: 'Quantities above 9999 are refused' }), 'implementation');
   assert.equal(r({ lens: 'opus', severity: 'minor', title: 'Error styling diverges from the validation-message style' }, { opus: 'rewrite' }), 'light');
   assert.equal(r({ lens: 'style', action: 'rewrite', severity: 'minor', title: 'Use Math.Clamp' }), 'light');
-  assert.match(routeFinding({ lens: 'design', severity: 'minor' }).why, /below returnToImplementation\.minSeverity major/);
+  assert.match(routeFinding({ lens: 'design', severity: 'minor' }).why, /below prCheck\.returnToImplementation\.minSeverity major/);
   assert.equal(routeFinding({ lens: 'design', severity: 'minor' }, { settings: { ...RETURN_DEFAULTS, minSeverity: 'minor' } }).route, 'implementation', 'governance can return minors too');
   // A finding with no file is routed by the paths its text names (live: "captionAfterPost copied from bug-44.spec.ts").
   assert.equal(r({ lens: 'opus', severity: 'major', title: 'captionAfterPost copied from bug-44.spec.ts' }, { opus: 'rewrite' }), 'light');
@@ -78,7 +78,7 @@ const upheld = { result: { score: 6, lensScores: { acceptance: 6 }, summary: 'in
 const pass = { result: { score: 10, lensScores: {}, summary: 'all met', rulings: [] } };
 const base = {
   implementer: [{ writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'coupon applied' } }, { writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'limit removed' } }],
-  'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+  'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
   'test-planner': [{ writePlan: [{ title: 'Valid coupon applies', type: 'happy' }, { title: 'Expired coupon rejected', type: 'sad' }] }],
   'test-plan-verifier': [{ result: { score: 10, summary: 'ok', gaps: [] } }],
   'test-automation': [{ writeTests: [1, 2], result: { status: 'done' } }],
@@ -98,14 +98,21 @@ function setup(name, { maxReturns = 2 } = {}) {
   for (const dir of ['scripts/pipeline', 'scripts/review', 'scripts/feature-verification', 'scripts/implement', 'scripts/pr-check', 'scripts/board', 'scripts/models', 'scripts/pr-video', 'scripts/review-gate', 'scripts/retro', 'scripts/factory', 'scripts/stack', 'scripts/teststack'].filter((d) => fs.existsSync(path.join(source, d)))) {
     fs.cpSync(path.join(source, dir), path.join(repo, dir), { recursive: true, filter: (p) => !p.startsWith(path.join(source, dir, 'test')) });
   }
+  // Every section's defaults and descriptions: a stage reads the others' (scripts/pipeline/lib/settings.mjs).
+  for (const d of fs.readdirSync(path.join(source, 'scripts'))) for (const f of ['config.json', 'settings.json']) if (fs.existsSync(path.join(source, 'scripts', d, f)) && !fs.existsSync(path.join(repo, 'scripts', d, f))) {
+    fs.mkdirSync(path.join(repo, 'scripts', d), { recursive: true });
+    fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
+  }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
-  editJson(path.join(repo, 'scripts/feature-verification/config.json'), (j) => (j.precheck.runTests = false));
+  editJson(path.join(repo, 'scripts/feature-verification/config.json'), (j) => (j.featureVerification.precheck.runTests = false));
   editJson(path.join(repo, 'scripts/pipeline/config.json'), (j) => (j.implExclude = ['.factory', 'graphify-out', 'e2e']));
   editJson(path.join(repo, 'scripts/implement/config.json'), (j) => {
-    Object.assign(j.implement, { fvPollSec: 0.2, parallel: 1, orchestrate: false, ciParity: false, maxWorkerRetries: 1, retryDelaySec: 0 });
-    j.implement.prCheck = { ...(j.implement.prCheck ?? {}), returnToImplementation: { maxReturns } };
+    Object.assign(j.implement, { pollSec: { featureVerification: 0.2 }, maxParallel: 1, ci: { ...j.implement.ci, parity: { enabled: false } }, worker: { maxRetries: 1, retryDelaySec: 0 } });
   });
-  editJson(path.join(repo, 'scripts/pr-check/config.json'), (j) => Object.assign(j.prCheck.hook, { enabled: true, pollSec: 0.2 }));
+  editJson(path.join(repo, 'scripts/pr-check/config.json'), (j) => {
+    Object.assign(j.prCheck.hook, { enabled: true, pollSec: 0.2 });
+    j.prCheck.returnToImplementation.maxReturns = maxReturns;
+  });
   write(repo, '.gitignore', '.factory/state/\n');
   write(repo, 'src/Basket/Coupons.cs', '// coupons\n');
   seedTicket(repo, { key: 'DEMO-1', slug: 'DEMO-1-apply-coupon', text: '# DEMO-1 Apply coupon\n\nRule: a valid coupon gives 10% off; an expired coupon is rejected with 400.\n' });

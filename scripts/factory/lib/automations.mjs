@@ -1,3 +1,4 @@
+import { setting } from '../../pipeline/lib/settings.mjs';
 // `factory automations`: the tracker automations for a CI system that cannot start on tracker events
 // (GitLab CI, Azure Pipelines, and GitHub Actions with a Jira or Azure Boards tracker). A scheduled job
 // sweeps the tracker and runs, per ticket, the same board commands the GitHub issue workflows run:
@@ -7,8 +8,8 @@
 // The tracker comes from trackerFor(config) (ADAPTERS.md); `run` runs one board command.
 
 export async function sweep(config, { tracker, run, log = () => {} }) {
-  const blocked = config.board?.blockedLabel ?? 'needs-human';
-  const resolved = config.board?.resolvedLabel ?? 'escalation-resolved';
+  const blocked = setting(config, 'board.blockedLabel');
+  const resolved = setting(config, 'board.resolvedLabel');
   const done = { epics: 0, escalations: 0, failed: [] };
   const step = async (args) => {
     try {

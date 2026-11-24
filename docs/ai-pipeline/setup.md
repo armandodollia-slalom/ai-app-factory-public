@@ -55,7 +55,7 @@ Then:
 
 1. Turn on the git hooks: `git config core.hooksPath .factory/githooks` (`factory init` does this unless the repository already has a hooks path; then call `.factory/bin/factory git-hook <event>` from your own hooks).
 2. Trust the repository's hooks in your interactive agent tool, so `factory done` triggers the stages. See [Agent tool coverage](../internals.md#agent-tool-coverage) for each tool's trust step (for Copilot CLI: add the repository to `trustedFolders` in `~/.copilot/config.json`).
-3. Choose the agent CLI: `export PIPELINE_AGENT_CLI=copilot` (or `claude`, the default, or `codex`), or set `agent.cli` in `.factory/config.json`. `PIPELINE_AGENT_CMD` runs any other command, with the prompt on stdin; it runs with `sh -c`, so on Windows Git's `usr\bin` folder must be on `PATH`.
+3. Choose the models: every agent runs on an entry of the model pool, `models.pool` in `.factory/config.json` (default: Opus and Sonnet on Claude Code, Sol on Codex; [models.md](models.md)), which `factory init` writes from the CLIs you have. `export PIPELINE_AGENT_CLI=copilot` runs every agent on the pool's Copilot entries for one shell. `PIPELINE_AGENT_CMD` runs any other command, with the prompt on stdin; it runs with `sh -c`, so on Windows Git's `usr\bin` folder must be on `PATH`.
 4. Check the pipeline without any AI calls:
 
    ```bash
@@ -178,6 +178,6 @@ With the `ci` feature on, `factory render` writes the jobs for `ci.provider` (th
 | OpenAI Codex | `PIPELINE_AGENT_CLI` = `codex` | `OPENAI_API_KEY` |
 | Any other CLI | `PIPELINE_AGENT_CMD` = the command, which reads the prompt on stdin; optionally `PIPELINE_AGENT_INSTALL` = a shell command that installs it | `PIPELINE_AGENT_API_KEY`, available to the command as `$PIPELINE_AGENT_API_KEY` |
 
-On GitLab CI these are CI/CD variables; on Azure Pipelines, pipeline variables (secrets marked secret). When the chosen provider's secret is missing, the workflow logs a notice and skips instead of failing. Per-role PR check models have defaults for `claude` and `copilot`; another CLI needs a `prCheck.models.<cli>` entry naming aliases it has ids for (on Codex, `sol`), or its runs are refused by the [model policy](models.md).
+On GitLab CI these are CI/CD variables; on Azure Pipelines, pipeline variables (secrets marked secret). When the chosen provider's secret is missing, the workflow logs a notice and skips instead of failing. With `PIPELINE_AGENT_CLI` set, every agent runs on a `models.pool` entry of that CLI (the same model where the pool has one), so the pool needs an entry on it, or its runs are refused by the [model policy](models.md).
 
 To run `implement run` from a scheduled job, the runner needs everything above, including a signed-in agent CLI.

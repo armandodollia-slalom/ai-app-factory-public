@@ -19,7 +19,7 @@ const MEMBERS = [
   { name: 'opus', cli: 'claude', model: 'opus', lens: 'acceptance', blocking: true },
   { name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness', blocking: true },
 ];
-const COUNCIL = { stage: 'prCheck', rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail', members: MEMBERS };
+const COUNCIL = { stage: 'prCheck', maxCouncilRounds: 3, councilPassScore: 9, blockQuorum: 'any', onUnavailable: 'fail', members: MEMBERS };
 const lines = (n, f) => Array.from({ length: n }, (_, i) => f(i + 1)).join('\n') + '\n';
 
 function repo(files) {

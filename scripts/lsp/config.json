@@ -7,8 +7,64 @@
   "prepareTimeoutSec": 900,
   "check": [],
   "servers": [
-    { "id": "bash", "extensions": [".sh", ".bash"], "languageIds": ["shellscript"], "command": "bash-language-server", "args": ["start"] },
-    { "id": "json", "extensions": [".json", ".jsonc"], "languageIds": ["json", "jsonc"], "command": "vscode-json-language-server", "args": ["--stdio"], "hook": false },
-    { "id": "yaml", "extensions": [".yml", ".yaml"], "languageIds": ["yaml"], "command": "yaml-language-server", "args": ["--stdio"], "hook": false }
-  ]
+    {
+      "id": "bash",
+      "extensions": [
+        ".sh",
+        ".bash"
+      ],
+      "languageIds": [
+        "shellscript"
+      ],
+      "command": "bash-language-server",
+      "args": [
+        "start"
+      ]
+    },
+    {
+      "id": "json",
+      "extensions": [
+        ".json",
+        ".jsonc"
+      ],
+      "languageIds": [
+        "json",
+        "jsonc"
+      ],
+      "command": "vscode-json-language-server",
+      "args": [
+        "--stdio"
+      ],
+      "hook": false
+    },
+    {
+      "id": "yaml",
+      "extensions": [
+        ".yml",
+        ".yaml"
+      ],
+      "languageIds": [
+        "yaml"
+      ],
+      "command": "yaml-language-server",
+      "args": [
+        "--stdio"
+      ],
+      "hook": false
+    }
+  ],
+  "client": {
+    "enabled": true,
+    "setupCmd": [
+      "node",
+      "scripts/lsp/setup.mjs"
+    ],
+    "lspdCmd": [
+      "node",
+      "scripts/lsp/lspd.mjs"
+    ],
+    "timeoutSec": 300,
+    "leaseWaitSec": 300,
+    "leaseWaitPollSec": 15
+  }
 }

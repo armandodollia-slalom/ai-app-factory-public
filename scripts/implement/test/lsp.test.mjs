@@ -35,11 +35,11 @@ function repo(name) {
   return root;
 }
 
-const config = (root, lsp) => ({ root, implement: { lsp: { enabled: true, lspdCmd: [process.execPath, fake], timeoutSec: 30, ...lsp } } });
+const config = (root, lsp) => ({ root, lsp: { client: { enabled: true, lspdCmd: [process.execPath, fake], timeoutSec: 30, ...lsp } } });
 
 test('missing tooling disables the adapter; every call degrades to no information', async () => {
   const root = repo('missing');
-  const lsp = lspAdapter({ root, implement: { lsp: { lspdCmd: ['node', 'scripts/lsp/nope.mjs'] } } }, { mainRoot: root });
+  const lsp = lspAdapter({ root, lsp: { client: { lspdCmd: ['node', 'scripts/lsp/nope.mjs'] } } }, { mainRoot: root });
   assert.equal(lsp.enabled, false);
   assert.deepEqual(await lsp.start(root), { ok: false, leased: 'unavailable', reason: 'lsp tooling not installed', servers: {} });
   assert.equal(lsp.leasedRunning(root), false);
@@ -84,7 +84,7 @@ test('start without owns passes none; an unavailable leased server is logged by 
   try {
     // No wait here (leaseWaitSec 0): the bounded wait for a free slot is tested in lsp-wait.test.mjs.
     const cfg = config(root);
-    cfg.implement.lsp.leaseWaitSec = 0;
+    cfg.lsp.client.leaseWaitSec = 0;
     const lsp = lspAdapter(cfg, { mainRoot: root, log: (l) => lines.push(l) });
     const started = await lsp.start(root);
     assert.deepEqual(logged(), [['start', '--worktree', root]]);
@@ -99,7 +99,7 @@ test('start without owns passes none; an unavailable leased server is logged by 
 
 test('the engine install root is searched before the app repo for the lspd command', () => {
   const root = repo('roots');
-  const lsp = lspAdapter({ root, implement: { lsp: { lspdCmd: ['node', 'scripts/lsp/lspd.mjs'], setupCmd: ['node', 'scripts/lsp/setup.mjs'] } } });
+  const lsp = lspAdapter({ root, lsp: { client: { lspdCmd: ['node', 'scripts/lsp/lspd.mjs'], setupCmd: ['node', 'scripts/lsp/setup.mjs'] } } });
   assert.equal(lsp.enabled, true, 'found in the install root although the app repo has no scripts/');
 });
 
@@ -144,6 +144,11 @@ test('signature changes are found in other declaration styles, and the pattern i
 test('implement cleanup stops the daemon of each subtask worktree before removing it', () => {
   const root = repo('cleanup-shop');
   for (const dir of ['scripts/pipeline', 'scripts/implement', 'scripts/review', 'scripts/feature-verification', 'scripts/board', 'scripts/models', 'scripts/pr-video', 'scripts/review-gate', 'scripts/retro', 'scripts/factory', 'scripts/stack', 'scripts/teststack']) fs.cpSync(path.join(source, dir), path.join(root, dir), { recursive: true, filter: (p) => !p.includes(`${path.sep}test`) });
+  // Every section's defaults and descriptions: a stage reads the others' (scripts/pipeline/lib/settings.mjs).
+  for (const d of fs.readdirSync(path.join(source, 'scripts'))) for (const f of ['config.json', 'settings.json']) if (fs.existsSync(path.join(source, 'scripts', d, f)) && !fs.existsSync(path.join(root, 'scripts', d, f))) {
+    fs.mkdirSync(path.join(root, 'scripts', d), { recursive: true });
+    fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(root, 'scripts', d, f));
+  }
   fs.mkdirSync(path.join(root, 'scripts/lsp'), { recursive: true });
   fs.copyFileSync(fake, path.join(root, 'scripts/lsp/lspd.mjs'));
   sh(root, 'git', ['add', '-A']);

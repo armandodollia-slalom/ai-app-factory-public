@@ -2,7 +2,7 @@
 
 **Who reads this:** C (operators); B before writing stories. How test plans and automated tests are written and verified.
 
-Agents turn each user story into a verified test plan, and, once the implementation of a story is architecture-approved by the [review stage](review.md), into verified automated tests. Every artifact an agent produces is checked by a separate verifier agent that starts with a clean context and loops until it scores at least the required score (9/10, `loops.requiredScore`). Every denial is logged, and recurring denials become lessons that the agents read on their next run (the [retro](retro.md)).
+Agents turn each user story into a verified test plan, and, once the implementation of a story is architecture-approved by the [review stage](review.md), into verified automated tests. Every artifact an agent produces is checked by a separate verifier agent that starts with a clean context and loops until it scores at least the required score (9/10, `testPlan.councilPassScore`). Every denial is logged, and recurring denials become lessons that the agents read on their next run (the [retro](retro.md)).
 
 The stage is run as `factory fv <command>` (`factory feature-verification` is the same command). Its defaults are in the engine's `scripts/feature-verification/config.json`; a repository overrides any of them in its `.factory/config.json` ([configuration](../configuration.md)).
 
@@ -85,7 +85,7 @@ The [dispatcher](../internals.md#hooks-and-lifecycle-events) calls the feature v
 | `pre-push` | the same check as `fv check`: existing plans and tests for touched stories are verified and current (a story with no plan yet passes). A push touches a story through its plan or scenario folder, tests carrying its case ids, or its key in the branch name or a commit message; stories are checked against their cached ticket (fetched when missing) |
 | pull request | `.github/workflows/factory-feature-verification-check.yml` (`factory fv check --changed-from <base>`), called from `factory-gate.yml` |
 
-Adding or changing a story never starts an agent: run `factory fv plan <KEY>` (or `--stale`) yourself; `fv plan <KEY>` checks the issue again first. Opt in to automatic planning with `git config fv.autoPlan true`: `factory board fetch` then plans every story it brings in changed, in the background. Bypass the pre-push gate once with `FV_SKIP=1 git push`; CI still enforces it. `FV_REQUIRED_SCORE` overrides the required score (`loops.requiredScore`, 9/10; for experiments only).
+Adding or changing a story never starts an agent: run `factory fv plan <KEY>` (or `--stale`) yourself; `fv plan <KEY>` checks the issue again first. Opt in to automatic planning with `git config fv.autoPlan true`: `factory board fetch` then plans every story it brings in changed, in the background. Bypass the pre-push gate once with `FV_SKIP=1 git push`; CI still enforces it.
 
 ## Verifier loops
 
@@ -96,12 +96,12 @@ Adding or changing a story never starts an agent: run `factory fv plan <KEY>` (o
   - **Lint:** both run the repository's linters on the agent's files (`precheck.lint`, a command per file extension), so a lint error goes back to the agent instead of failing the pipeline's commit. Before linting, the automation precheck fixes what the same tools can fix on their own (`precheck.fix`), so formatting never costs a round. The engine's default lints and fixes Markdown with `markdownlint` when the repository has it in `node_modules/.bin`; a tool that is not installed is skipped.
 - Before the precheck and before the pipeline commits a story's tests, the runner normalizes the plan's table delimiter rows (`|---|` to `| --- |`, `factory fv tidy <KEY>`), which `markdownlint --fix` cannot repair; a verified plan stays verified because only that whitespace changed.
 - The automation agent runs the same checks itself before it finishes: `fv precheck <KEY>` (coverage, story tags, fix and lint, scenario validation; `--tests` also runs the tests). A failure it can fix in its own turn doesn't use up a round.
-- A verdict passes at the required score (`loops.requiredScore`, 9) or above. Gaps listed with a passing score are minor; they are logged in the metrics but don't block. A lower score without gaps counts as an unexplained gap. Gaps on a failing verdict go back to the producer as its next task.
+- A verdict passes at the required score (`testPlan.councilPassScore`, 9) or above. Gaps listed with a passing score are minor; they are logged in the metrics but don't block. A lower score without gaps counts as an unexplained gap. Gaps on a failing verdict go back to the producer as its next task.
 - Every round is a fresh agent session; work carries over only through the files on disk and the feedback. The last verifier round's gaps stay in the feedback until a verifier runs again, so a precheck failure or a crashed run in between does not hide them from the next round.
 - Automation gaps the verifier traces to the case itself (`root_stage: plan`) are sent to the plan loop and attributed to the plan agent in the metrics. That includes cases a test cannot carry out through a public interface; the plan verifier rejects those too (`untestable-expectation`).
-- After `loops.planMaxRounds` or `loops.automationMaxRounds` (5 each) rounds below the required score, the loop stops and writes `.factory/state/escalations/<KEY>-plan.md` or `<KEY>-automation.md`, which the next agent session is told about ([escalations](escalations.md)).
+- After `testPlan.maxCouncilRounds` or `testAutomation.maxCouncilRounds` (5 each) rounds below the required score, the loop stops and writes `.factory/state/escalations/<KEY>-plan.md` or `<KEY>-automation.md`, which the next agent session is told about ([escalations](escalations.md)).
 
-With `council.stages.testPlan` or `council.stages.testAutomation` in `.factory/config.json`, a council of verifiers on several CLIs and models replaces the test plan verifier (`testPlan`) or the test automation verifier (`testAutomation`), and its rounds replace the stage's round limit; see [council.md](council.md).
+With `testPlan.councilMembers` or `testAutomation.councilMembers` (or `council.members`) above one, a council of verifiers from the model pool, on several CLIs and models, sits instead of the test plan verifier alone or the test automation verifier alone, under the stage's own round limit and pass score; see [council.md](council.md).
 
 ## Crash recovery
 
@@ -111,7 +111,7 @@ A loop saves its round and the feedback for that round in the story state before
 - by `factory resume [KEY]` (or `factory fv resume`);
 - while `implement run` waits for the tests of a story.
 
-Automation for code that has changed since the run started is dropped, and the Stop hook starts a fresh run for the new code. Each run is resumed up to `recovery.maxAttempts` times (default 3), waiting `recovery.backoffSec` (60 s) and then twice as long before each retry, so a run that crashes on start does not loop. After that its status is `crashed` and an escalation is written; fix the cause, then run `factory resume <KEY> --force`.
+Automation for code that has changed since the run started is dropped, and the Stop hook starts a fresh run for the new code. Each run is resumed up to `recovery.maxRetries` times (default 3), waiting `recovery.retryDelaySec` (60 s) and then twice as long before each retry, so a run that crashes on start does not loop. After that its status is `crashed` and an escalation is written; fix the cause, then run `factory resume <KEY> --force`.
 
 The lessons and factory retro run is not tied to a story and recovers on its own: see [retro](retro.md#crash-recovery).
 
@@ -149,17 +149,17 @@ The [retro stage](retro.md) (`factory retro run`; `factory fv lessons` is the ol
 
 | Setting | Default | The retro |
 | --- | --- | --- |
-| `lessons.storyThreshold` | 3 | **adds** a rule when a denial category recurs in that many stories and no rule covers it, and **strengthens** a rule whose category keeps recurring in that many stories after it was added |
-| `lessons.retireAfterStories` | 10 | **retires** a rule when its category has not recurred for that many stories |
-| `lessons.revertMinRounds` | 6 | **reverts** a rule when, after that many verifier rounds, the denial rate for its category did not drop |
-| `lessons.maxRules` | 15 | keeps at most that many rules per lessons file |
-| `lessons.intervalDays` | 7 | `retro run --if-due` does nothing when the last run is more recent |
-| `lessons.examplesPerCategory` | 5 | examples per category in the digest the `retro` agent reads |
-| `lessons.retro.enabled`, `windowDays`, `allowedPaths` | `true`, 7, `.factory/agents/`, `.factory/policy/` | the factory retro over the decision log: on or off, how far back it reads when there is no earlier lessons commit, and what the agent may edit besides the lessons files |
+| `retro.lessons.storyThreshold` | 3 | **adds** a rule when a denial category recurs in that many stories and no rule covers it, and **strengthens** a rule whose category keeps recurring in that many stories after it was added |
+| `retro.lessons.retireAfterStories` | 10 | **retires** a rule when its category has not recurred for that many stories |
+| `retro.lessons.revertMinRounds` | 6 | **reverts** a rule when, after that many verifier rounds, the denial rate for its category did not drop |
+| `retro.lessons.maxRules` | 15 | keeps at most that many rules per lessons file |
+| `retro.intervalDays` | 7 | `retro run --if-due` does nothing when the last run is more recent |
+| `retro.lessons.examplesPerCategory` | 5 | examples per category in the digest the `retro` agent reads |
+| `retro.enabled`, `windowDays`, `allowedPaths` | `true`, 7, `.factory/agents/`, `.factory/policy/` | the factory retro over the decision log: on or off, how far back it reads when there is no earlier lessons commit, and what the agent may edit besides the lessons files |
 
 Rules are written to `.factory/lessons/<agent>.md` and proposed in a pull request, so every change to agent behavior is reviewed like code. Each rule carries a marker with its category and date, which is what makes the retire and revert measurements possible. The lessons file is appended to the agent's prompt on every run and is part of the prompt version, so the metrics show whether a change helped.
 
-Verifiers improve through calibration: `factory retro calibrate` (also `factory fv calibrate`) audits recent passing verdicts again with a stricter auditor (optionally a different model, `agent.models.audit`), and gaps the verifier missed become lessons for that verifier.
+Verifiers improve through calibration: `factory retro calibrate` (also `factory fv calibrate`) audits recent passing verdicts again with a stricter auditor (on the verifier's own pool entry), and gaps the verifier missed become lessons for that verifier.
 
 What a run does, the factory retro, the pull requests it opens and the review-gate approvals proposals are described in [retro.md](retro.md).
 
@@ -167,11 +167,11 @@ What a run does, the factory retro, the pull requests it opens and the review-ga
 
 - **Test run in the precheck.** Runners without `stack` build each unit once, one after another (units often share dependencies), then run every unit's tests at the same time. Stack runners run alongside them.
 - **Shared test stack.** By default the machine has one test stack (slot 0), and loading a scenario wipes its data. So a stack runner holds a lock in git's common dir (`.git/pipeline-locks/teststack.lock`), which every worktree shares. Stories in different worktrees write and build their tests in parallel and take turns only on the end-to-end run, unless they run on [stack slots](#stack-slots).
-- **Models.** The writers and verifiers each have a model in `agent.models`: `plan`, `automation`, `verifier` and `audit`. Test writing (`automation`) uses `sonnet`: it is a long build-and-fix loop where speed matters, and the automation verifier still scores every round. `null` means `agent.models.default`.
+- **Models.** The writers and verifiers each run on their pool entry, `models.agents.<agent>` (`test-planner`, `test-automation`, `test-plan-verifier`, `test-automation-verifier`). Test writing (`test-automation`) uses `sonnet`: it is a long build-and-fix loop where speed matters, and the automation verifier still scores every round. An agent with no entry of its own runs on `models.agents.default`.
 
 ### Stack slots
 
-A story's end-to-end run leases an isolated stack slot instead of waiting for slot 0 when `useSlots` is on (default `true`; `FV_USE_SLOTS=0` turns it off) and the story runs under `implement run` (which sets `IMPLEMENT_PARALLEL`; even at 1, because slot 0 was not built from the ticket's worktree) or with `FV_USE_SLOTS=1`. The run (`scripts/feature-verification/lib/slots.mjs`):
+A story's end-to-end run leases an isolated stack slot instead of waiting for slot 0 whenever `featureVerification.slots.enabled` is on (the default; `FV_USE_SLOTS=0` or `1` overrides it for one shell). The run (`scripts/feature-verification/lib/slots.mjs`):
 
 1. leases a slot (`factory stack lease --owner fv-<KEY>`);
 2. brings that slot's stack up from the story's worktree (`factory teststack --slot <n> up`), so it runs that worktree's code;
@@ -190,7 +190,7 @@ How slots, ports and scenarios work is in [test-stack.md](../test-stack.md).
 
 ## Models
 
-Models are named by alias. `agent.allowedModels` lists the allowed ones (default `opus`, `sonnet` and `sol`). Any other value in `agent.models` fails when the config loads. `agent.modelIds` maps each alias to each agent CLI's own model id. With `agent.strictModels` (on), a run without a model uses `agent.models.default` (`sonnet`), and a CLI with no id for an alias is refused rather than falling back to its own default model; on Codex only `sol` has an id by default, so a Codex run must ask for `sol`. `PIPELINE_MODEL_OVERRIDE=<alias>` forces one allowed model for every agent, for experiments. To allow another model, add its alias to `allowedModels` and its id for each CLI to `modelIds`, in `.factory/config.json`. See [models](models.md) for the per-CLI view, discovery and `factory models check`.
+Every agent runs on an entry of the model pool, `models.pool`: its CLI, the CLI's own model id, its effort (default `opus` and `sonnet` on Claude Code, `sol` on Codex). `models.agents.<agent>` names an agent's entry, and `models.agents.default` (`sonnet`) the entry of every agent with none of its own; a name that is not in the pool fails when the config loads. `PIPELINE_MODEL_OVERRIDE=<entry>` runs every agent on one entry, for experiments. To add a model, add an entry to `models.pool` in `.factory/config.json`. See [models](models.md) for the per-CLI view, discovery and `factory models check`.
 
 ## Commands
 
@@ -207,4 +207,4 @@ factory retro calibrate [--stage plan|automation] [--sample 3]
 factory retro run [--dry-run] [--local] [--if-due] [--no-push]
 ```
 
-Background runs log to `.factory/state/logs/`. The settings (`loops`, `timeoutsSec`, `precheck`, `lessons`, `categories`, `testRoots`, `testExtensions`, `evidence`, `useSlots`) are listed in [configuration](../configuration.md).
+Background runs log to `.factory/state/logs/`. The settings (the `featureVerification` section: `enabled`, `timeoutsSec`, `precheck`, `categories`, `testExtensions`, `evidence`, `slots`; and `project.testRoots`, `retro.lessons`) are listed in the [settings reference](../configuration.md#settings-reference).

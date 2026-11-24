@@ -12,12 +12,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addendumText } from '../../pipeline/lib/util.mjs';
-import { projectModel, repoOverlay } from '../../pipeline/lib/config.mjs';
+import { projectModel, repoOverlay, repoSettings } from '../../pipeline/lib/config.mjs';
 import { ciOutputs as analysisCiOutputs } from '../../pipeline/lib/analysis/ci.mjs';
 import { resolveAnalysis } from '../../pipeline/lib/analysis/config.mjs';
 import { CI_PROVIDERS, products } from './hosting.mjs';
 import { PRE_OPEN_WORKFLOWS, withBranchRuns } from './pre-open-ci.mjs';
 import { storyBranchPatterns } from '../../implement/lib/pre-open.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 export const MANIFEST = '.factory/manifest.json';
 export const PIN = '.factory/factory.json';
@@ -145,11 +146,13 @@ function agentOutputs(root, installRoot, pin) {
   if (!pin.features.agentFiles || !fs.existsSync(dir)) return [];
   const overrides = readJson(path.join(installRoot, 'scripts', 'agents-claude.json'), {});
   const outputs = [];
+  // The repository's agent overlay folder (agentOverlayDir), as the agents read it.
+  const overlayDir = setting(repoSettings(root), 'agentOverlayDir');
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.agent.md')).sort()) {
     const name = file.slice(0, -'.agent.md'.length);
-    const override = readText(path.join(root, '.factory/agents', file));
+    const override = readText(path.join(root, overlayDir, file));
     const { data, body } = parseFrontMatter(override ?? fs.readFileSync(path.join(dir, file), 'utf8'));
-    const addendum = addendumText(readText(path.join(root, '.factory/agents', `${name}.md`)));
+    const addendum = addendumText(readText(path.join(root, overlayDir, `${name}.md`)));
     const text = [
       body.trim(),
       addendum && `## Project context\n\n${addendum}`,
@@ -452,7 +455,7 @@ export function outputs(root, installRoot, pin = readPin(root), { providers: wan
   // step. `seed`: render refreshes it when it is missing, unchanged since the last render, or exactly a version the
   // factory shipped (templates/e2e/history.json); content the repository wrote itself is kept and reported with its diff.
   if (features.demoVideo) {
-    const e2eDir = readJson(path.join(root, '.factory/config.json'), {})?.e2e?.dir ?? 'e2e';
+    const e2eDir = setting(readJson(path.join(root, '.factory/config.json'), {}), 'e2e.dir');
     const history = readJson(path.join(installRoot, 'templates/e2e/history.json'), { files: {} }).files ?? {};
     for (const f of E2E_SEEDS) out.push({ path: `${e2eDir}/${f}`, kind: 'seed', content: t(`e2e/${f}`), history: new Set(history[f] ?? []), template: path.join(installRoot, 'templates/e2e', f) });
   }

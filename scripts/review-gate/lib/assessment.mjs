@@ -206,7 +206,7 @@ export function assessPr(config, { pr, keys, cwd = config.root, base, skipTriage
   const perTicket = ticketFilesLocal(cwd, base, keys, files);
   const triage = skipTriage
     ? { ratings: new Map(), errors: [skipReason ?? 'no saved pre-open assessment (no agent may run after the PR opens)'] }
-    : runTriage(config, { pr, tickets, systems, files, diff: prDiffLocal(cwd, base, s.maxDiffChars ?? 120_000), cwd }, deps);
+    : runTriage(config, { pr, tickets, systems, files, diff: prDiffLocal(cwd, base, s.maxDiffChars), cwd }, deps);
   const ci = pr ? safe(() => checksState(ciTarget(config, repo, deps.gh), repo, pr, { head: git(cwd, ['rev-parse', 'HEAD']).stdout.trim() || null, ciSettings: config.implement?.reviewGate?.ci ?? {}, activities: (h) => headActivities(config, pr, h) }), null) : null;
   const metrics = readMetrics(config);
   // The reopens the tickets' records hold; publishing reads every rejection again live (rejections.mjs).

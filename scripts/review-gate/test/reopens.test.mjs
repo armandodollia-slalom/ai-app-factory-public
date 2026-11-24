@@ -105,6 +105,10 @@ test('sync: a card moved back records the reopen, bumps severity, notes it for t
 
 test('sync: a changes-requested review reopens the tickets it names, once', () => {
   const w = world();
+  // BUG-7's architecture review council passed.
+  const metrics = path.join(w.config.root, w.config.metricsDir ?? '.factory/metrics');
+  fs.mkdirSync(metrics, { recursive: true });
+  fs.appendFileSync(path.join(metrics, 'council-rounds.jsonl'), `${JSON.stringify({ ts: 't', stage: 'architectureReview', story: 'BUG-7', round: 1, pass: true, members: [{ name: 'verifier', entry: 'sonnet', lens: 'all' }] })}\n`);
   w.pr.reviews.push({ id: 41, state: 'CHANGES_REQUESTED', body: 'BUG-7: the token is still in the log', user: { login: 'ann' }, submitted_at: '2026-11-02T10:00:00Z', commit_id: 'h1' });
   const r = syncGate(w.config, w.deps([]));
   assert.deepEqual(r.reopens, ['BUG-7']);
@@ -117,6 +121,9 @@ test('sync: a changes-requested review reopens the tickets it names, once', () =
   const again = syncGate(w.config, w.deps([]));
   assert.deepEqual(again.reopens, [], 'the same review is not counted twice');
   assert.equal(extractTriage(w.gh.issues.get(7).body).reopens.length, 1);
+  // Council r1 (T1): the person's "changes requested" is a lower-weight miss of the councils that passed BUG-7, once.
+  const misses = readJsonl(path.join(w.config.root, w.config.metricsDir ?? '.factory/metrics', 'council-findings.jsonl')).filter((r) => r.kind === 'miss');
+  assert.deepEqual(misses.map((m) => [m.story, m.seat, m.source, m.finding, m.lowWeight]), [['BUG-7', 'verifier', 'human-review', 'review 41', true]]);
 });
 
 test('re-run placement: on the open PR\'s branch, else a follow-up branch from the base', () => {

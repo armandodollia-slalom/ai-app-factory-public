@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { INSTALL_ROOT } from './config.mjs';
 import { activeStoryFile } from './stories.mjs';
+import { setting } from './settings.mjs';
 
 const TICKET_KEY = /^([A-Z][A-Z0-9]*-\d+|(?:epic|spike)-[\w-]+)$/;
 
@@ -21,7 +22,7 @@ const inside = (child, parent) => {
 // The fixed part of a glob, e.g. .factory/state/board/*/story.md -> .factory/state/board.
 const staticPrefix = (p) => p.split(/[*?[{]/)[0].replace(/\/+$/, '') || '.';
 
-const cacheOf = (config) => (config.tickets?.dir ?? '.factory/state/board').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+const cacheOf = (config) => (setting(config, 'tickets.dir')).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
 
 // The ticket a path points into, in any checkout's ticket cache (this one, the main checkout, a story or
 // subtask worktree): the key, '' for the cache folder itself, or null when the path is not in a cache.
@@ -305,11 +306,14 @@ export function networkGuard(config, payload, env = process.env) {
 // and CI found the plan stale. Only the implementer writes the ticket (its Implementation Notes); a PR check agent
 // says what it could not fix in its result instead.
 const WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit|str_replace_editor|apply_patch|write_file|edit_file)$/;
+// The agent whose work a run does: its own name, or the agent whose work the stage's orchestrator keeps
+// (PIPELINE_AGENT_WORK, orchestrator.mjs producerRun). Guards hold for the work, whoever does it.
+export const agentWork = (env = process.env) => String(env.PIPELINE_AGENT_WORK || env.PIPELINE_AGENT_NAME || '');
 export function ticketWriteGuard(config, payload, env = process.env) {
   if (env.PIPELINE_CHILD !== '1') return null;
-  const agent = String(env.PIPELINE_AGENT_NAME ?? '');
+  const agent = agentWork(env);
   if (!/^pr-check/.test(agent)) return null;
-  const dir = String(config.tickets?.dir ?? path.join(config.stateDir ?? '.factory/state', 'board')).replace(/\/$/, '');
+  const dir = String(setting(config, 'tickets.dir')).replace(/\/$/, '');
   const cwd = payload.cwd || process.cwd();
   const inCache = (p) => {
     const rel = path.relative(path.resolve(config.root), path.resolve(cwd, String(p)));
@@ -335,7 +339,7 @@ const keyRe = /\b([A-Za-z][A-Za-z0-9]*)-(\d+)\b/g;
 const caseIds = (text) => [...String(text ?? '').matchAll(/\bTC-([A-Za-z][A-Za-z0-9]*-\d+)-/gi)].map((m) => m[1].toUpperCase());
 
 export function foreignTestGuard(config, payload, env = process.env) {
-  if (env.PIPELINE_CHILD !== '1' || !/^pr-check-fixer/.test(String(env.PIPELINE_AGENT_NAME ?? ''))) return null;
+  if (env.PIPELINE_CHILD !== '1' || !/^pr-check-fixer/.test(agentWork(env))) return null;
   const mine = new Set(String(env.PIPELINE_STORY_KEYS ?? '').split(',').map((k) => k.trim().toUpperCase()).filter(Boolean));
   if (!mine.size) return null;
   const cwd = payload.cwd || process.cwd();

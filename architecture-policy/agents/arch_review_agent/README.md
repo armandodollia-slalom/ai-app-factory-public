@@ -65,7 +65,7 @@ The response (`arch-review-result/v1`) contains:
 
 Code agents do not need to call `review` themselves at the end. The AI pipeline's review stage (`scripts/review/review.mjs`) runs this agent from the Stop/SubagentStop hook (`node scripts/pipeline/pipeline.mjs hook stop`, wired for Claude, Codex, Gemini and Copilot). It runs after the implementation agent marks its work done (`pipeline done`), just before the agent completes:
 
-- **Scope:** only code agents: the main session, or subagents listed in `review.codeAgents` in `scripts/review/config.json`.
+- **Scope:** only code agents: the main session, or subagents listed in `hooks.codeAgents` in `scripts/review/config.json`.
 - **Request:** `checkpoint: code_review`, the implementation diff as `changed_files`, requester `implementer`.
 - **On `BLOCK`:** the agent is not allowed to finish. It gets the findings, fixes them, and the next stop reviews again with `previous_review_id`.
 - **Limit:** this loops until the review passes, up to 5 rounds, then escalates to a human.

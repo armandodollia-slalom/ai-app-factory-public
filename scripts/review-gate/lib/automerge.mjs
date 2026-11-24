@@ -6,6 +6,7 @@
 import { MARKER, approvalsLabel, renderNotice } from './gate.mjs';
 import { autoMergeArmed, disableAutoMerge, editPrLabels, mergePr, prHost, upsertComment } from './github.mjs';
 import { botEnvSync } from '../../pipeline/lib/bot.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 // Merges and records it. When GitHub has not cleared the merge yet, the PR waits (approvals:0) and `board sync`
 // tries again; when GitHub refuses, the notice says the merge failed and why, and `board sync` tries again too.
@@ -17,8 +18,8 @@ export function autoMergePr(config, gh, a, decision, state, reviewContext, { bou
   const s = config.implement.reviewGate;
   const repo = config.board.repo;
   const zero = approvalsLabel(s, 0);
-  const failedLabel = s.labels?.mergeFailed ?? 'merge-failed';
-  const humanLabel = s.labels?.needsHuman ?? 'needs-human';
+  const failedLabel = setting(config, 'implement.reviewGate.labels.mergeFailed');
+  const humanLabel = setting(config, 'implement.reviewGate.labels.needsHuman');
   const stale = (reviewContext.currentLabels ?? []).filter((l) => (l.startsWith(approvalsLabel(s, '')) && l !== zero) || l === humanLabel);
   const label = (add, remove) => {
     try {
@@ -64,11 +65,11 @@ export function autoMergePr(config, gh, a, decision, state, reviewContext, { bou
     return { decision: d, state: st, merged: false, problems: [`merge pending (${how.status})`, ...problems] };
   }
   const merged = { ...state, action: 'auto-merge', mergeError: null, merge: { identity: how.identity, method: how.method, merged: Boolean(how.merged), mergedAt: how.mergedAt ?? null, auto: Boolean(how.autoMerge) } };
-  const problems = [label([s.labels?.autoMerged ?? 'auto-merged', zero], [...stale, failedLabel]), notice(decision, merged)].filter(Boolean);
+  const problems = [label([setting(config, 'implement.reviewGate.labels.autoMerged'), zero], [...stale, failedLabel]), notice(decision, merged)].filter(Boolean);
   return { decision, state: merged, merged: Boolean(how.merged), problems };
 }
 
-// The host's own auto-merge, armed earlier (implement.autoMerge.native) only when the gate decided auto-merge, merges
+// The host's own auto-merge, armed earlier (implement.autoMerge.hostAutoMerge.enabled) only when the gate decided auto-merge, merges
 // whatever head is there once the required checks pass: whenever the gate does not clear the head it just assessed (a
 // person's rejection read now included), it is disarmed (council C9). Armed, or not readable, it is cancelled; a cancel
 // that fails on an armed PR throws, so the caller reports it. A host that cannot cancel is never armed (mergePr).

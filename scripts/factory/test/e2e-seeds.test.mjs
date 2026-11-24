@@ -83,3 +83,11 @@ test('D15: graphify-build.sh and factory.mjs reference existing documentation pa
   assert.match(factoryCli, /docs\/providers\/README\.md/);
   assert.ok(fs.existsSync(path.join(INSTALL, 'docs/providers/README.md')));
 });
+
+// Council r3 (A4): the demo pacing is video.pacing.*, handed over in E2E_DEMO_PACING with E2E_DEMO; the shipped demo.ts
+// keeps no copy of its defaults (without the variable it paces nothing).
+test('demo.ts takes its pacing from the factory only', () => {
+  const pacing = /const PACING[^=]*=\s*\{([^}]*)\}/.exec(template('demo.ts'))?.[1] ?? '';
+  const values = [...pacing.matchAll(/(\w+):\s*(\d+)/g)].map((m) => [m[1], Number(m[2])]);
+  assert.deepEqual(values, [['stepDelayMs', 0], ['holdMs', 0], ['typeDelayMs', 0], ['cursorMs', 0]]);
+});

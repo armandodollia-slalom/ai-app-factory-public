@@ -6,6 +6,7 @@
 //   3. closed gated PRs recorded for the retro (pr-review.mjs), and reverts of their merges.
 // Everything is informational: a GitHub error is logged and the rest of the sync goes on.
 import { appendJsonl, nowIso, readJsonl, run } from '../../pipeline/lib/util.mjs';
+import { recordMisses } from '../../pipeline/lib/findings.mjs';
 import { metricsFile, readMetricsLocal } from '../../pipeline/lib/state.mjs';
 import { extractDecisions, upsertDecisions } from '../../board/lib/escalation.mjs';
 import { OUTCOMES_FILE } from '../../implement/lib/decisions.mjs';
@@ -29,6 +30,7 @@ import { fieldValues, liveDiffKey, recordTicket } from './assessment.mjs';
 import { quorum, requiredApprovals } from './quorum.mjs';
 import { prReviewRecord, revertsOf } from './pr-review.mjs';
 import { headActivities } from '../../implement/lib/pre-open.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 const safe = (fn, fallback, onError) => {
   try {
@@ -57,7 +59,7 @@ export function recordReopen(config, gh, { key, issue, reopen }, { metricsConfig
   updated = upsertDecisions(updated, { round: nextRound(updated), by: reopen.by ?? 'review-gate', at: reopen.at.slice(0, 10), answers: [], note: reopenDecisionNote(reopen) });
   setTicketBody(config, gh, issue.number, updated);
   safe(() => setTriageFields(config, gh, issue, fieldValues(next)), null, (e) => log(`${key}: board fields not updated: ${e.message.split('\n')[0]}`));
-  safe(() => addTicketLabel(config, gh, issue.number, config.implement.reviewGate.labels?.reopened ?? 'reopened'), null, (e) => log(`${key}: label not added: ${e.message.split('\n')[0]}`));
+  safe(() => addTicketLabel(config, gh, issue.number, setting(config, 'implement.reviewGate.labels.reopened')), null, (e) => log(`${key}: label not added: ${e.message.split('\n')[0]}`));
   appendJsonl(metricsFile(metricsConfig, OUTCOMES_FILE), { ts: reopen.at, type: 'reopen', story: key, pr: reopen.pr ?? null, source: reopen.source, detail: reopen.detail ?? null, by: reopen.by ?? null, afterMerge: Boolean(reopen.afterMerge), reopens: next.reopens.length, severity: next.severity?.level ?? null, severityBase: next.severity?.base ?? null });
   if (applyEvent) {
     const n = next.reopens.length;
@@ -108,7 +110,7 @@ export function rebuildAssessment(config, gh, pr, state, { log = () => {}, cwd =
     const ciState = ci === 'success' ? 'met' : ci === 'pending' ? 'pending' : ci == null ? 'unknown' : 'unmet';
     const others = (t.confidence.reasons ?? []).filter((r) => !/^CI /.test(r));
     t.confidence = { ...t.confidence, criteria: { ...t.confidence.criteria, ci: ciState }, reasons: ciState === 'met' ? others : [...others, `CI ${ciState}`] };
-    t.confidence.high = ciState === 'met' && !others.length && (t.confidence.score ?? 0) >= (config.implement.reviewGate.confidence?.highMin ?? 85);
+    t.confidence.high = ciState === 'met' && !others.length && (t.confidence.score ?? 0) >= (setting(config, 'implement.reviewGate.confidence.highMinScore'));
   }
   // Owner questions are live too (council C6): the latest PR check of each ticket that this checkout records decides
   // them; with no record here, the questions kept in the issue's triage stand.
@@ -215,7 +217,7 @@ export function regate(config, gh, pr, { prior, cwd = config.root, log = () => {
 
 // Open PRs the gate has labeled (`approvals:N`, including approvals:0 for a PR waiting for its checks).
 export function gatedPrs(config, gh, { state = 'open' } = {}) {
-  const pattern = config.implement.reviewGate.labels?.approvals ?? 'approvals:{n}';
+  const pattern = setting(config, 'implement.reviewGate.labels.approvals');
   const prs = prHost(config, gh).pr.list({ state, limit: 200 });
   return prs.filter((p) => requiredApprovals(p.labels ?? [], pattern) != null).map((p) => ({ number: p.number, url: p.url, state: String(p.state).toUpperCase(), labels: p.labels, headRefName: p.head }));
 }
@@ -278,6 +280,8 @@ export function syncGate(config, deps) {
             try {
               recordReopen(config, gh, { key, issue: { number: t.issue }, reopen: { at: cr.review.submitted_at ?? at, source: 'changes-requested', detail: `changes requested by @${cr.review.user?.login ?? '?'}`, by: cr.review.user?.login ?? null, pr: p.url, afterMerge: false, feedback: cr.feedback || null } }, deps);
               out.reopens.push(key);
+              // A person asked for changes after the councils passed: a lower-weight miss against every member.
+              recordMisses(config, { story: key, source: 'human-review', finding: `review ${cr.review.id}`, lowWeight: true });
             } catch (error) {
               stored = false;
               log(`${key}: reopen not recorded: ${error.message.split('\n')[0]}`);
@@ -335,7 +339,7 @@ export function recordClosedPrs(config, gh, { metricsConfig, log = () => {}, bas
   const recorded = new Set(existing.filter((r) => r.type === 'pr-review' || r.type === 'pr-closed').map((r) => r.pr));
   const reverted = new Set(existing.filter((r) => r.type === 'revert').map((r) => r.pr));
   const repo = config.board.repo;
-  const min = config.implement.reviewGate.substantiveCommentChars ?? 20;
+  const min = setting(config, 'implement.reviewGate.substantiveCommentChars');
   const reviews = [];
   for (const p of gatedPrs(config, gh, { state: 'closed' }).filter((x) => !recorded.has(x.url))) {
     safe(

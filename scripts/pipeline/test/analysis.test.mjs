@@ -44,7 +44,7 @@ function repo() {
   git('commit', '-qm', 'base');
   return { root, git };
 }
-const cfg = (root, analysis, extra = {}) => ({ root, mainRoot: root, stateDir: '.factory/state', project: { languages: [] }, precheck: {}, analysis, ...extra });
+const cfg = (root, analysis, extra = {}) => ({ root, mainRoot: root, stateDir: '.factory/state', project: { languages: [] }, featureVerification: { precheck: {} }, analysis, ...extra });
 
 // ---- settings --------------------------------------------------------------------------------------------------
 
@@ -56,11 +56,11 @@ test('validation names the key of every mistake; a correct section has none; no 
     toolz: 1,
     tools: { Bad: { run: 'x' }, a: { parse: 'xml', scope: 'everything', baseline: 'magic', lens: 'vibes', block: { levels: ['fatal'] }, timeoutSec: -1 }, b: { run: ['b'], install: { version: 'latest', platforms: { 'linux-x64': { url: 'http://x/latest/b', sha256: 'abc', bin: '' } } } }, c: { run: ['c'], rules: [{ id: 'r', repo: 'https://x', commit: 'main' }] } },
     stages: { pair: ['nope'], nightly: [] },
-    fixLoop: { bounces: 99 },
+    maxFixRounds: 99,
     acceptLicence: [{ tool: 'b', licence: 'X' }],
     licenceReview: 'loose',
   }).join('\n');
-  for (const want of ['analysis.toolz is not a setting', 'analysis.tools.Bad: a tool id', 'analysis.tools.a.run must be a command', 'parse "xml" is not a parser', 'scope "everything"', 'baseline "magic"', 'lens "vibes"', 'block.levels: "fatal"', 'timeoutSec', 'install.version must pin a version', 'url must be an https URL', 'sha256 must be', 'bin must name', 'rules[0] needs repo and a pinned commit', 'rules[0].licence must name', 'stages.pair names "nope"', 'stages.nightly is not a slot', 'fixLoop.bounces', 'acceptLicence[0] must name', 'licenceReview must be']) assert.match(p, new RegExp(want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  for (const want of ['analysis.toolz is not a setting', 'analysis.tools.Bad: a tool id', 'analysis.tools.a.run must be a command', 'parse "xml" is not a parser', 'scope "everything"', 'baseline "magic"', 'lens "vibes"', 'block.levels: "fatal"', 'timeoutSec', 'install.version must pin a version', 'url must be an https URL', 'sha256 must be', 'bin must name', 'rules[0] needs repo and a pinned commit', 'rules[0].licence must name', 'stages.pair names "nope"', 'stages.nightly is not a slot', 'maxFixRounds', 'acceptLicence[0] must name', 'licenceReview must be']) assert.match(p, new RegExp(want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('without an analysis section nothing resolves; with one, the security pack and the language packs supply tools, slots and CI jobs', () => {
@@ -223,7 +223,7 @@ test('suppressions: inline suppressions a change adds are listed (tracked and ne
 test('the factory guard protects analysis configuration and suppression files only when analysis is on', async () => {
   const { factoryGuard, protectedList } = await import('../lib/factory-guard.mjs');
   const root = tmp('guard-');
-  const off = { root, project: { languages: [] }, precheck: {} };
+  const off = { root, project: { languages: [] }, featureVerification: { precheck: {} } };
   assert.ok(!protectedList(off).includes('.gitleaksignore'));
   const on = { ...off, project: { languages: ['dotnet'] }, analysis: { protect: ['security/allow.txt'] } };
   const list = protectedList(on);
@@ -272,7 +272,6 @@ test('reports are kept per commit and slot; another slot\'s report is read for t
   assert.equal(R.readReport(config, 'aaa', 'pair', { configHash: 'h2' }), null, 'other tool settings: not reused');
   assert.equal(R.readReport(config, 'aaa', 'prCheck', { any: true }).slot, 'pair');
   for (const s of ['b', 'c', 'd']) R.writeReport(config, { sha: s, slot: 'pair', ts: s, findings: [] });
-  assert.equal(R.pruneReports(config, 2).length, 2);
 });
 
 // ---- licences --------------------------------------------------------------------------------------------------
@@ -403,9 +402,9 @@ test('pruneData: excluded advisory data is deleted wherever the tool put it afte
 // ---- CI --------------------------------------------------------------------------------------------------------
 
 const JOBS = [
-  { id: 'secrets', name: 'Secret scan', tools: ['s'], required: true, when: ['pull_request'], fetchDepth: 0, toolchain: false, timeoutMin: 30 },
-  { id: 'dependencies', name: 'Dependency audit', tools: ['d'], required: true, when: ['pull_request'], fetchDepth: 0, toolchain: true, timeoutMin: 30 },
-  { id: 'extra', name: 'Optional thing', tools: ['e'], required: false, when: ['pull_request'], fetchDepth: 0, toolchain: false, timeoutMin: 10 },
+  { id: 'secrets', name: 'Secret scan', tools: ['s'], required: true, when: ['pull_request'], fetchDepth: 0, toolchain: false, timeoutSec: 1800 },
+  { id: 'dependencies', name: 'Dependency audit', tools: ['d'], required: true, when: ['pull_request'], fetchDepth: 0, toolchain: true, timeoutSec: 1800 },
+  { id: 'extra', name: 'Optional thing', tools: ['e'], required: false, when: ['pull_request'], fetchDepth: 0, toolchain: false, timeoutSec: 600 },
 ];
 
 test('CI jobs render for GitHub Actions, GitLab CI and Azure Pipelines from one provider-neutral list; each only calls the generated script', () => {
@@ -699,4 +698,31 @@ test('a tool\'s exclude globs keep it off those files: eslint-security does not 
   assert.deepEqual(rep.findings.map((f) => f.file), ['src/a.ts']);
   const pack = JSON.parse(fs.readFileSync(path.join(INSTALL_ROOT, 'packs/typescript/analysis.json'), 'utf8'));
   assert.ok(pack.tools['eslint-security'].exclude.includes('**/*.spec.*'));
+});
+
+// Council r4 (A4): the coverage run's time limit is analysis.coverageTimeoutSec when analysis.coverage names none.
+test('the coverage run takes its time limit from analysis.coverage, else analysis.coverageTimeoutSec', async () => {
+  const { coverageFor } = await import('../lib/analysis/coverage.mjs');
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'coverage-limit-'));
+  try {
+    const limits = [];
+    const exec = async (cmd, args, o) => { limits.push(o.timeoutSec); };
+    await coverageFor({ analysis: { coverageTimeoutSec: 77 } }, { run: 'true' }, { cwd: outDir, base: 'main', outDir, exec });
+    await coverageFor({}, { run: 'true' }, { cwd: outDir, base: 'main', outDir, exec });
+    await coverageFor({}, { run: 'true', timeoutSec: 5 }, { cwd: outDir, base: 'main', outDir, exec });
+    assert.deepEqual(limits, [77, 1800, 5]);
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+// Council r4: a described analysis setting the section's own validation did not know (analysis.coverageTimeoutSec) made
+// every analysis load fail, and the commit gate then let every file through. Every described analysis key is one the
+// section accepts, and the section's defaults pass its own validation.
+test('every described analysis setting is a key the analysis section accepts, and its defaults validate', async () => {
+  const { SECTION_KEYS, analysisProblems } = await import('../lib/analysis/config.mjs');
+  const { defaultSettings, descriptions } = await import('../lib/settings.mjs');
+  const described = [...new Set(descriptions().filter((d) => d.name.startsWith('analysis.')).map((d) => d.name.split('.')[1]))];
+  assert.deepEqual(described.filter((k) => !SECTION_KEYS.includes(k)), []);
+  assert.deepEqual(analysisProblems(defaultSettings().analysis).filter((p) => /is not a setting/.test(p)), []);
 });

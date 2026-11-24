@@ -39,13 +39,13 @@ test('implement, board and review-gate status print a config error as its messag
 test('a problem in the repository\'s settings is reported the same way whichever loader reads the file first', async (t) => {
   const { ConfigError, loadConfig, toolConfig } = await import('../lib/config.mjs');
   for (const [settings, message] of [
-    [{ prune: { keepLocal: 'yes' } }, /prune\.keepLocal must be true or false/],
-    [{ prune: { afterDelivery: 1 } }, /prune\.afterDelivery must be true or false/],
-    [{ implement: { preOpen: { afterOpen: 'sometimes' } } }, /implement\.preOpen\.afterOpen must be one of draft, label, close-reopen/],
+    [{ prune: { keepLocal: 'yes' } }, /prune\.keepLocal is "yes"; allowed: `true`, `false`/],
+    [{ prune: { afterDelivery: 1 } }, /prune\.afterDelivery is 1; allowed: `true`, `false`/],
+    [{ implement: { preOpen: { afterOpen: 'sometimes' } } }, /implement\.preOpen\.afterOpen is "sometimes"; allowed: `draft`, `label`, `close-reopen`/],
     // other-36 (round 4): an explicit video script scope too.
-    [{ video: { script: { scope: 'sometimes' } } }, /video\.script\.scope must be one of/],
+    [{ video: { script: { scope: 'sometimes' } } }, /video\.script\.scope is "sometimes"; allowed: `headline`, `all`, `none`/],
     // other-36 (round 5): a role's model that is not allowed, in a tool's section too.
-    [{ agent: { models: { implementer: 'no-such-model' } } }, /agent\.models\.implementer is "no-such-model", which is not in agent\.allowedModels/],
+    [{ models: { agents: { implementer: 'no-such-model' } } }, /models\.agents\.implementer is "no-such-model", which is not in models\.pool \(entries: opus, sonnet, sol\)/],
   ]) {
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'config-same-')));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -67,6 +67,6 @@ test('factory lint prints a config error as its message, without a stack trace',
   fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify({ prune: { afterDelivery: 'yes' } }));
   const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts/factory/lint.mjs'), 'x.js'], { cwd: dir, encoding: 'utf8', env: { ...process.env, PIPELINE_ROOT: dir }, timeout: 60_000 });
   assert.equal(r.status, 1, r.stderr);
-  assert.match(r.stderr, /^factory lint: .*prune\.afterDelivery must be true or false/);
+  assert.match(r.stderr, /^factory lint: .*prune\.afterDelivery is "yes"; allowed: `true`, `false`/);
   assert.doesNotMatch(r.stderr, /\n\s+at /, `a stack trace:\n${r.stderr}`);
 });

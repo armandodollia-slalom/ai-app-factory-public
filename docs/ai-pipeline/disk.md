@@ -23,9 +23,9 @@ The factory keeps this in bounds by itself:
 
 | Kind | Removed | Kept |
 | --- | --- | --- |
-| `build` | In each pipeline worktree (under `implement.worktreeDir`) that no run, no live stack-slot lease and no recent work uses: the folders in `prune.buildDirs` and every git-ignored folder named in `prune.buildDirNames` (outside `node_modules`, `.git`, `.factory`). The worktree itself stays. | A worktree a running run uses (its ticket record is running or queued, or the run touched it since it started: epic and group worktrees), one a live lease's process works in, one touched in the last `prune.idleMinutes`. A folder that holds tracked files. |
-| `slot` | The build folders (`artifacts`, `build`, `build-partial`) of a stack slot in a checkout still in use (the main checkout included) when no live lease holds that slot and they are older than `prune.slotMaxAgeHours`, or, oldest first, while all slot build folders together hold more than `prune.slotMaxGb`. | A slot a live lease holds. The slot's `.env`, `images.ids` and `images.stamp`. |
-| `image` | Stack images the pipeline built (recorded in `~/.ai-app-factory/teststack/<project>/images.jsonl` by every build, or listed in a slot's `images.ids`) that a rebuild left untagged, that no remaining slot records and no container (running or stopped) uses, older than `prune.imageMinAgeHours`. | Every tagged image (what a slot's tag points at now), images of other projects, anything when Docker cannot be reached. |
+| `build` | In each pipeline worktree (under `implement.worktreeDir`) that no run, no live stack-slot lease and no recent work uses: the folders in `prune.buildDirs` and every git-ignored folder named in `prune.buildDirNames` (outside `node_modules`, `.git`, `.factory`). The worktree itself stays. | A worktree a running run uses (its ticket record is running or queued, or the run touched it since it started: epic and group worktrees), one a live lease's process works in, one touched in the last `prune.idleSec`. A folder that holds tracked files. |
+| `slot` | The build folders (`artifacts`, `build`, `build-partial`) of a stack slot in a checkout still in use (the main checkout included) when no live lease holds that slot and they are older than `prune.slotMaxAgeSec`, or, oldest first, while all slot build folders together hold more than `prune.slotMaxGb`. | A slot a live lease holds. The slot's `.env`, `images.ids` and `images.stamp`. |
+| `image` | Stack images the pipeline built (recorded in `~/.ai-app-factory/teststack/<project>/images.jsonl` by every build, or listed in a slot's `images.ids`) that a rebuild left untagged, that no remaining slot records and no container (running or stopped) uses, older than `prune.imageMinAgeSec`. | Every tagged image (what a slot's tag points at now), images of other projects, anything when Docker cannot be reached. |
 | `install` | Engine installs in `~/.ai-app-factory/versions` that no live branch pins, no running process uses, beyond the newest `prune.keepInstalls`. Live branches: the checked-out HEAD, the remote default branch, the branches of open pull requests, the branches of worktrees in use; the same for each repository in `prune.installRepos`. | Everything when a pin cannot be read (the open pull requests cannot be listed, git fails). The install running the prune. |
 | `worktree` | A ticket's worktree and its subtask worktrees (`<worktree>--<subtask>`), `prune.worktreeDays` after its run finished, once its pull request is merged or closed (or, with no PR, its issue is closed and its head is on the base), with no uncommitted tracked change and a head equal to the PR's. The branch is kept. | A worktree in use (as for `build`), one with uncommitted or unpushed work, any whose PR or issue cannot be read. |
 
@@ -74,7 +74,7 @@ doubt, it keeps the item and says why in the run log; it never deletes something
   without following links: a link anywhere in them (to a folder or a file), or anything but a plain folder or file,
   refuses the before run. Before anything is written into the checkout, every destination is checked too: its stack
   settings file, every scenario folder (empty ones included) and file, and every folder on their way, must be a plain
-  path inside the checkout (no link, a tracked one included; a `stack.scenariosDir` with `..` or absolute is refused),
+  path inside the checkout (no link, a tracked one included; a `teststack.scenariosDir` with `..` or absolute is refused),
   and an existing file there must have no other name (a hard link, which a write would change too). The scenarios are
   then copied file by file into those checked places, never by a recursive copy. A refusal means no before run for
   that bug, reported with the reason; nothing is written.
@@ -96,12 +96,12 @@ doubt, it keeps the item and says why in the run log; it never deletes something
   "prune": {
     "enabled": true,
     "minFreeGb": 20,
-    "idleMinutes": 60,
+    "idleSec": 3600,
     "buildDirs": [".factory/state/teststack", "artifacts", "test-results", "playwright-report"],
     "buildDirNames": ["bin", "obj"],
-    "slotMaxAgeHours": 24,
+    "slotMaxAgeSec": 86400,
     "slotMaxGb": 4,
-    "imageMinAgeHours": 3,
+    "imageMinAgeSec": 10800,
     "worktreeDays": 7,
     "keepInstalls": 3,
     "installRepos": [],

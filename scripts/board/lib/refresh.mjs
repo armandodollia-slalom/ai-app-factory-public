@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { git } from '../../pipeline/lib/git.mjs';
 import { mergeLatestBase } from '../../pipeline/lib/base-merge.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 
 // The open PRs and one PR's merge state, as { number, headRefName, baseRefName, mergeStateStatus } (the host's merge
@@ -22,8 +23,7 @@ function prStates(config) {
 
 // The branch prefixes the pipeline opens PRs from.
 export function pipelinePrefixes(config) {
-  const s = config.implement ?? {};
-  return [s.branchPrefix ?? 'feat/', s.epic?.branchPrefix ?? 'epic/', s.epic?.bugfixPrefix ?? 'bugfix/'];
+  return [setting(config, 'implement.branchPrefix'), setting(config, 'implement.epic.branchPrefix'), setting(config, 'implement.epic.bugfixPrefix')];
 }
 
 // Best-effort removal of a temporary checkout, read-only folders included; never throws.

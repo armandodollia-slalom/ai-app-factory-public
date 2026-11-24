@@ -4,11 +4,54 @@
 // each call consumes the next response for that agent (the last one repeats).
 import fs from 'node:fs';
 import path from 'node:path';
+import { isResolvesQuestion, RESOLVES_ANSWER } from './resolves-question.mjs';
 
 if (!process.env.PIPELINE_FAKE_SCRIPT) process.exit(0); // not a test file; only runs under the e2e tests
 
 const prompt = fs.readFileSync(0, 'utf8');
+// Every verifier is a council member: the harness's follow-up question for a finding's missing `resolves` is answered
+// here, outside the script, so a script's steps stay the agent's review rounds (fixtures/resolves-question.mjs).
+// A stage orchestrator's council pick (selection.mjs selectionTask) is answered here, outside the script and uncounted:
+// with no pick the harness seats the council (the stage's own verifier for one seat), so a script's steps stay the
+// orchestrator's decisions.
+if (/^# Pick the .+ council$/m.test(prompt)) {
+  fs.appendFileSync(`${process.env.PIPELINE_FAKE_SCRIPT}.prompts.log`, `\n=== stage-orchestrator (council pick, answered by the fake) ===\n${prompt}\n`);
+  process.stdout.write('AGENT_RESULT: {"seats": []}\n');
+  process.exit(0);
+}
+if (isResolvesQuestion(prompt)) {
+  process.stdout.write(`${RESOLVES_ANSWER}\n`);
+  process.exit(0);
+}
 const script = JSON.parse(fs.readFileSync(process.env.PIPELINE_FAKE_SCRIPT, 'utf8'));
+// PIPELINE_FAKE_RECORD_ENV (names, comma-separated): each agent's value of those variables, one JSON line per call, in
+// `<script>.env.jsonl`, so a test sees what the run handed its agents.
+if (process.env.PIPELINE_FAKE_RECORD_ENV) {
+  const names = process.env.PIPELINE_FAKE_RECORD_ENV.split(',').filter(Boolean);
+  fs.appendFileSync(`${process.env.PIPELINE_FAKE_SCRIPT}.env.jsonl`, `${JSON.stringify({ agent: process.env.PIPELINE_AGENT_NAME, ...Object.fromEntries(names.map((n) => [n, process.env[n] ?? null])) })}\n`);
+}
+// The implement stage's orchestrator always plans first (GEN-10). A script written for a lone implementer (its steps
+// change code, none returns a plan) gets a self-mode plan here, outside the script and its count, and the pair
+// verifier with no steps approves; a script that plans or scripts the verifier answers as written.
+const agentName = process.env.PIPELINE_AGENT_NAME;
+const scriptedCalls = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(`${process.env.PIPELINE_FAKE_SCRIPT}.calls.json`, 'utf8'));
+  } catch {
+    return {};
+  }
+})();
+const planning = agentName === 'implementer' && /^Plan story \S+:/m.test(prompt);
+const nextStep = (script[agentName] ?? [])[Math.min(scriptedCalls[agentName] ?? 0, (script[agentName] ?? []).length - 1)];
+if (planning && !nextStep?.result?.mode) {
+  fs.appendFileSync(`${process.env.PIPELINE_FAKE_SCRIPT}.prompts.log`, `\n=== implementer (plan, answered by the fake) ===\n${prompt}\n`);
+  process.stdout.write(`Planned.\nAGENT_RESULT: ${JSON.stringify({ mode: 'self', modeReason: 'one change, small enough to make in one pass', features: { services: [], estimatedSize: 'small' }, subtasks: [{ goal: 'Implement the ticket.', acceptance: ['Every acceptance criterion of the ticket'], verify: 'code', modelReason: 'the orchestrator itself', verifyReason: 'code change', expectedFiles: 1, expectedLoc: 10, confidence: 0.8, alternatives: [] }] })}\n`);
+  process.exit(0);
+}
+if (['pair-verifier', 'pair-ui-verifier'].includes(agentName) && !script[agentName] && !Object.keys(script).some((k) => k.startsWith(`${agentName}@`))) {
+  process.stdout.write(`AGENT_RESULT: ${JSON.stringify({ verdict: 'APPROVED', summary: 'the change does what the subtask asks', score: 10, findings: [] })}\n`);
+  process.exit(0);
+}
 // A council member (PIPELINE_COUNCIL_MEMBER) answers from `<agent>@<member>` when the script has that key.
 const member = process.env.PIPELINE_COUNCIL_MEMBER;
 const agent = member && script[`${process.env.PIPELINE_AGENT_NAME}@${member}`] ? `${process.env.PIPELINE_AGENT_NAME}@${member}` : process.env.PIPELINE_AGENT_NAME;
@@ -84,7 +127,22 @@ if (step.screenshot) {
   if (dir) fs.writeFileSync(path.join(dir, step.screenshot), 'png');
 }
 
+// `pidFile`: this run's process id, written before any delay, so a test can tell whether the run was stopped.
+if (step.pidFile) fs.writeFileSync(step.pidFile, String(process.pid));
 if (step.delayMs) await new Promise((r) => setTimeout(r, step.delayMs));
+// Holds this answer until another agent has been called `waitForCalls` times (default 1): a member that must be late
+// answers only after the round's judge ran, however slow the machine. Gives up after a minute.
+if (step.waitForCall) {
+  const until = Date.now() + 60_000;
+  const called = () => {
+    try {
+      return (JSON.parse(fs.readFileSync(counterFile, 'utf8'))[step.waitForCall] ?? 0) >= (step.waitForCalls ?? 1);
+    } catch {
+      return false;
+    }
+  };
+  while (!called() && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+}
 
 // Simulates a crash of the feature verification runner that called this agent: SIGKILL, so nothing gets cleaned up.
 if (step.killRunner) {

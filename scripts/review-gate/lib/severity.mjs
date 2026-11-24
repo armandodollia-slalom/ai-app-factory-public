@@ -2,18 +2,21 @@
 //
 // Ticket severity:
 //   base  = max(Impact, Fix risk); Complexity is shown but feeds into Fix risk, it does not count directly
-//   floor = High (implement.reviewGate.floor.level) when the ticket's files hit an override path or the
+//   floor = High (implement.reviewGate.floor.minLevel) when the ticket's files hit an override path or the
 //           agent put it in a floor category (auth, payments, migration, security)
 //   bump  = +1 level per human reopen, capped at Severe (stored apart, so the base stays visible)
 //
 // PR severity = max ticket severity, +1 level when the PR touches `manySystems` (3) or more systems,
-// at least High (`sharedFloor`) when it changes shared infrastructure or an integration-event contract.
+// at least High (`floor.sharedMinLevel`) when it changes shared infrastructure or an integration-event contract.
 import { atLeast, bumpLevel, levelIndex, maxLevel, normalizeLevel } from './levels.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
+
+const GATE = defaultSettings().implement.reviewGate;
 
 export function ticketSeverity({ impact, complexity = null, fixRisk, floorReasons = [], reopens = 0 }, settings = {}) {
   const base = maxLevel(impact, fixRisk);
   if (!base) return { level: null, base: null, floor: null, bump: 0, explanation: 'not assessed' };
-  const floor = floorReasons.length ? normalizeLevel(settings.floor?.level ?? 'High') : null;
+  const floor = floorReasons.length ? normalizeLevel(settings.floor?.minLevel ?? GATE.floor.minLevel) : null;
   const floored = floor ? atLeast(base, floor) : base;
   const bump = Math.max(0, Number(reopens) || 0);
   const level = bumpLevel(floored, bump);
@@ -44,12 +47,12 @@ export function prSeverity({ tickets, systems }, settings = {}) {
   // A ticket that was not assessed makes the PR's severity unknown (it can never auto-merge).
   if (!levels.length || levels.some((l) => !l)) return { level: null, explanation: 'not every ticket was assessed', bumped: false, floor: null };
   const top = maxLevel(levels);
-  const many = settings.manySystems ?? 3;
+  const many = settings.manySystems ?? GATE.manySystems;
   const bumped = systems.names.length >= many;
   let level = bumped ? bumpLevel(top, 1) : top;
   const parts = [`max ticket severity ${top}`];
   if (bumped) parts.push(`+1 for ${systems.names.length} systems → ${level}`);
-  const floor = systems.shared || systems.contract ? normalizeLevel(settings.sharedFloor ?? 'High') : null;
+  const floor = systems.shared || systems.contract ? normalizeLevel(settings.floor?.sharedMinLevel ?? GATE.floor.sharedMinLevel) : null;
   if (floor) {
     const before = level;
     level = atLeast(level, floor);

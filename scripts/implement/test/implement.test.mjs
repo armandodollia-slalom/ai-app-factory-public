@@ -29,9 +29,10 @@ const write = (root, rel, text) => {
 const calls = () => JSON.parse(fs.readFileSync(`${scriptFile}.calls.json`, 'utf8'));
 const prompts = () => fs.readFileSync(`${scriptFile}.prompts.log`, 'utf8');
 
-function pipeline(args) {
-  const env = { ...process.env, PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main' };
+function pipeline(args, extraEnv = {}) {
+  const env = { ...process.env, PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main', ...extraEnv };
   for (const k of ['PIPELINE_CHILD', 'PIPELINE_DISABLE', 'PIPELINE_ROOT']) delete env[k];
+  for (const [k, v] of Object.entries(extraEnv)) if (v === undefined) delete env[k];
   return spawnSync(process.execPath, ['scripts/pipeline/pipeline.mjs', ...args], { cwd: repo, encoding: 'utf8', env });
 }
 
@@ -42,15 +43,18 @@ before(() => {
   for (const dir of ['scripts/pipeline', 'scripts/review', 'scripts/feature-verification', 'scripts/implement', 'scripts/pr-check', 'scripts/board', 'scripts/models', 'scripts/pr-video', 'scripts/review-gate', 'scripts/retro', 'scripts/factory', 'scripts/stack', 'scripts/teststack'].filter((d) => fs.existsSync(path.join(source, d)))) {
     fs.cpSync(path.join(source, dir), path.join(repo, dir), { recursive: true, filter: (p) => !p.startsWith(path.join(source, dir, 'test')) });
   }
+  // Every section's defaults and descriptions: a stage reads the others' (scripts/pipeline/lib/settings.mjs).
+  for (const d of fs.readdirSync(path.join(source, 'scripts'))) for (const f of ['config.json', 'settings.json']) if (fs.existsSync(path.join(source, 'scripts', d, f)) && !fs.existsSync(path.join(repo, 'scripts', d, f))) {
+    fs.mkdirSync(path.join(repo, 'scripts', d), { recursive: true });
+    fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
+  }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
   const fvConfig = JSON.parse(fs.readFileSync(path.join(repo, 'scripts/feature-verification/config.json'), 'utf8'));
-  fvConfig.precheck.runTests = false;
+  fvConfig.featureVerification.precheck.runTests = false;
   write(repo, 'scripts/feature-verification/config.json', JSON.stringify(fvConfig, null, 2));
   const implConfig = JSON.parse(fs.readFileSync(path.join(repo, 'scripts/implement/config.json'), 'utf8'));
-  implConfig.implement.fvPollSec = 0.1;
-  implConfig.implement.parallel = 1; // the scripted agent answers in call order: one story at a time
-  // This test covers the single-agent path; the orchestrated one is in orchestrate-e2e.test.mjs.
-  implConfig.implement.orchestrate = false;
+  implConfig.implement.pollSec.featureVerification = 0.1;
+  implConfig.implement.maxParallel = 1; // the scripted agent answers in call order: one story at a time
   write(repo, 'scripts/implement/config.json', JSON.stringify(implConfig, null, 2));
   const prCheckConfig = JSON.parse(fs.readFileSync(path.join(repo, 'scripts/pr-check/config.json'), 'utf8'));
   prCheckConfig.prCheck.hook.enabled = false;
@@ -86,7 +90,7 @@ test('implement run: each story gets a worktree and branch, loops with the revie
         { writeImpl: 'src/Basket/History.cs', result: { status: 'done', reason: 'history' } },
         { result: { status: 'blocked', reason: 'loyalty provider is an open question' } },
       ],
-      'architecture-reviewer': [{ result: blocking }, { result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+      'architecture-reviewer': [{ result: blocking }, { result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
       'test-planner': [{ writePlan: happySad }],
       'test-plan-verifier': [{ result: { score: 10, summary: 'ok', gaps: [] } }],
       'test-automation': [{ writeTests: [1, 2], result: { status: 'done' } }],
@@ -99,13 +103,17 @@ test('implement run: each story gets a worktree and branch, loops with the revie
   assert.match(dry.stdout, /1\. DEMO-1 +feat\/demo-1-apply-coupon <- main\n 2\. DEMO-2 +feat\/demo-2-coupon-history <- feat\/demo-1-apply-coupon {2}\(blocked by DEMO-1\)/);
   assert.ok(!fs.existsSync(`${scriptFile}.calls.json`), 'a dry run starts no agents');
 
-  const result = pipeline(['implement', 'run', ...incoming]);
+  fs.rmSync(`${scriptFile}.env.jsonl`, { force: true });
+  const result = pipeline(['implement', 'run', ...incoming], { PIPELINE_FAKE_RECORD_ENV: 'FV_USE_SLOTS', FV_USE_SLOTS: undefined });
   assert.equal(result.status, 1, 'not every story finished');
+  // Council r2 (T6): the run hands featureVerification.slots.enabled (on by default) to every agent it starts.
+  assert.deepEqual([...new Set(fs.readFileSync(`${scriptFile}.env.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l).FV_USE_SLOTS))], ['1']);
   assert.match(result.stdout, /DEMO-1 +done +feat\/demo-1-apply-coupon/);
   assert.match(result.stdout, /DEMO-2 +done +feat\/demo-2-coupon-history/);
   assert.match(result.stdout, /DEMO-3 +blocked .*\n +loyalty provider is an open question/);
   assert.match(result.stdout, /DEMO-4 +skipped .*\n +blocker DEMO-3 ended blocked/);
-  assert.deepEqual(calls(), { implementer: 4, 'architecture-reviewer': 3, 'test-planner': 2, 'test-plan-verifier': 2, 'test-automation': 2, 'test-automation-verifier': 2 });
+  // Each story's test plan and test automation stages, and the review that blocked once, began with their orchestrator's decision (unscripted: it delegated).
+  assert.deepEqual(calls(), { implementer: 4, 'architecture-reviewer': 3, 'stage-orchestrator': 5, 'test-planner': 2, 'test-plan-verifier': 2, 'test-automation': 2, 'test-automation-verifier': 2 });
   assert.match(prompts(), /=== implementer #2[\s\S]*Address this feedback[\s\S]*no owner check[\s\S]*Fix: check buyer id/, 'review findings go back to the implementer');
   assert.match(prompts(), /=== implementer #1 \(child=1\)[\s\S]*headless under `pipeline implement`[\s\S]*AGENT_RESULT/);
 
@@ -116,12 +124,14 @@ test('implement run: each story gets a worktree and branch, loops with the revie
   assert.deepEqual(sh(wt1, 'git', ['log', '--format=%s', 'main..HEAD']).split('\n'), [
     'DEMO-1: Add verified test plan and automated tests',
     'DEMO-1: Implementation',
-    'DEMO-1: Implementation',
+    // The orchestrator implemented the ticket itself (self mode), committed after its pair round.
+    'DEMO-1: self (round 1)',
   ]);
   assert.ok(fs.existsSync(path.join(wt1, CACHE, 'DEMO-1/story.md')), "the ticket is in the worktree's cache, not on the branch");
   assert.ok(fs.existsSync(path.join(wt1, '.factory/plans/DEMO-1-apply-coupon/_index.md')));
   const metrics = fs.readFileSync(path.join(wt1, '.factory/metrics/implement-runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.deepEqual(metrics.map((m) => [m.story, m.outcome, m.implementer_runs, m.review_blocks]), [['DEMO-1', 'done', 2, 1]]);
+  // The orchestrator's own first run is counted with its plan and pair (the decision log); the run after the review block is the implementer's one more.
+  assert.deepEqual(metrics.map((m) => [m.story, m.outcome, m.implementer_runs, m.review_blocks]), [['DEMO-1', 'done', 1, 1]]);
 
   assert.equal(sh(wt2, 'git', ['merge-base', '--is-ancestor', 'feat/demo-1-apply-coupon', 'HEAD']), '', 'DEMO-2 is stacked on DEMO-1');
   assert.equal(sh(wt2, 'git', ['log', '-1', '--format=%s']), 'DEMO-2: Add verified test plan and automated tests');
@@ -145,7 +155,7 @@ test('implement run: each story gets a worktree and branch, loops with the revie
     scriptFile,
     JSON.stringify({
       implementer: [{ writeImpl: 'src/Loyalty/Points.cs', result: { status: 'done', reason: 'points' } }],
-      'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+      'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
       'test-planner': [{ writePlan: happySad }],
       'test-plan-verifier': [{ result: { score: 10, summary: 'ok', gaps: [] } }],
       'test-automation': [{ writeTests: [1, 2], result: { status: 'done' } }],
@@ -159,8 +169,9 @@ test('implement run: each story gets a worktree and branch, loops with the revie
   assert.match(resumed.stdout, /DEMO-3 +done[\s\S]*DEMO-4 +done/);
   assert.equal(calls().implementer, 2, 'only the unfinished stories run again');
   const demo4 = JSON.parse(fs.readFileSync(path.join(runs, 'DEMO-4.json'), 'utf8'));
-  assert.ok(!demo4.findings && demo4.agentRuns === undefined, "a fresh start drops the earlier attempt's findings and metrics");
-  assert.match(prompts(), /=== implementer #1[\s\S]*previous run of this story was interrupted/);
+  // A fresh start drops the earlier attempt's findings; the run's agent count is this attempt's own (the orchestrated run records it).
+  assert.ok(!demo4.findings, "a fresh start drops the earlier attempt's findings");
+  assert.match(prompts(), /=== implementer #1[\s\S]*previous run of this story was interrupted/, 'the orchestrator continuing the story is told the earlier run was interrupted');
   assert.match(pipeline(['implement', 'resume']).stdout, /DEMO-4 +skip: done in a previous run/, 'a finished run resumes to nothing');
   assert.match(pipeline(['resume']).stdout, /\[implement\]\nNo interrupted implement run\./);
 });

@@ -22,6 +22,7 @@ import { linkPullRequest } from './lib/link.mjs';
 import { trackerFor } from './lib/trackers/index.mjs';
 import { hostFor } from '../pipeline/lib/hosts/index.mjs';
 import { ticketId } from './lib/trackers/shared.mjs';
+import { setting } from '../pipeline/lib/settings.mjs';
 
 setLogTag('board');
 const CONFIG_FILE = path.join(SCRIPTS_DIR, 'board', 'config.json');
@@ -297,9 +298,9 @@ async function main() {
           // Held for a person: the review-quorum check needs an approval while the PR has no approvals:N of at least 1
           // (a feature PR has no gate notice of its own).
           const labels = prHost.pr.get(prNumber)?.labels ?? [];
-          const pattern = config.implement?.reviewGate?.labels?.approvals ?? 'approvals:{n}';
+          const pattern = setting(config, 'implement.reviewGate.labels.approvals');
           const held = labels.some((l) => { const m = new RegExp(`^${pattern.replace('{n}', '(\\d+)')}$`).exec(l); return m && Number(m[1]) >= 1; });
-          const add = [config.implement?.reviewGate?.labels?.needsHuman ?? 'needs-human', ...(held ? [] : [pattern.replace('{n}', '1')])];
+          const add = [setting(config, 'implement.reviewGate.labels.needsHuman'), ...(held ? [] : [pattern.replace('{n}', '1')])];
           const zero = pattern.replace('{n}', '0');
           for (const l of add) prHost.repo.ensureLabel?.(l, {});
           prHost.pr.update(prNumber, { labels: { add, remove: labels.includes(zero) ? [zero] : [] } });

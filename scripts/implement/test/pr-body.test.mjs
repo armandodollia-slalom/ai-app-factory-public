@@ -32,6 +32,6 @@ test('an implementer follow-up the PR check fixed in the same PR is dropped; oth
 test('a bug epic\'s planner releases the main checkout\'s language servers when planning ends, even when it fails', async () => {
   const released = [];
   const deps = { lsp: { release: async (w) => released.push(w) }, runAgent: async () => { throw new Error('agent down'); } };
-  await assert.rejects(planEpic({ planConfig: { implement: { timeouts: { plannerSec: 1 }, epic: {} }, agent: { cli: 'claude', models: {} } }, cwd: '/repo/main', epic: { key: 'E-1' }, stories: [], deps, log: () => {}, groups: true }), /agent down|Cannot/);
+  await assert.rejects(planEpic({ planConfig: { implement: { timeoutsSec: { epicPlanner: 1 }, epic: {} }, agent: { cli: 'claude', models: {} } }, cwd: '/repo/main', epic: { key: 'E-1' }, stories: [], deps, log: () => {}, groups: true }), /agent down|Cannot/);
   assert.deepEqual(released, ['/repo/main']);
 });

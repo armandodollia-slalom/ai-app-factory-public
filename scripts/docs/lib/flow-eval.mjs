@@ -96,7 +96,7 @@ export function resolve(flow, input = {}) {
   return { values, facts: env.facts, notes };
 }
 
-// "{maxPairRounds}" in a label becomes the setting's (or fact's) value.
+// "{implementMaxCouncilRounds}" in a label becomes the setting's (or fact's) value.
 export function interpolate(text, env) {
   return String(text ?? '').replace(/\{([\w.]+)\}/g, (m, name) => (has(env.facts, name) || has(env.values, name) ? String(ref(env, name)) : m));
 }
@@ -336,8 +336,7 @@ const setPath = (obj, path, value) => {
 };
 
 // The .factory/config.json and .factory/factory.json fragments for the settings that differ from their defaults
-// (scenario values and CLI-only flags are not config). A seated council stage needs members: the fragment names a
-// placeholder member to replace.
+// (scenario values and CLI-only flags are not config). A seated council stage seats three members from models.pool.
 export function configFragment(flow, input = {}) {
   const { values } = resolve(flow, input);
   const files = {};
@@ -347,9 +346,8 @@ export function configFragment(flow, input = {}) {
     const file = s.file ?? '.factory/config.json';
     files[file] = files[file] ?? {};
     if (s.seat) {
-      if (!values[s.id]) continue;
-      setPath(files[file], `council.stages.${s.seat}`, {});
-      if (!files[file].council.members) files[file].council.members = [{ name: 'member-1', cli: 'claude', model: 'opus', lens: 'correctness' }];
+      // A seated council: three members from models.pool (its entries are the repository's to list).
+      if (values[s.id]) setPath(files[file], s.config, 3);
     } else if (s.section) {
       if (values[s.id]) setPath(files[file], s.config, {});
     } else setPath(files[file], s.config, values[s.id]);

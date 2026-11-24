@@ -6,7 +6,7 @@ import { decisionRecord as sharedRecord } from '../../pipeline/lib/decisions.mjs
 import { validatePlan } from '../lib/plan.mjs';
 
 const story = '# DEMO-1: [BE - Catalog.API, Basket.API] - X\n\n## Acceptance Criteria\n\n- one\n- two\n- three\n\n## Technical Notes\n\n- not an AC\n';
-const sub = (id, owns, over = {}) => ({ id, goal: id, acceptance: ['x'], owns, dependsOn: [], modelClass: 'medium', verify: 'code', modelReason: 'normal', verifyReason: 'api', expectedFiles: 2, expectedLoc: 40, confidence: 0.7, alternatives: [{ option: 'self', reason: 'two services' }], ...over });
+const sub = (id, owns, over = {}) => ({ id, goal: id, acceptance: ['x'], owns, dependsOn: [], model: 'sonnet', verify: 'code', modelReason: 'normal', verifyReason: 'api', expectedFiles: 2, expectedLoc: 40, confidence: 0.7, alternatives: [{ option: 'self', reason: 'two services' }], ...over });
 
 test('acceptance criteria are counted from their section only', () => {
   assert.equal(acceptanceCount(story), 3);
@@ -20,7 +20,7 @@ test('a decision record carries the plan, its reasons and the story features', (
   assert.deepEqual(r.orchestrator, { cli: 'claude', model: 'o', promptVersion: 'v1' });
   assert.equal(r.modeReason, 'two services');
   assert.deepEqual(r.features, { services: ['Basket.API', 'Catalog.API'], acceptanceCriteria: 3, uiStory: false, estimatedSize: 'medium' });
-  assert.deepEqual(Object.keys(r.subtasks[0]).sort(), ['alternatives', 'confidence', 'dependsOn', 'expectedFiles', 'expectedLoc', 'goal', 'id', 'modelClass', 'modelReason', 'owns', 'verify', 'verifyReason']);
+  assert.deepEqual(Object.keys(r.subtasks[0]).sort(), ['alternatives', 'confidence', 'dependsOn', 'expectedFiles', 'expectedLoc', 'goal', 'id', 'model', 'modelReason', 'owns', 'verify', 'verifyReason']);
   const rejected = decisionRecord({ ts: 't', key: 'DEMO-1', decisionId: null, attempt: 2, accepted: false, errors: ['bad'], raw: { mode: 'delegate', subtasks: [{ id: 'x' }] }, storyText: story });
   assert.equal(rejected.decisionId, null);
   assert.deepEqual(rejected.rejectionReasons, ['bad']);
@@ -51,17 +51,18 @@ test('escaped defects are credited to the subtask that owns the file', () => {
 
 test('labels: over/under-provisioned, bad split, should-have-been-self, weak verification', () => {
   const decisions = [
-    { story: 'K', decisionId: 'd1', accepted: true, mode: 'delegate', subtasks: [{ id: 'a', modelClass: 'large' }, { id: 'b', modelClass: 'small' }, { id: 'c', modelClass: 'medium' }] },
-    { story: 'L', decisionId: 'd2', accepted: true, mode: 'delegate', subtasks: [{ id: 'x', modelClass: 'small' }, { id: 'y', modelClass: 'small' }] },
+    { story: 'K', decisionId: 'd1', accepted: true, mode: 'delegate', subtasks: [{ id: 'a', model: 'opus' }, { id: 'b', model: 'haiku' }, { id: 'c', model: 'sonnet' }] },
+    { story: 'L', decisionId: 'd2', accepted: true, mode: 'delegate', subtasks: [{ id: 'x', model: 'haiku' }, { id: 'y', model: 'haiku' }] },
     { story: 'L', decisionId: null, accepted: false, mode: 'delegate', subtasks: [] },
   ];
-  const run = (decisionId, subtaskId, over) => ({ decisionId, subtaskId, maxRounds: 3, rounds: [{ verdict: 'APPROVED' }], approved: true, escalation: 'none', mergeConflictFiles: [], filesNeededOutsideOwns: [], actual: { files: 1, loc: 20 }, agentRuns: 2, ...over });
+  const run = (decisionId, subtaskId, over) => ({ decisionId, subtaskId, maxRounds: 3, rounds: [{ score: 10, verdict: 'APPROVED' }], approved: true, escalation: 'none', mergeConflictFiles: [], filesNeededOutsideOwns: [], actual: { files: 1, loc: 20 }, agentRuns: 2, ...over });
   const runs = [
-    run('d1', 'a', {}),
+    // Over-provisioned: an entry above low effort, approved in round 1 on a tiny diff.
+    run('d1', 'a', { effort: 'high' }),
     run('d1', 'b', { rounds: [{}, {}, {}], escalation: 'takeover' }),
     run('d1', 'c', { mergeConflictFiles: ['src/x.cs'], actual: { files: 9, loc: 400 } }),
-    run('d2', 'x', { agentRuns: 4 }),
-    run('d2', 'y', { agentRuns: 3 }),
+    run('d2', 'x', { agentRuns: 4, effort: 'low' }),
+    run('d2', 'y', { agentRuns: 3, effort: 'low' }),
   ];
   const outcomes = [{ type: 'escaped', decisionId: 'd1', subtaskId: 'c' }, { type: 'story', decisionId: 'd1', outcome: 'done' }];
   const rows = labelDecisions({ decisions, runs, outcomes });
@@ -92,11 +93,11 @@ test('plan attempts and pair verdicts go to the shared decision log, and the lab
   const rec = decisionRecord({ ts: 't', key: 'DEMO-1', decisionId: 'd-1', attempt: 1, accepted: true, agent: { cli: 'claude', model: 'opus', version: 'v1' }, plan: v.plan, storyText: story });
   const entry = sharedRecord(planDecisionLog(rec));
   assert.deepEqual([entry.stage, entry.decision, entry.decision_id, entry.round, entry.agent, entry.reason], ['implement-plan', 'plan-written', 'd-1', 1, 'implementer', 'two services / by service']);
-  assert.deepEqual(entry.items.map((i) => [i.id, i.modelClass, i.modelReason, i.verifyReason, i.alternatives.length]), [['api', 'medium', 'normal', 'api', 1], ['basket', 'medium', 'normal', 'api', 1]]);
+  assert.deepEqual(entry.items.map((i) => [i.id, i.model, i.modelReason, i.verifyReason, i.alternatives.length]), [['api', 'sonnet', 'normal', 'api', 1], ['basket', 'sonnet', 'normal', 'api', 1]]);
   const rejected = sharedRecord(planDecisionLog(decisionRecord({ ts: 't', key: 'DEMO-1', attempt: 1, accepted: false, errors: ['a', 'b'], agent: {}, raw: { mode: 'delegate', subtasks: [] } })));
   assert.deepEqual([rejected.decision, rejected.decision_id, rejected.reason], ['plan-rejected', null, 'a; b']);
   assert.deepEqual(planDecisions([entry, rejected, { stage: 'review', decision: 'approved' }]).map((d) => [d.accepted, d.decisionId, d.subtasks.length]), [[true, 'd-1', 2], [false, null, 0]]);
-  const rows = labelDecisions({ decisions: [entry], runs: [subtaskRunRecord({ key: 'DEMO-1', decisionId: 'd-1', subtaskId: 'api', approved: true, rounds: [roundRecord({ round: 1, verdict: 'APPROVED' })], actual: { files: 1, loc: 10 } })] });
+  const rows = labelDecisions({ decisions: [entry], runs: [subtaskRunRecord({ key: 'DEMO-1', decisionId: 'd-1', subtaskId: 'api', model: 'sonnet', effort: 'medium', approved: true, rounds: [roundRecord({ round: 1, verdict: 'APPROVED' })], actual: { files: 1, loc: 10 } })] });
   assert.deepEqual(rows.find((r) => r.subtaskId === 'api').labels, ['over-provisioned']);
 
   const verdict = sharedRecord(verdictDecisionLog({ key: 'DEMO-1', decisionId: 'd-1', st: { id: 'api' }, round: 2, verdict: { verdict: 'CHANGES_REQUESTED', summary: 'missing check', findings: [{ severity: 'blocking', category: 'logic', file: 'src/Catalog.API/A.cs', line: 3, issue: 'no owner check', fix: 'add it' }] }, verifier: { version: 'v9' } }));
@@ -138,7 +139,7 @@ test('design findings: counted per UI round, in the decision log with both scree
   ];
   assert.deepEqual(Object.fromEntries(prCheckDesignFindings(prChecks)), { 'DEMO-1': 2, 'DEMO-2': 2 });
 
-  const decisions = [{ story: 'DEMO-1', decisionId: 'd', accepted: true, mode: 'delegate', subtasks: [{ id: 'web', modelClass: 'medium', verify: 'ui' }] }];
+  const decisions = [{ story: 'DEMO-1', decisionId: 'd', accepted: true, mode: 'delegate', subtasks: [{ id: 'web', model: 'sonnet', verify: 'ui' }] }];
   const rows = labelDecisions({ decisions, runs: [{ ...run, actual: { files: 5, loc: 200 }, escalation: 'none', maxRounds: 3 }], outcomes: [], prChecks });
   assert.deepEqual([rows[0].designFindings, rows[0].prCheckDesignFindings], [2, 2]);
   const report = formatDecisionReport(rows);

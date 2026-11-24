@@ -31,7 +31,7 @@ function repo() {
   g(root, 'checkout', '-qb', 'feat/x');
   fs.writeFileSync(path.join(root, 'src/a.cs'), 'class A { int B; }\n');
   g(root, 'commit', '-qam', 'implementation');
-  const config = { root, baseRef: 'main', stateDir: '.factory/state', implExclude: ['.factory', 'tests', 'e2e'], prCheck: { hook: { pollSec: 0, waitForTestsMin: 1 } }, recovery: { startingGraceSec: 120, maxAttempts: 3, backoffSec: 30 } };
+  const config = { root, baseRef: 'main', stateDir: '.factory/state', implExclude: ['.factory', 'tests', 'e2e'], prCheck: { hook: { pollSec: 0, waitForTestsSec: 60 } }, recovery: { startingGraceSec: 120, maxAttempts: 3, backoffSec: 30 } };
   return { root, config };
 }
 

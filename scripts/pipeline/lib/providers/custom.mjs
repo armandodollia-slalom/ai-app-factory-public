@@ -45,7 +45,7 @@ export function callCommand(kind, settings, op, args = [], { env = process.env, 
   const secrets = Object.keys(settings.env ?? {}).map((k) => childEnvironment[k]);
   const { root: _root, resolveToken: _rt, ...shown } = settings;
   const input = JSON.stringify({ protocol: PROTOCOL, kind, op, args: args.map((a) => (a === undefined ? null : a)), settings: shown });
-  const timeoutMs = Math.max(1, Number(settings.timeoutSec ?? 60)) * 1000;
+  const timeoutMs = Math.max(1, Number(settings.timeoutSec ?? CUSTOM_CALL_TIMEOUT_SEC)) * 1000;
   const r = spawn(argv[0], argv.slice(1), { cwd, input, env: childEnvironment, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, windowsHide: true, shell: process.platform === 'win32' && !/\.(exe|cmd|bat)$/i.test(argv[0]) && !['node', 'python', 'python3'].includes(argv[0]) });
   const label = `custom ${kind} ${op}`;
   if (r.error?.code === 'ETIMEDOUT' || (r.signal && r.status == null)) throw new HostError(`${label}: timed out after ${timeoutMs / 1000} s`, { code: 'timeout' });
@@ -95,6 +95,9 @@ const defaultFormat = {
 };
 
 // The adapter object of a kind: every contract operation at its dotted path, calling the command.
+// One call's time limit when host/tracker/ci.timeoutSec sets none (their reference rows show it as their default).
+export const CUSTOM_CALL_TIMEOUT_SEC = 60;
+
 export function createCustomAdapter(kind, settings, deps = {}) {
   const env = deps.env ?? process.env;
   const call = (op, args) => callCommand(kind, settings, op, args, { env, ...(deps.spawn ? { spawn: deps.spawn } : {}) });

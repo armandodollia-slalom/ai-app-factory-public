@@ -25,6 +25,7 @@ import { setMetricsMerger, stateDir, trackedStreamFiles } from './state.mjs';
 import { log, readJson, writeJson } from './util.mjs';
 import { fetchWithTimeout } from './external.mjs';
 import { expandEnv as expandEnvShared } from './env.mjs';
+import { defaultSettings, setting } from './settings.mjs';
 
 export const SINK_TYPES = { none: { push: false, pull: false }, directory: { push: true, pull: true }, http: { push: true, pull: true }, command: { push: true, pull: 'when a pull command is set' }, otlp: { push: true, pull: false } };
 
@@ -34,9 +35,10 @@ const lineId = (line) => crypto.createHash('sha256').update(line).digest('hex').
 const host = () => os.hostname().replace(/[^A-Za-z0-9_.-]/g, '-') || 'host';
 
 export function sinkSettings(config) {
-  const sink = config.metrics?.sink ?? { type: 'none' };
-  const type = sink.type ?? 'none';
-  if (!SINK_TYPES[type]) throw new Error(`metrics.sink.type is "${type}"; use one of ${Object.keys(SINK_TYPES).join(', ')}`);
+  const sink = setting(config, 'metrics.sink');
+  // FACTORY_SINK overrides metrics.sink.type for one run (`none` turns the store off).
+  const type = process.env.FACTORY_SINK || sink.type || defaultSettings().metrics.sink.type;
+  if (!SINK_TYPES[type]) throw new Error(`${process.env.FACTORY_SINK ? 'FACTORY_SINK (metrics.sink.type)' : 'metrics.sink.type'} is "${type}"; use one of ${Object.keys(SINK_TYPES).join(', ')}`);
   const canPull = type === 'command' ? Boolean(sink.pull) : SINK_TYPES[type].pull === true;
   return { ...sink, type, canPush: SINK_TYPES[type].push, canPull, project: config.project?.name ?? path.basename(config.root) };
 }
@@ -246,7 +248,7 @@ export async function pull(config, { adapter = sinkAdapter(config), since = null
   return result;
 }
 
-export const KNOWN_STREAMS = ['decisions.jsonl', 'decision-outcomes.jsonl', 'verifier-runs.jsonl', 'verifier-denials.jsonl', 'precheck-failures.jsonl', 'calibration.jsonl', 'arch-reviews.jsonl', 'pr-checks.jsonl', 'token-usage.jsonl', 'implement-runs.jsonl', 'subtask-runs.jsonl', 'run-conditions.jsonl', 'full-project-runs.jsonl', 'escalations.jsonl', 'retro-observations.jsonl', 'retro-selftests.jsonl', 'runs.jsonl', 'council-rounds.jsonl', 'analysis-runs.jsonl', 'analysis-findings.jsonl', 'pr-check-returns.jsonl', 'analysis-held.jsonl', 'history-rewrites.jsonl', 'secret-decisions.jsonl', 'analysis-agreement.jsonl', 'analysis-gate.jsonl'];
+export const KNOWN_STREAMS = ['decisions.jsonl', 'decision-outcomes.jsonl', 'verifier-runs.jsonl', 'verifier-denials.jsonl', 'precheck-failures.jsonl', 'calibration.jsonl', 'arch-reviews.jsonl', 'pr-checks.jsonl', 'token-usage.jsonl', 'implement-runs.jsonl', 'subtask-runs.jsonl', 'run-conditions.jsonl', 'full-project-runs.jsonl', 'escalations.jsonl', 'retro-observations.jsonl', 'retro-selftests.jsonl', 'runs.jsonl', 'council-rounds.jsonl', 'council-selections.jsonl', 'council-findings.jsonl', 'analysis-runs.jsonl', 'analysis-findings.jsonl', 'pr-check-returns.jsonl', 'analysis-held.jsonl', 'history-rewrites.jsonl', 'secret-decisions.jsonl', 'analysis-agreement.jsonl', 'analysis-gate.jsonl'];
 // Local only: never shipped (a run's own external-call log, the stack's image cache records).
 // redact-seen.jsonl: hashes of values the redaction boundary saw, in the state directory; never shipped or committed.
 export const LOCAL_STREAMS = ['calls.jsonl', 'images.jsonl', 'redact-seen.jsonl'];
@@ -275,7 +277,7 @@ export function mergedRecords(config, stream, localRecords) {
 // Called at the end of a hook: never waits, never throws, never prints into the hook's output.
 export function pushInBackground(config, spawnDetached) {
   try {
-    if (sinkSettings(config).type === 'none' || process.env.FACTORY_SINK === 'off') return false;
+    if (sinkSettings(config).type === 'none') return false;
     spawnDetached();
     return true;
   } catch (error) {

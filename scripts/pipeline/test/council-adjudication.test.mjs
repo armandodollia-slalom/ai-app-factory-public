@@ -14,7 +14,7 @@ import { adjudicate, adjudicationTask, councilMemory, fixesFile, memoryFile, mer
 const STATE = '.factory/state';
 const OPUS = { name: 'opus', cli: 'claude', model: 'opus', lens: 'acceptance', blocking: true };
 const SOL = { name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness', blocking: true };
-const COUNCIL = { stage: 'review', rounds: 3, passScore: 9, blockOn: 'any', onUnavailable: 'fail', members: [OPUS, SOL] };
+const COUNCIL = { stage: 'review', maxCouncilRounds: 3, councilPassScore: 9, blockQuorum: 'any', onUnavailable: 'fail', members: [OPUS, SOL] };
 const FILE = 'src/Ordering.API/Service.cs';
 const LINES = 40;
 const base = (extra = {}) => Array.from({ length: LINES }, (_, i) => extra[i + 1] ?? `        var step${i + 1} = Compute(${i + 1}, input);`).join('\n') + '\n';

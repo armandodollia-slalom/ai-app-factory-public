@@ -15,10 +15,8 @@
 //   afterOpen     'draft' how an open PR is held while agents work on it again: 'draft' (convert to draft and back),
 //                         'label' (a blocking work-in-progress label on hosts without drafts), 'close-reopen'
 //   wipLabel      'work-in-progress'
-//   draftCycles   1       times an open PR may go back to draft before a person decides
-// Removed settings, reported by preOpenProblems when a config still has them: `enabled` (an open before the work and
-// CI are done is no longer possible) and `failedStory` (a story that does not finish always escalates on its ticket with
-// its branch pushed and no PR).
+// The settings this section used to have are in the renamed-settings table (scripts/pipeline/renamed-settings.json):
+// a config that still has them does not load.
 import fs from 'node:fs';
 import path from 'node:path';
 import { appendJsonl, nowIso, readJson, writeJson } from '../../pipeline/lib/util.mjs';
@@ -26,17 +24,19 @@ import { git } from '../../pipeline/lib/git.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { ciFor } from '../../pipeline/lib/ci/index.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
-import { AFTER_OPEN, PRE_OPEN_DEFAULTS, PRE_OPEN_REMOVED, addConfigWarning, preOpenProblems } from '../../pipeline/lib/config.mjs';
-import { branchFlaky, branchLabel, branchWait, ciFixRounds, ciGate, ciLine, deliveryDecision } from './ci-wait.mjs';
+import { AFTER_OPEN, PRE_OPEN_DEFAULTS, addConfigWarning, deepMerge, preOpenProblems } from '../../pipeline/lib/config.mjs';
+import { branchFlaky, branchLabel, branchWait, ciGate, ciLine, deliveryDecision } from './ci-wait.mjs';
 import { headSha } from './gitops.mjs';
+import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
+
+// The implement section's own defaults (a caller may pass a partial section).
+const DEFAULTS = defaultSettings().implement;
 
 export { PRE_OPEN_DEFAULTS, preOpenProblems };
 
 export function preOpenSettings(config) {
   const s = { ...PRE_OPEN_DEFAULTS, ...(config.implement?.preOpen ?? {}) };
   if (!AFTER_OPEN.includes(s.afterOpen)) s.afterOpen = 'draft';
-  // The order is not optional (owner requirement C16/C18): no setting opens a PR before its work and CI are done.
-  for (const k of Object.keys(PRE_OPEN_REMOVED)) delete s[k];
   return s;
 }
 
@@ -63,7 +63,7 @@ export function storyBranchPatterns(config) {
   const s = preOpenSettings(config);
   if (Array.isArray(s.branches) && s.branches.length) return s.branches;
   const i = config.implement ?? {};
-  const prefixes = [i.branchPrefix ?? 'feat/', i.epic?.branchPrefix ?? 'epic/', i.epic?.bugfixPrefix ?? 'bugfix/'];
+  const prefixes = [i.branchPrefix ?? DEFAULTS.branchPrefix, i.epic?.branchPrefix ?? DEFAULTS.epic.branchPrefix, i.epic?.bugfixPrefix ?? DEFAULTS.epic.bugfixPrefix];
   return [...new Set(prefixes.filter(Boolean).map((p) => `${String(p).replace(/\/+$/, '')}/**`))];
 }
 
@@ -75,7 +75,7 @@ export function storyBranchPatterns(config) {
 
 const mainRoot = (config) => config.mainRoot ?? config.root;
 const prNo = (pr) => String(pr ?? '').match(/(\d+)\/?$/)?.[1] ?? null;
-export const ledgerFile = (config, pr) => path.join(mainRoot(config), config.stateDir ?? '.factory/state', 'review-gate', `heads-pr-${prNo(pr)}.json`);
+export const ledgerFile = (config, pr) => path.join(mainRoot(config), setting(config, 'stateDir'), 'review-gate', `heads-pr-${prNo(pr)}.json`);
 
 export function recordHeadActivity(config, pr, head, activity, { at = nowIso() } = {}) {
   if (!prNo(pr) || !head) return null;
@@ -309,7 +309,7 @@ export function agentRunsAfterReady(rows, { key, keys = [key], readyAt, holds = 
 // The demo video and API summary sections the story branch's push run stored (pr-video --key: `<folder>/section.md`,
 // `<folder>-api/api.md` on the storage branch), when they were recorded on this head. `host` is hostFor(config).sync;
 // `folder` is pr-video's keyFolder(branch). { video, api, notes }
-export function preOpenMedia(host, { folder, head, storageBranch = 'pr-videos' }) {
+export function preOpenMedia(host, { folder, head, storageBranch = defaultSettings().prVideo.storageBranch }) {
   const notes = [];
   const read = (file) => {
     try {
@@ -350,10 +350,14 @@ export function readyAudit(run, rows) {
 // Returns { branchCi, draftFirst, provenHead, delivery (set when CI is not green: no PR opens), syncFailed }.
 //   label        the story key or unit id, for logs, records and seed files
 //   stories      the ticket keys (run-conditions records)
-export async function proveBeforeOpen(config, { label, stories = [label], branch, worktree, base, issues = [], targetArgs, prCheckCli, env, stateDir, repo, sync, log, gate: runGate = ciGate, remedy = null }) {
-  const settings = config.implement ?? {};
-  const out = { branchCi: null, draftFirst: false, provenHead: null, delivery: null, syncFailed: null };
-  if (!repo || settings.ciWait === false) return out;
+export async function proveBeforeOpen(config, { label, stories = [label], branch, worktree, base, issues = [], targetArgs, prCheckCli, env, stateDir, repo, sync, log, budget, gate: runGate = ciGate, remedy = null }) {
+  const settings = deepMerge(defaultSettings().implement, config.implement ?? {});
+  // implement.ci.maxFixRounds counts every CI fixing round of the ticket, before and after its PR opens (`budget`,
+  // ciFixBudget, charged in the run record when a fixer starts): each proof here gets one while the budget lasts, and
+  // `fixRounds` says how many this proof spent.
+  if (!budget) throw new Error('proveBeforeOpen needs the ticket\'s CI fixing budget (ciFixBudget)');
+  const out = { branchCi: null, draftFirst: false, provenHead: null, delivery: null, syncFailed: null, fixRounds: 0 };
+  if (!repo || settings.ci.wait.enabled === false) return out;
   if (!ciFor(config).capabilities?.branchPipelines) {
     out.draftFirst = true;
     log(`${label}: ${ciFor(config).type} cannot run the pipelines on a branch push (capability branchPipelines): the PR opens as a draft and is marked ready when its checks are green`);
@@ -361,8 +365,9 @@ export async function proveBeforeOpen(config, { label, stories = [label], branch
   }
   const where = { branch, base, head: () => headSha(worktree), changed: () => String(git(worktree, ['diff', '--name-only', `${base}...HEAD`]).stdout ?? '').split('\n').filter(Boolean) };
   const prove = async () => {
-    const gate = await runGate({ config, ciOptions: { ciSettings: settings.reviewGate?.ci ?? {} }, fixRounds: ciFixRounds(settings), repo, pr: branchLabel(branch), branch, cwd: worktree, prCheckCli, targetArgs, base, env, seedFile: path.join(stateDir, `${label}-branch-ci-fix.json`), log: (m) => log(`${label}: ${m}`), wait: branchWait(where), flakyOf: branchFlaky(where), resolveDirty: null, ...(settings.ciWaitSec ? { timeoutSec: settings.ciWaitSec } : {}), ...(settings.ciPollSec != null ? { pollSec: settings.ciPollSec } : {}), ...(settings.ciSettleSec != null ? { settleSec: settings.ciSettleSec } : {}) });
+    const gate = await budget.gate(runGate, { config, ciOptions: { ciSettings: settings.reviewGate?.ci ?? {} }, repo, pr: branchLabel(branch), branch, cwd: worktree, prCheckCli, targetArgs, base, env, seedFile: path.join(stateDir, `${label}-branch-ci-fix.json`), log: (m) => log(`${label}: ${m}`), wait: branchWait(where), flakyOf: branchFlaky(where), resolveDirty: null, timeoutSec: settings.ci.wait.timeoutSec, pollSec: settings.ci.wait.pollSec, settleSec: settings.ci.wait.settleSec });
     out.provenHead = headSha(worktree);
+    out.fixRounds += gate.rounds ?? 0;
     log(`${label}: before its PR, on ${branch}@${out.provenHead.slice(0, 7)}: ${ciLine(gate)}`);
     appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: nowIso(), story: stories[0], ...(stories.length > 1 ? { stories } : {}), kind: 'branch-ci', branch, head: out.provenHead, state: gate.state, rounds: gate.rounds ?? 0, pipelines: gate.names ?? [], prOnly: gate.prOnly ?? [] }]);
     return gate;
@@ -373,7 +378,9 @@ export async function proveBeforeOpen(config, { label, stories = [label], branch
   // a new head is proven again. Without a way out the delivery escalates as before.
   const remedied = async () => {
     if (!remedy || !out.delivery || out.remedy) return;
-    const r = (await remedy(out.branchCi)) ?? { retried: false, reason: 'no way out' };
+    // Its fixing round, if it runs one, is one of the ticket's CI fixing rounds (implement.ci.maxFixRounds).
+    const r = (await remedy(out.branchCi, { budget })) ?? { retried: false, reason: 'no way out' };
+    out.fixRounds += r.fixRounds ?? 0;
     out.remedy = { retried: Boolean(r.retried), reason: r.reason ?? null, decisions: r.decisions ?? [] };
     log(`${label}: ${r.retried ? `the harness's way out after the red CI: ${r.reason}; proving the new head` : `no harness way out after the red CI: ${r.reason ?? 'none'}`}`);
     if (!r.retried) return;

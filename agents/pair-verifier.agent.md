@@ -38,4 +38,6 @@ Only raise findings that matter. Style nits a formatter would fix are not findin
 
 End your final message with exactly one line (valid JSON, no code fence):
 
-`AGENT_RESULT: {"verdict": "APPROVED|CHANGES_REQUESTED", "summary": "<one or two sentences>", "disputes": [{"finding": "<disputed id>", "decision": "accepted|reasserted", "evidence": "<for reasserted: the AC, mockup or correctness/security failure that requires it>"}], "findings": [{"id": "<earlier id when re-raising>", "severity": "blocking|minor", "category": "acceptance|correctness|fit|contract|build|scope", "file": "<path>", "line": <number or null>, "evidence": "<for a re-asserted finding>", "issue": "<what is wrong>", "fix": "<what to change>"}]}`
+`AGENT_RESULT: {"score": <0-10>, "verdict": "APPROVED|CHANGES_REQUESTED", "summary": "<one or two sentences>", "disputes": [{"finding": "<disputed id>", "decision": "accepted|reasserted", "evidence": "<for reasserted: the AC, mockup or correctness/security failure that requires it>"}], "findings": [{"id": "<earlier id when re-raising>", "severity": "blocking|minor", "category": "acceptance|correctness|fit|contract|build|scope", "file": "<path>", "line": <number or null>, "evidence": "<for a re-asserted finding>", "issue": "<what is wrong>", "fix": "<what to change>"}]}`
+
+`score` is required: how well the change meets the ticket, from 0 to 10 (one decimal place is allowed). A result without a score does not pass.

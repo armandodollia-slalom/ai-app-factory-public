@@ -23,7 +23,7 @@ test('a regate after a later QUESTION check rebuilds the score, criteria, signal
   const config = gateConfigFor(root, { autoMerge: { enabled: false } });
   publishGate(config, { pr: pr.url, keys: ['BUG-3'], base: 'main' }, { gh: gh.gh, runAgent: fakeTriage({ 'BUG-3': low }).runAgent });
   const before = parseState(pr.comments[0].body);
-  assert.match(pr.comments[0].body, /PR check 10\/10: met \(10\/10 in round 2\)/);
+  assert.match(pr.comments[0].body, /PR check passed: met \(passed at 10\/10 in round 2\)/);
   assert.equal(before.tickets[0].signals.prCheckScore, 10);
   const scoreBefore = extractTriage(gh.issues.get(3).body).confidence.score;
 
@@ -32,8 +32,8 @@ test('a regate after a later QUESTION check rebuilds the score, criteria, signal
   regate(config, gh.gh, pr.url, { prior: before });
   const notice = pr.comments.at(-1).body;
   const after = parseState(notice);
-  assert.doesNotMatch(notice, /10\/10 in round 2/);
-  assert.match(notice, /PR check 10\/10: unmet \(last score 9\/10\)/);
+  assert.doesNotMatch(notice, /passed at 10\/10 in round 2/);
+  assert.match(notice, /PR check passed: unmet \(last score 9\/10\)/);
   assert.match(notice, /Needs an owner decision/);
   assert.deepEqual([after.tickets[0].signals.prCheckScore, after.tickets[0].signals.prCheckRounds, after.tickets[0].high], [9, null, false]);
   const triage = extractTriage(gh.issues.get(3).body);

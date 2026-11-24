@@ -6,6 +6,7 @@
 // (scripts/pipeline/lib/hosts/errors.mjs, scripts/pipeline/lib/env.mjs).
 import { expandEnv as expandEnvShared } from '../../../pipeline/lib/env.mjs';
 import { UnsupportedError } from '../../../pipeline/lib/hosts/errors.mjs';
+import { defaultSettings } from '../../../pipeline/lib/settings.mjs';
 
 // A method this tracker cannot support. The message says what to do instead; callers that can degrade
 // catch it (`error instanceof UnsupportedError`, `error.name === 'UnsupportedError'` or `error.unsupported`).
@@ -38,14 +39,14 @@ export const TICKET_TYPES = ['epic', 'story', 'bug', 'spike'];
 // Triage fields of the review gate: single-select levels and numbers.
 export const SELECT_FIELDS = ['impact', 'complexity', 'fixRisk', 'severity'];
 export const NUMBER_FIELDS = ['confidence', 'reopens'];
-export const FIELD_DEFAULTS = { impact: 'Impact', complexity: 'Complexity', fixRisk: 'Fix risk', severity: 'Severity', confidence: 'Confidence', reopens: 'Human reopens' };
+export const FIELD_DEFAULTS = defaultSettings().board.fields;
 export const LEVELS = ['Low', 'Medium', 'High', 'Severe'];
 
 // The tracker's names for the factory's lanes: `tracker.lanes` over `board.columns`.
 export function laneNames(config) {
   const columns = config.board?.columns ?? {};
   const names = { ...columns, ...(config.tracker?.lanes ?? {}) };
-  for (const lane of LANES) if (!names[lane]) names[lane] = { backlog: 'Backlog', ready: 'Ready', inProgress: 'In Progress', testing: 'Testing', review: 'Pending Review', failed: 'Failed', done: 'Done' }[lane];
+  for (const lane of LANES) if (!names[lane]) names[lane] = defaultSettings().board.columns[lane];
   return names;
 }
 

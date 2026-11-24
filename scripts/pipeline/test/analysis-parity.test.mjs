@@ -73,7 +73,7 @@ function setup() {
   const leaks = { licence: 'MIT', run: [process.execPath, scan, 'git', '{out}', '{range}'], worktreeRun: [process.execPath, scan, 'dir', '{out}', '{files}'], output: '{out}', parse: 'sarif', scope: 'repo', baseline: 'native', lens: 'security', block: { rules: ['*'] }, okExit: [0], env: { FAKE_ALLOW: `${ALLOWED},factoryfake` } };
   const lint = { licence: 'MIT', run: [process.execPath, marks, '{out}', '{files}'], output: '{out}', parse: 'sarif', scope: 'changed-lines', baseline: 'lines', lens: 'security', block: { rules: ['*'] }, okExit: [0] };
   const analysis = { tools: { leaks, lint }, stages: { story: ['leaks', 'lint'] }, ci: { jobs: [{ id: 'secrets', name: 'Secret scan', tools: ['leaks'] }, { id: 'lint', name: 'Line rules', tools: ['lint'] }] } };
-  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'main', project: { languages: [] }, precheck: {}, analysis };
+  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'main', project: { languages: [] }, featureVerification: { precheck: {} }, analysis };
   git('init', '-q', '-b', 'main');
   write(root, '.gitignore', '.factory/state/\n');
   write(root, 'src/Client/appsettings.json', `{ "ClientOptions": { "Token": "${GUID_MAIN}" } }\n`);
@@ -194,7 +194,7 @@ function setupSast({ leave = false } = {}) {
   fs.writeFileSync(grep, GREP);
   const sast = { licence: 'MIT', run: [process.execPath, grep, '{out}', '{mergeBase}'], output: '{out}', parse: 'sarif', scope: 'repo', baseline: 'native', lens: 'security', block: { rules: ['*'] }, okExit: [0], ...(leave ? { env: { LEAVE: '1' } } : {}) };
   const analysis = { tools: { sast }, stages: { story: ['sast'] }, ci: { jobs: [{ id: 'sast', name: 'Security patterns (SAST)', tools: ['sast'] }] } };
-  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'main', project: { languages: [] }, precheck: {}, analysis };
+  const config = { root, mainRoot: root, stateDir: '.factory/state', metricsDir: '.factory/metrics', baseRef: 'main', project: { languages: [] }, featureVerification: { precheck: {} }, analysis };
   git('init', '-q', '-b', 'main');
   write(root, '.gitignore', '.factory/state/\n');
   write(root, 'src/app.js', 'EVAL(old)\n');

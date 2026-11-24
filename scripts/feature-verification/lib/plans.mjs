@@ -6,6 +6,7 @@ import { caseIdsIn, storyMatches, ticketSha } from '../../pipeline/lib/stories.m
 import { ticketText } from '../../pipeline/lib/tickets.mjs';
 import { parseFrontMatter, sha, stringifyFrontMatter } from '../../pipeline/lib/util.mjs';
 import { isTestFile, testRoots, testRunners } from './runners.mjs';
+import { setting } from '../../pipeline/lib/settings.mjs';
 
 export const INDEX = '_index.md';
 const SECTIONS = ['Why', 'Preconditions', 'Steps', 'Expected result'];
@@ -76,8 +77,8 @@ export function precheckPlan(config, story, reader = fsReader(config.root)) {
     if (c.data.title !== undefined) errors.push(`${where}: remove \`title\` from the front matter; the title is the "# ${id ?? '<id>'}: <title>" heading (Markdown linters count a front-matter title as a second top-level heading, MD025).`);
     if (!caseTitle({ ...c, data: {} }).trim()) errors.push(`${where}: the "# <id>: <title>" heading has no title.`);
     if (!['happy', 'sad'].includes(c.data.type)) errors.push(`${where}: type must be happy or sad.`);
-    if (c.data.type === 'sad' && !config.categories.sadPathSubtypes.includes(c.data['sad-path'])) {
-      errors.push(`${where}: sad cases need sad-path: one of ${config.categories.sadPathSubtypes.join(', ')}.`);
+    if (c.data.type === 'sad' && !config.featureVerification.categories.sadPathSubtypes.includes(c.data['sad-path'])) {
+      errors.push(`${where}: sad cases need sad-path: one of ${config.featureVerification.categories.sadPathSubtypes.join(', ')}.`);
     }
     const covers = Array.isArray(c.data.covers) ? c.data.covers : [c.data.covers].filter(Boolean);
     if (covers.length === 0) errors.push(`${where}: covers must list the story requirement(s) this case checks.`);
@@ -116,7 +117,7 @@ export function planStatus(config, story, reader = fsReader(config.root)) {
   const reasons = [];
   if (storyText != null && !storyMatches(fm['story-sha'], storyText)) reasons.push('story changed since the plan was written');
   if (reasons.length) return { state: 'stale', plan, reasons };
-  if (Number(fm['verified-score']) < config.loops.requiredScore) reasons.push('plan has not passed the verifier');
+  if (Number(fm['verified-score']) < setting(config, 'testPlan.councilPassScore')) reasons.push('plan has not passed the verifier');
   else if (fm['plan-sha'] !== planContentSha(plan)) reasons.push('plan edited after verification');
   if (reasons.length) return { state: 'unverified', plan, reasons };
   return { state: 'verified', plan, reasons };
@@ -178,7 +179,7 @@ export function automationFiles(config, story, reader = fsReader(config.root)) {
       const file = walked.replace(/^\.\//, '');
       if (seen.has(file)) continue;
       seen.add(file);
-      if (file.startsWith(`${config.plansDir}/`)) continue;
+      if (file.startsWith(`${config.featureVerification.plansDir}/`)) continue;
       if (!isTestFile(config, file, runners)) continue;
       const text = reader.read(file) ?? '';
       if (!text.includes(`TC-${story.key}-`)) continue;
@@ -186,7 +187,7 @@ export function automationFiles(config, story, reader = fsReader(config.root)) {
       if (ids.size) tests.set(file, ids);
     }
   }
-  const scenarioDir = `${config.scenariosDir}/${story.scenario}`;
+  const scenarioDir = `${config.teststack.scenariosDir}/${story.scenario}`;
   const scenario = reader.walk(scenarioDir);
   return { tests, scenarioDir, scenario };
 }
@@ -202,7 +203,7 @@ export function automationStatus(config, story, reader = fsReader(config.root)) 
   const { tests } = automationFiles(config, story, reader);
   if (tests.size === 0) return { state: 'none', reasons: [] };
   const fm = readPlan(config, story, reader).index?.data ?? {};
-  if (Number(fm['automation-score']) < config.loops.requiredScore || !fm['automation-sha']) {
+  if (Number(fm['automation-score']) < setting(config, 'testAutomation.councilPassScore') || !fm['automation-sha']) {
     return { state: 'unverified', reasons: ['automated tests have not passed the verifier'] };
   }
   if (fm['automation-sha'] !== automationSha(config, story, reader)) {

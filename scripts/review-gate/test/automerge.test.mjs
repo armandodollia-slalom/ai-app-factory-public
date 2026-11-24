@@ -227,7 +227,7 @@ test('every merge names the head the gate assessed', () => {
 });
 
 test('the auto-merge notice says auto-merge is enabled until the merge happens, then says when it merged', () => {
-  const w = lowPr({ autoMerge: { enabled: true, native: true } });
+  const w = lowPr({ autoMerge: { enabled: true, hostAutoMerge: { enabled: true } } });
   w.pr.mergeStateStatus = 'BLOCKED';
   w.publish();
   assert.match(w.pr.comments[0].body, /Auto-merge is enabled \(`gh pr merge --auto`\): GitHub merges the PR once its required checks pass/);

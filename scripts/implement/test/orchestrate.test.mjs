@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { seedTicket } from '../../pipeline/test/fixtures/tickets.mjs';
+import { isResolvesQuestion, RESOLVES_ANSWER } from '../../pipeline/test/fixtures/resolves-question.mjs';
 import { loadConfig } from '../../pipeline/lib/config.mjs';
 import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { createContext, orchestrate, runChecks, unitTestRuns } from '../lib/orchestrate.mjs';
@@ -23,10 +24,10 @@ const write = (root, rel, text) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const result = (o) => `Working...\nAGENT_RESULT: ${JSON.stringify(o)}\n`;
-const approve = () => result({ verdict: 'APPROVED', summary: 'ok', findings: [] });
-const changes = (file, issue) => result({ verdict: 'CHANGES_REQUESTED', summary: 'no', findings: [{ severity: 'blocking', category: 'correctness', file, line: 3, issue, fix: 'do it' }] });
+const approve = () => result({ score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] });
+const changes = (file, issue) => result({ verdict: 'CHANGES_REQUESTED', summary: 'no', findings: [{ severity: 'blocking', resolves: 'code', category: 'correctness', file, line: 3, issue, fix: 'do it' }] });
 const done = (reason = 'ok') => result({ status: 'done', reason });
-const sub = (id, owns, over = {}) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], modelClass: 'medium', verify: 'code', modelReason: 'normal', verifyReason: 'code', expectedFiles: 1, expectedLoc: 5, confidence: 0.9, alternatives: [], ...over });
+const sub = (id, owns, over = {}) => ({ id, goal: `build ${id}`, acceptance: [`${id} works`], owns, dependsOn: [], model: 'sonnet', verify: 'code', modelReason: 'normal', verifyReason: 'code', expectedFiles: 1, expectedLoc: 5, confidence: 0.9, alternatives: [], ...over });
 const plan = (subtasks, over = {}) => result({ mode: 'delegate', modeReason: 'several services', splitReason: 'per service', subtasks, ...over });
 
 function makeRepo(storyText = '# DEMO-1: [BE - Catalog.API] - Thing\n\n## Acceptance Criteria\n\n- it works\n') {
@@ -70,6 +71,9 @@ function fakeAgents(script) {
   let running = 0;
   const peak = { pairs: 0 };
   const runAgent = async (config, opts) => {
+    // Every verifier is a council member: the harness's follow-up question for a missing `resolves` is answered
+    // outside the script, so the scripted steps stay the verifier's review rounds.
+    if (isResolvesQuestion(opts.task)) return { ok: true, status: 0, timedOut: false, output: RESOLVES_ANSWER, version: 'v1', seconds: 0 };
     calls.push(opts);
     const steps = script[opts.name] ?? [];
     const n = calls.filter((c) => c.name === opts.name).length - 1;
@@ -134,7 +138,7 @@ test('delegate: pairs run at most 2 at a time, dependents branch after their dep
   const plannerCall = agents.calls[0];
   assert.deepEqual([plannerCall.name, plannerCall.mode, plannerCall.noSubagents], ['implementer', 'read', true]);
   const pairCall = agents.calls.find((c) => c.name === 'pair-implementer');
-  assert.deepEqual([pairCall.mode, pairCall.noSubagents, pairCall.model], ['implement', true, 'sonnet'], 'the harness passes the class alias; runAgent maps it to the CLI id');
+  assert.deepEqual([pairCall.mode, pairCall.noSubagents, pairCall.entry], ['implement', true, 'sonnet'], 'the pair implementer runs on the pool entry its subtask names');
   const verifierCall = agents.calls.find((c) => c.name === 'pair-verifier');
   assert.equal(verifierCall.mode, 'read');
   assert.doesNotMatch(verifierCall.task, /modelReason|normal work|confidence/, 'reasoning never reaches verifiers');
@@ -346,8 +350,7 @@ test('ui subtasks lease one stack slot for the whole pair, rebuild only changes 
       async (o) => {
         const dir = /Save every screenshot under (\S+?) \(/.exec(o.task)[1];
         fs.writeFileSync(path.join(dir, 'cart.png'), 'png');
-        write(o.cwd, 'src/WebApp/Page.razor', 'verifier scribble');
-        return result({ verdict: 'CHANGES_REQUESTED', summary: 'hidden', findings: [{ severity: 'blocking', screenshot: path.join(dir, 'cart.png'), issue: 'button hidden' }] });
+        return result({ verdict: 'CHANGES_REQUESTED', summary: 'hidden', findings: [{ severity: 'blocking', resolves: 'code', screenshot: path.join(dir, 'cart.png'), issue: 'button hidden' }] });
       },
       async () => approve(),
     ],
@@ -356,7 +359,7 @@ test('ui subtasks lease one stack slot for the whole pair, rebuild only changes 
   assert.ok(r.ok, JSON.stringify(r));
   const v = agents.calls.find((c) => c.name === 'pair-ui-verifier');
   assert.equal(v.mode, 'verify');
-  assert.equal(v.model, 'opus', 'the UI verifier is large, fixed by the harness');
+  assert.equal(v.entry, 'opus', 'the UI verifier runs on its own pool entry (models.agents.pair-ui-verifier)');
   assert.match(v.task, /running at http:\/\/localhost:5333/);
   const second = agents.calls.filter((c) => c.name === 'pair-implementer')[1];
   assert.match(second.task, /Screenshot: .*artifacts\/pairs\/DEMO-1\/web\/round-1\/cart\.png/);
@@ -367,7 +370,7 @@ test('ui subtasks lease one stack slot for the whole pair, rebuild only changes 
     // slot and the running stack: only rebuild-changed and the scenario. Down and release once, at the end.
     ['lease DEMO-1--web', `demo-1--web 3 rebuild-changed --base ${stackCalls[1][4]}`, 'demo-1--web 3 up', 'demo-1--web 3 load promo', `demo-1--web 3 rebuild-changed --base ${stackCalls[1][4]}`, 'demo-1--web 3 load promo', 'demo-1--web 3 down', 'release 3'],
   );
-  assert.equal(fs.readFileSync(path.join(env.repo, 'src/WebApp/Page.razor'), 'utf8'), 'v2', "the verifier's edit was discarded");
+  assert.equal(fs.readFileSync(path.join(env.repo, 'src/WebApp/Page.razor'), 'utf8'), 'v2', "the implementer's last round is merged");
 });
 
 test('ui subtasks see the mockups; the verifier compares renders with the app every round and design findings reach the implementer with both screenshots', async () => {
@@ -395,7 +398,7 @@ test('ui subtasks see the mockups; the verifier compares renders with the app ev
         const dir = /Save every screenshot under (\S+?) \(/.exec(o.task)[1];
         const mockup = /- Main\.dc\.html \(Coupon\), state default: (\S+)/.exec(o.task)[1];
         fs.writeFileSync(path.join(dir, 'actual-Main.png'), 'png');
-        return result({ verdict: 'CHANGES_REQUESTED', summary: 'label differs', findings: [{ severity: 'blocking', category: 'design', file: 'src/WebApp/Page.razor', mockup, actual: path.join(dir, 'actual-Main.png'), issue: 'button says Apply, mockup says Apply coupon', fix: 'use the mockup copy' }] });
+        return result({ verdict: 'CHANGES_REQUESTED', summary: 'label differs', findings: [{ severity: 'blocking', resolves: 'code', category: 'design', file: 'src/WebApp/Page.razor', mockup, actual: path.join(dir, 'actual-Main.png'), issue: 'button says Apply, mockup says Apply coupon', fix: 'use the mockup copy' }] });
       },
       async () => approve(),
     ],
@@ -454,9 +457,9 @@ test('a ticket with mockups is a UI story; its code subtasks still get no mockup
 
 test('nits and scope: disputes go to the next verifier, accepted ones stop blocking, re-asserted twice stays blocking, follow-ups are recorded', async () => {
   const env = makeRepo();
-  const bug = { severity: 'blocking', category: 'correctness', file: 'src/Catalog.API/Api.cs', line: 3, issue: 'the owner check is missing', fix: 'add it' };
-  const nit = { severity: 'blocking', category: 'style', file: 'src/Catalog.API/Api.cs', line: 1, issue: 'rename x to total', fix: 'rename' };
-  const label = { severity: 'blocking', category: 'correctness', file: 'src/Catalog.API/Api.cs', line: 2, issue: 'the response field must be Total', fix: 'rename the field' };
+  const bug = { severity: 'blocking', resolves: 'code', category: 'correctness', file: 'src/Catalog.API/Api.cs', line: 3, issue: 'the owner check is missing', fix: 'add it' };
+  const nit = { severity: 'blocking', resolves: 'code', category: 'style', file: 'src/Catalog.API/Api.cs', line: 1, issue: 'rename x to total', fix: 'rename' };
+  const label = { severity: 'blocking', resolves: 'code', category: 'correctness', file: 'src/Catalog.API/Api.cs', line: 2, issue: 'the response field must be Total', fix: 'rename the field' };
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])]), async () => result({ action: 'fail', reason: 'give up' })],
     'pair-implementer': [
@@ -474,7 +477,7 @@ test('nits and scope: disputes go to the next verifier, accepted ones stop block
       async () => result({ verdict: 'CHANGES_REQUESTED', summary: 'field', findings: [{ ...label, id: 'api-r1-3' }] }),
     ],
   });
-  const r = await orchestrate(context(env, makeConfig(env.repo, { maxPairRounds: 4 }), agents));
+  const r = await orchestrate(context(env, makeConfig(env.repo, { maxCouncilRounds: 4 }), agents));
   assert.equal(r.ok, false);
   const impl = agents.calls.filter((c) => c.name === 'pair-implementer');
   const ver = agents.calls.filter((c) => c.name === 'pair-verifier');
@@ -483,8 +486,8 @@ test('nits and scope: disputes go to the next verifier, accepted ones stop block
   assert.match(impl[1].task, /"disputes": \[\{"finding"/);
   assert.match(ver[1].task, /### Disputes from the implementer[\s\S]*- api-r1-2 \(nit\): "rename x to total"\n {2}Implementer: AC 1 says nothing about naming/);
   assert.match(ver[1].task, /- api-r1-3 \(out-of-scope\)/);
-  assert.match(impl[2].task, /Re-asserted after your dispute \(1x\): AC 2: the API returns Total/);
-  assert.match(impl[3].task, /Re-asserted after your dispute \(2x\): AC 2 again It can no longer be disputed/);
+  assert.match(impl[2].task, /Re-asserted after your dispute \(1x\): verifier: AC 2: the API returns Total/);
+  assert.match(impl[3].task, /Re-asserted after your dispute \(2x\): verifier: AC 2 again It can no longer be disputed/);
   assert.match(ver[3].task, /api-r1-3: "the response field must be Total" was re-asserted 2 times; the implementer's new dispute is overruled/);
 
   const run = readJsonl(path.join(env.repo, '.factory/metrics/subtask-runs.jsonl'))[0];
@@ -498,7 +501,7 @@ test('nits and scope: disputes go to the next verifier, accepted ones stop block
 
 test('a disputed nit the verifier raises again without evidence does not block', async () => {
   const env = makeRepo();
-  const nit = { severity: 'blocking', category: 'style', file: 'src/Catalog.API/Api.cs', line: 1, issue: 'rename x to total', fix: 'rename' };
+  const nit = { severity: 'blocking', resolves: 'code', category: 'style', file: 'src/Catalog.API/Api.cs', line: 1, issue: 'rename x to total', fix: 'rename' };
   const agents = fakeAgents({
     implementer: [async () => plan([sub('api', ['src/Catalog.API/**'])])],
     'pair-implementer': [writeIn('src/Catalog.API/Api.cs', 'v1'), async (o) => (write(o.cwd, 'src/Catalog.API/Api.cs', 'v2'), result({ status: 'done', reason: 'ok', disputes: [{ finding: 'api-r1-1', kind: 'nit', reason: 'naming is not in any AC' }] }))],
@@ -526,8 +529,9 @@ test('self mode: the orchestrator implements in the story worktree and a verifie
   });
   const r = await orchestrate(context(env, makeConfig(env.repo), agents));
   assert.deepEqual([r.ok, r.mode], [true, 'self']);
-  const impl = agents.calls[1];
-  assert.deepEqual([impl.name, impl.mode, impl.cwd, impl.model], ['implementer', 'implement', env.repo, 'opus']);
+  // The implementer's second run (the first planned); the stage orchestrator's council picks are runs of their own.
+  const impl = agents.calls.filter((c) => c.name === 'implementer')[1];
+  assert.deepEqual([impl.name, impl.mode, impl.cwd, impl.entry], ['implementer', 'implement', env.repo, 'opus']);
   assert.match(sh(env.repo, 'log', '-1', '--format=%s'), /DEMO-1: self \(round 1\)/);
 });
 
@@ -598,7 +602,7 @@ test('unitTestRuns: the unit tests of every service with changed files, and of t
 
 test('runChecks with nothing configured runs nothing, says so once and passes', async () => {
   const logs = [];
-  const ctx = { s: { checks: [], timeouts: { checkSec: 5 } }, config: { root: os.tmpdir(), implement: {}, project: { services: [] } }, abort: new AbortController(), log: (m) => logs.push(m) };
+  const ctx = { s: { checks: [], timeoutsSec: { checks: 5 } }, config: { root: os.tmpdir(), implement: {}, project: { services: [] } }, abort: new AbortController(), log: (m) => logs.push(m) };
   assert.deepEqual(await runChecks(ctx, os.tmpdir(), ['a/b.rs']), { ok: true, output: '(no checks configured)' });
   await runChecks(ctx, os.tmpdir(), ['a/b.rs']);
   assert.equal(logs.filter((m) => /no build checks configured \(implement\.checks\)/.test(m)).length, 1);

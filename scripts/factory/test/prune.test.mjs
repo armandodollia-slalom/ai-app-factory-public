@@ -84,9 +84,9 @@ function ctx(s, { settings = {}, alive = () => false, ...f } = {}) {
   const { exec, gh } = fakes(f);
   return gather({
     root: s.root,
-    settings: { ...PRUNE_DEFAULTS, idleMinutes: 0, ...settings },
+    settings: { ...PRUNE_DEFAULTS, idleSec: 0, ...settings },
     implementConfig: { stateDir: '.factory/state', implement: { worktreeDir: '../{repo}-worktrees' } },
-    stackConfig: { stateDir: '.factory/state/teststack', leaseTtlMinutes: 240 },
+    stackConfig: { stateDir: '.factory/state/teststack', leaseTtlSec: 14400 },
     stackHome: s.home,
     versionsDir: s.versions,
     installRoot: '/nowhere/engine',
@@ -121,8 +121,8 @@ test('a worktree a running run, a live lease or recent work needs keeps its buil
   // Once the run is over and the lease's process is gone, both are idle.
   const after = planPrune(ctx(s, { alive: () => false }));
   assert.deepEqual([...new Set(paths(after, 'build').map((p) => path.relative(s.wtDir, p).split(path.sep)[0]))].sort(), ['a', 'b', 'c']);
-  // Recently touched (idleMinutes): kept.
-  assert.equal(planPrune(ctx(s, { settings: { idleMinutes: 10 ** 9 } })).filter((e) => e.kind === 'build').length, 0);
+  // Recently touched (idleSec): kept.
+  assert.equal(planPrune(ctx(s, { settings: { idleSec: 10 ** 9 } })).filter((e) => e.kind === 'build').length, 0);
 });
 
 test('while a run goes, a worktree it touched (an epic or group worktree has no ticket record) is its', () => {
@@ -146,10 +146,10 @@ test('slot build folders of a checkout in use: age limit, size cap (oldest first
   fs.writeFileSync(path.join(s.home, 'leases', 'slot-3.json'), JSON.stringify({ slot: 3, pid: 9, cwd: s.root, createdAt: new Date(NOW - HOUR).toISOString() }));
   const busy = { alive: (pid) => pid === 9 };
   // Age limit 24 h: slot 0 (30 h) goes; slot 3 (48 h) is leased and stays; slots 1 and 2 are young.
-  let plan = planPrune(ctx(s, { ...busy, settings: { slotMaxAgeHours: 24, slotMaxGb: null } }));
+  let plan = planPrune(ctx(s, { ...busy, settings: { slotMaxAgeSec: 86400, slotMaxGb: null } }));
   assert.deepEqual(paths(plan, 'slot').map((p) => path.relative(state, p)), ['artifacts']);
   // Size cap: everything over a tiny cap goes oldest first, still never the leased slot.
-  plan = planPrune(ctx(s, { ...busy, settings: { slotMaxAgeHours: 1000, slotMaxGb: 0.0001 } }));
+  plan = planPrune(ctx(s, { ...busy, settings: { slotMaxAgeSec: 3_600_000, slotMaxGb: 0.0001 } }));
   assert.deepEqual(paths(plan, 'slot').map((p) => path.relative(state, p)), ['artifacts', 'slot-2/artifacts', 'slot-1/artifacts']);
 });
 
@@ -159,7 +159,7 @@ test('images: only superseded (untagged) ones the pipeline built, no slot record
   write(path.join(s.root, '.factory/state/teststack/slot-1/images.ids'), `webapp:t-1 ${id(2)}\n`);
   const old = new Date(NOW - 10 * HOUR).toISOString();
   const images = { [id(1)]: { created: old }, [id(2)]: { created: old }, [id(3)]: { created: old }, [id(4)]: { created: new Date(NOW - HOUR).toISOString() }, [id(5)]: { created: old, tags: 1 } };
-  const f = { images, containers: [{ id: 'c1', image: id(3) }], settings: { imageMinAgeHours: 3 } };
+  const f = { images, containers: [{ id: 'c1', image: id(3) }], settings: { imageMinAgeSec: 10800 } };
   const plan = planPrune(ctx(s, f)).filter((e) => e.kind === 'image');
   // 2 is recorded by a slot, 3 is a container's, 4 is too young, 5 is tagged: only 1 goes.
   assert.deepEqual(plan.map((e) => e.id), [id(1)]);
@@ -262,4 +262,16 @@ test('the automatic prune: skipped under FACTORY_PRUNE=0; prunes, then reports t
   const off = await autoPrune(s.root, { context: async () => ctx(s, { free: 50, settings: { enabled: false } }), log: () => {}, env: {} });
   assert.equal(off.pruned, 0);
   assert.equal(off.room.ok, true);
+});
+
+// Council r3 (A4): the lease TTL is stack.leaseTtlSec's, from the caller's settings; no second copy as a default.
+test('reading the stack leases needs the lease TTL from the settings', async () => {
+  const { readLeases } = await import('../lib/prune.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'leases-'));
+  try {
+    assert.throws(() => readLeases(home, {}), /readLeases needs ttlMs \(stack\.leaseTtlSec\)/);
+    assert.deepEqual(readLeases(home, { ttlMs: 14_400_000, isAlive: () => true }), []);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

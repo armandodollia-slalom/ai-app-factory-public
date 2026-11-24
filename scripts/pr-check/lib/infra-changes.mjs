@@ -4,20 +4,10 @@
 // the PR modifies or deletes, and a project, package or CI file it adds, is a behaviour change outside the ticket's
 // lines: it changes what runs for everyone. New test files of the PR's own (specs, test cases) are not listed.
 import { git } from '../../pipeline/lib/git.mjs';
+import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
-export const INFRA_PATTERNS = [
-  // shared test setup
-  /(^|\/)[^/]*(Fixture|Collection|TestBase|TestSetup|WebApplicationFactory)[^/]*\.(cs|ts|js|mjs|py|java|kt)$/,
-  /(^|\/)(xunit\.runner\.json|[^/]*\.runsettings|conftest\.py|pytest\.ini|global-setup\.[jt]s|global-teardown\.[jt]s)$/,
-  /(^|\/)(playwright|jest|vitest|karma|cypress)[^/]*\.config\.[cm]?[jt]s$/,
-  // build and dependencies
-  /(^|\/)[^/]*\.(csproj|fsproj|sln|slnx|props|targets)$/,
-  /(^|\/)(Directory\.Build\.[^/]+|Directory\.Packages\.props|global\.json|nuget\.config|NuGet\.Config|package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|requirements[^/]*\.txt|pyproject\.toml|go\.mod|pom\.xml|build\.gradle(\.kts)?)$/,
-  /(^|\/)(Dockerfile[^/]*|docker-compose[^/]*\.ya?ml|compose[^/]*\.ya?ml)$/,
-  // CI
-  /^\.github\/workflows\/[^/]+\.ya?ml$/,
-  /(^|\/)(\.gitlab-ci\.yml|azure-pipelines[^/]*\.ya?ml|Jenkinsfile)$/,
-];
+// The default patterns (shared test setup, build and dependencies, CI) are `prCheck.infraPaths` in scripts/pr-check/config.json.
+export const INFRA_PATTERNS = defaultSettings().prCheck.infraPaths.map((p) => new RegExp(p));
 
 // Kinds: what the harness says each one changes.
 const kindOf = (file) =>

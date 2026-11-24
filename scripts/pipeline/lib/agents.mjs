@@ -10,8 +10,10 @@ import { INSTALL_ROOT } from './config.mjs';
 import { enforceProtected, protectedSnapshot } from './factory-guard.mjs';
 import { providerOutage, recordOutage } from './outage.mjs';
 import { parseClaudeJson, parseCodexJsonl, parseCopilotUsage, parseUsageFile, readUsageFile, recordUsage, summarizeUsage } from './usage.mjs';
-import { addendumText, appendJsonl, log, nowIso, parseFrontMatter, run, sha } from './util.mjs';
+import { addendumText, appendJsonl, killTree, log, nowIso, parseFrontMatter, run, sha } from './util.mjs';
 import { claudeRunHealth, claudeTranscriptPath, degraded, describeHealth } from './provider-health.mjs';
+import { defaultSettings, setting } from './settings.mjs';
+import { agentEnv, entryFor } from './pool.mjs';
 
 // An agent's prompt has three sources, and its version is the hash of all three:
 //   base      <install>/agents/<name>.agent.md     shipped by the factory, the same for every repository
@@ -20,12 +22,11 @@ import { claudeRunHealth, claudeTranscriptPath, degraded, describeHealth } from 
 // <repo>/.factory/agents/<name>.agent.md replaces the base outright: a local override, for a fix that is
 // waiting for a factory release. The checkout being worked on wins; the main checkout is the fallback for
 // a worktree whose branch predates a file.
-const OVERLAY_AGENTS_DIR = '.factory/agents';
 const read = (file) => (file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
 const inRepo = (config, rel) => [config.root, config.mainRoot].filter(Boolean).map((r) => path.join(r, rel)).find((f) => fs.existsSync(f)) ?? null;
 
 export function agentSources(config, name) {
-  const overlayDir = config.agentOverlayDir ?? OVERLAY_AGENTS_DIR;
+  const overlayDir = setting(config, 'agentOverlayDir');
   const override = inRepo(config, path.join(overlayDir, `${name}.agent.md`));
   const base = override ?? [config.root, INSTALL_ROOT].map((r) => path.join(r, config.agentsDir, `${name}.agent.md`)).find((f) => fs.existsSync(f));
   if (!base) throw new Error(`unknown agent "${name}": no ${config.agentsDir}/${name}.agent.md in the factory install (${INSTALL_ROOT}) and no ${overlayDir}/${name}.agent.md override in the repository`);
@@ -104,20 +105,22 @@ export const CLAUDE_TOOLS = {
 };
 
 // The environment of a headless Claude Code agent run (agent.claude in the settings overrides each):
-// - promptCacheTtl "5m": an agent run is one short session, so the 1-hour cache Claude Code picks on a Claude
+// - promptCacheTtlSec 300 (Claude Code's "5m"; 3600 is its "1h"): an agent run is one short session, so the 1-hour cache Claude Code picks on a Claude
 //   subscription is written at 1.6x the price and never read again (dogfood step 5: 78% of a PR check round's
 //   cost was 1-hour cache writes; the reference's Copilot runs wrote 5-minute caches);
 // - toolSearch false: MCP tools (the language servers) are listed to the agent directly instead of being
 //   deferred behind ToolSearch, where an agent told "if the LSP tools are available" never found them.
+// The settings' seconds as Claude Code takes them.
+const CACHE_TTL = { 300: '5m', 3600: '1h' };
 export function claudeEnv(config) {
-  const c = config.agent?.claude ?? {};
+  const c = { ...defaultSettings().agent.claude, ...(config.agent?.claude ?? {}) };
   return {
-    CLAUDE_CODE_PROMPT_CACHE_TTL: c.promptCacheTtl ?? '5m',
-    ENABLE_TOOL_SEARCH: String(c.toolSearch ?? false),
+    CLAUDE_CODE_PROMPT_CACHE_TTL: CACHE_TTL[c.promptCacheTtlSec] ?? '5m',
+    ENABLE_TOOL_SEARCH: String(c.toolSearch),
   };
 }
 
-// Modes (the model is already resolved to the CLI's own id by resolveModel):
+// Modes (the model is the pool entry's own id for its CLI):
 //   read       no edits, no shell beyond graphify (reviewers, code verifiers, planning)
 //   write      edits and shell, no commits (feature verification agents)
 //   implement  edits, shell and commits on the current branch; no push, reset, stash, checkout, switch, rebase, worktree
@@ -141,8 +144,7 @@ export function intercomEnv(intercom) {
   };
 }
 
-export function cliInvocation(config, { prompt, mode, model, cli = null, noSubagents = false, cwd = config.root, usageFile = null, effort = null, cmd = null, intercom = null }) {
-  cli = cli || config.agent.cli;
+export function cliInvocation(config, { prompt, mode, model, cli = 'claude', noSubagents = false, cwd = config.root, usageFile = null, effort = null, cmd = null, intercom = null }) {
   const iEnv = intercomEnv(intercom);
   if (config.agent.cmd || cmd) {
     // A council member's model and effort reach its command (and a fake agent under PIPELINE_AGENT_CMD) as variables.
@@ -241,37 +243,9 @@ export function cliInvocation(config, { prompt, mode, model, cli = null, noSubag
   throw new Error(`Unknown agent CLI "${cli}". Use claude, copilot, codex or set PIPELINE_AGENT_CMD.`);
 }
 
-// Models are named by alias from agent.allowedModels (opus, sonnet), so one config works for every
-// CLI; agent.modelIds maps each alias to that CLI's own id. A stage may also pass a CLI id directly,
-// but only one that an allowed alias maps to. null means agent.models.default, else the CLI's default
-// model. With agent.strictModels a CLI without an id for the alias is refused instead of falling back
-// to its own default model, so nothing outside the allowed list ever runs (Codex has no ids: refused).
-// PIPELINE_MODEL_OVERRIDE forces one alias for every agent (for experiments). `cli` overrides the
-// configured agent CLI (a role on another provider).
-export function resolveModel(config, requested, cli = config.agent.cli) {
-  const strict = Boolean(config.agent.strictModels);
-  const chosen = process.env.PIPELINE_MODEL_OVERRIDE || requested || (strict ? config.agent.models?.default : null) || null;
-  if (!chosen) return null;
-  const allowed = config.agent.allowedModels ?? [];
-  const ids = config.agent.modelIds?.[cli] ?? {};
-  if (!allowed.includes(chosen)) {
-    if (allowed.some((alias) => ids[alias] === chosen)) return chosen;
-    throw new Error(`Model "${chosen}" is not allowed. Allowed models: ${allowed.join(', ') || '(none)'} (agent.allowedModels in scripts/pipeline/config.json).`);
-  }
-  if (config.agent.cmd) return chosen;
-  if (!ids[chosen]) {
-    if (strict) {
-      throw new Error(`Model "${chosen}" has no id for agent CLI "${cli}" (agent.modelIds in scripts/pipeline/config.json), and agent.strictModels forbids falling back to the CLI's default model. Add the id or use another agent CLI.`);
-    }
-    log(`no ${chosen} model id for agent CLI "${cli}" (agent.modelIds); using its default model`);
-    return null;
-  }
-  return ids[chosen];
-}
-
 // Reads the agent's answer and token usage once its process has exited, and records the usage.
 // Returns the answer and a summary of the recorded usage (tokens, cost, premium requests).
-function finishRun(config, invocation, { name, mode, alias, modelId, usageFile, usage, version, stdout, status, timedOut, started, cwd }) {
+function finishRun(config, invocation, { name, mode, entry, modelId, usageFile, usage, version, stdout, status, timedOut, started, cwd }) {
   let output = stdout;
   let models = [];
   if (invocation.outFile) {
@@ -323,7 +297,8 @@ function finishRun(config, invocation, { name, mode, alias, modelId, usageFile, 
     agentVer: version,
     mode,
     cli: invocation.cli,
-    alias,
+    entry: entry?.name ?? null,
+    family: entry?.family ?? null,
     modelId,
     models,
     seconds,
@@ -352,9 +327,16 @@ const shellQuote = (a) => (/[\s"&|<>^()]/.test(a) ? `"${a.replace(/"/g, '\\"')}"
 
 const usageFileFor = () => path.join(os.tmpdir(), `pipeline-usage-${process.pid}-${randomUUID()}.json`);
 
-function prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile, effort = null, cmd = null, intercom = null }) {
+// The run's pool entry (pool.mjs entryFor: a seat's or a subtask's `entry`, else the agent's own models.agents entry)
+// gives its CLI, model id, reasoning effort (`effort` overrides it for one run) and process environment. A custom entry
+// runs its own `cmd`; PIPELINE_AGENT_CMD (the test fake agent) replaces every CLI and gets the model and effort as
+// variables.
+function prepare(config, { name, task, mode, entry = null, noSubagents, cwd, promptFile, effort = null, intercom = null }) {
   const definition = agentDefinition(config, name);
-  cli = cmd && !config.agent.cmd ? 'custom' : cli || config.agent.cli;
+  const e = entryFor(config, { name, entry });
+  const cmd = e.cli === 'custom' ? e.cmd : null;
+  const cli = cmd && !config.agent.cmd ? 'custom' : e.cli;
+  effort = effort ?? e.effort ?? null;
   let prompt = buildPrompt(definition, task);
   // Copilot takes its prompt as a command-line argument (capped at 32K chars on Windows, and cmd.exe
   // mangles newlines), so its prompt is written to a file and the agent is told to read it. The file
@@ -368,14 +350,13 @@ function prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promp
     writeText(file, prompt);
     prompt = `Read the file ${path.relative(cwd, file).replace(/\\/g, '/')} and follow the instructions in it exactly; it is your complete task.`;
   }
-  const alias = process.env.PIPELINE_MODEL_OVERRIDE || model || config.agent.models?.default || null;
-  // The one model check: throws before any CLI starts when the model is not allowed for this CLI.
-  // A custom member's command gets the alias itself (PIPELINE_AGENT_MODEL), as PIPELINE_AGENT_CMD does.
-  const modelId = cli === 'custom' ? alias : resolveModel(config, alias, cli);
+  const modelId = e.model ?? null;
   const usageFile = usageFileFor();
   const invocation = cliInvocation(config, { prompt, mode, model: modelId, cli, noSubagents, cwd, usageFile, effort, cmd, intercom });
-  log(`agent ${name} (${mode}, ${invocation.cli}${alias ? `, ${alias}` : ''}${effort ? `, effort ${effort}` : ''}, prompt ${definition.version}) started`);
-  return { definition, invocation, alias, modelId, usageFile };
+  // The entry's own variables (a second login's home folder), expanded when the agent starts; never secrets.
+  const entryEnv = agentEnv(e.env);
+  log(`agent ${name} (${mode}, ${invocation.cli}, ${e.name}${effort ? `, effort ${effort}` : ''}, prompt ${definition.version}) started`);
+  return { definition, invocation, entry: e, modelId, usageFile, entryEnv };
 }
 
 // Every agent CLI runs under the supervisor (agent-supervisor.mjs): it is stopped when it stops making progress (no
@@ -387,14 +368,14 @@ function prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promp
 // is the usual budget; the run stops only at ceilingFactor times it, or when the work stops making progress
 // (agent.supervisor.ceilingFactor, default 10; PIPELINE_CEILING_FACTOR for one run).
 export function ceilingFactor(config, env = process.env) {
-  const v = Number(env.PIPELINE_CEILING_FACTOR ?? config?.agent?.supervisor?.ceilingFactor ?? 10);
+  const v = Number(env.PIPELINE_CEILING_FACTOR ?? setting(config, 'agent.supervisor.ceilingFactor'));
   return Number.isFinite(v) && v >= 1 ? v : 10;
 }
 export const ceiling = (config, sec, env = process.env) => (sec ? Math.round(sec * ceilingFactor(config, env)) : sec);
 
 export const SUPERVISOR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent-supervisor.mjs');
 export function supervise(config, invocation, { cwd, timeoutSec, env = process.env }) {
-  const s = config.agent?.supervisor ?? {};
+  const s = { ...defaultSettings().agent.supervisor, ...(config.agent?.supervisor ?? {}) };
   if (s.enabled === false) return { cmd: invocation.cmd, args: invocation.args, timeoutSec };
   const ceilingSec = ceiling(config, timeoutSec, env);
   let args = invocation.args;
@@ -407,7 +388,7 @@ export function supervise(config, invocation, { cwd, timeoutSec, env = process.e
   const slow = Number(env.PIPELINE_AGENT_SLOW ?? 1) || 1;
   return {
     cmd: process.execPath,
-    args: [SUPERVISOR, '--idle', String(heartbeat ? s.idleSec ?? 1800 : 0), '--ceiling', String(ceilingSec), ...(heartbeat ? ['--heartbeat', heartbeat] : []), ...(slow > 1 ? ['--slow', String(slow)] : []), '--', invocation.cmd, ...args],
+    args: [SUPERVISOR, '--idle', String(heartbeat ? s.idleSec : 0), '--ceiling', String(ceilingSec), ...(heartbeat ? ['--heartbeat', heartbeat] : []), ...(slow > 1 ? ['--slow', String(slow)] : []), '--', invocation.cmd, ...args],
     // The supervisor ends the agent first; this outer limit is only a backstop (and covers the slow test mode's hold).
     timeoutSec: ceilingSec * Math.max(1, slow) + 300,
   };
@@ -417,11 +398,11 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 const supervisorStop = (status, stderr) => status === 124 && /AGENT_SUPERVISOR: (idle|ceiling)/.test(String(stderr));
 
 // A council member's run carries its name and login label into the usage rows (council.mjs memberRunEnv sets both).
-export const withMember = (usage, extraEnv = {}) => (extraEnv.PIPELINE_COUNCIL_MEMBER ? { ...usage, member: usage.member ?? extraEnv.PIPELINE_COUNCIL_MEMBER, login: usage.login ?? extraEnv.PIPELINE_COUNCIL_LOGIN ?? 'default' } : usage);
+export const withMember = (usage, extraEnv = {}) => (extraEnv.PIPELINE_COUNCIL_MEMBER ? { ...usage, member: usage.member ?? extraEnv.PIPELINE_COUNCIL_MEMBER, login: usage.login ?? extraEnv.PIPELINE_COUNCIL_LOGIN ?? 'default', lens: usage.lens ?? extraEnv.PIPELINE_COUNCIL_LENS ?? null } : usage);
 
 const finalize = (config, prepared, { name, mode, usage, cwd }, { stdout, stderr, status, timedOut }, started, guard = null) => {
   if (supervisorStop(status, stderr)) timedOut = true;
-  const { definition, invocation, alias, modelId, usageFile } = prepared;
+  const { definition, invocation, entry, modelId, usageFile } = prepared;
   // The factory's files are not the agent's to change (factoryGuard): whatever got past the PreToolUse
   // guard (a script, a shell trick) is put back here and the run fails.
   const violated = enforceProtected(guard);
@@ -432,7 +413,7 @@ const finalize = (config, prepared, { name, mode, usage, cwd }, { stdout, stderr
     // A run that needed a restore has no result: the caller treats it as a failed run, never as done.
     stdout = String(stdout).replace(/AGENT_RESULT:.*$/gm, 'AGENT_RESULT_DISCARDED_BY_FACTORY_GUARD');
   }
-  const { output, seconds, usage: used } = finishRun(config, invocation, { name, mode, alias, modelId, usageFile, usage, version: definition.version, stdout, status, timedOut, started, cwd });
+  const { output, seconds, usage: used } = finishRun(config, invocation, { name, mode, entry, modelId, usageFile, usage, version: definition.version, stdout, status, timedOut, started, cwd });
   log(`agent ${name} finished in ${seconds}s (exit ${status}${timedOut ? ', timed out' : ''})`);
   if (status !== 0 && stderr.trim()) log(stderr.trim().slice(-2000));
   // A quota or usage limit fails every later agent too: record it for the run (see outage.mjs).
@@ -441,7 +422,7 @@ const finalize = (config, prepared, { name, mode, usage, cwd }, { stdout, stderr
     log(`agent ${name}: the ${invocation.cli} provider is unavailable: ${outage}`);
     recordOutage({ cli: invocation.cli, agent: name, reason: outage });
   }
-  return { ok: status === 0 && !outage, status, timedOut, output, version: definition.version, seconds, usage: used, outage, ...(violated.length ? { factoryGuard: violated } : {}) };
+  return { ok: status === 0 && !outage, status, timedOut, output, version: definition.version, entry: entry.name, family: entry.family, cli: invocation.cli, seconds, usage: used, outage, ...(violated.length ? { factoryGuard: violated } : {}) };
 };
 
 // Every call is a brand-new headless process, so each agent (and each verifier round) starts with a
@@ -449,14 +430,14 @@ const finalize = (config, prepared, { name, mode, usage, cwd }, { stdout, stderr
 // this call (for example a verifier on another provider); PIPELINE_AGENT_CMD still wins.
 // `usage` ({ stage, story, round, step }) attributes the run's tokens and cost; see usage.mjs. The
 // result's `usage` sums what was recorded ({ tokens, costUsd, premiumRequests, ... }).
-export function runAgent(config, { name, task, mode = 'read', model = null, cli = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, usage = {}, effort = null, cmd = null, intercom = null }) {
+export function runAgent(config, { name, task, mode = 'read', entry = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, usage = {}, effort = null, intercom = null, work = null }) {
   usage = withMember(usage, extraEnv);
   // On Windows, npm-installed CLIs are .cmd shims that only start through a shell, and a Copilot
   // prompt must go through a file (see prepare), exactly as in runAgentAsync.
-  const useShell = process.platform === 'win32' && !config.agent.cmd && !cmd;
-  const prepared = prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile: useShell ? null : false, effort, cmd, intercom });
-  const { invocation, usageFile } = prepared;
-  const guard = protectedSnapshot(config, cwd, name);
+  const prepared = prepare(config, { name, task, mode, entry, noSubagents, cwd, promptFile: process.platform === 'win32' && !config.agent.cmd ? null : false, effort, intercom });
+  const useShell = process.platform === 'win32' && !config.agent.cmd && prepared.invocation.cli !== 'custom';
+  const { invocation, usageFile, entryEnv } = prepared;
+  const guard = protectedSnapshot(config, cwd, work ?? name);
   const started = Date.now();
   const sup = useShell ? null : supervise(config, invocation, { cwd, timeoutSec });
   const result = run(useShell ? [invocation.cmd, ...invocation.args].map(shellQuote).join(' ') : sup.cmd, useShell ? [] : sup.args, {
@@ -464,7 +445,7 @@ export function runAgent(config, { name, task, mode = 'read', model = null, cli 
     input: invocation.input,
     timeoutSec: sup?.timeoutSec ?? timeoutSec,
     shell: useShell,
-    env: childEnv({ ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv, ...intercomEnv(intercom) }),
+    env: childEnv({ ...entryEnv, ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_WORK: work ?? name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv, ...intercomEnv(intercom) }),
   });
   return finalize(config, prepared, { name, mode, usage, cwd }, result, started, guard);
 }
@@ -472,19 +453,19 @@ export function runAgent(config, { name, task, mode = 'read', model = null, cli 
 // Non-blocking variant of runAgent, so a stage or the implement harness can run several fresh agents in
 // parallel. `signal` (an AbortSignal) kills the agent; on Windows a Copilot prompt goes through
 // `promptFile` (see prepare).
-export function runAgentAsync(config, { name, task, mode = 'read', model = null, cli = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, promptFile = null, signal, usage = {}, effort = null, cmd = null, intercom = null }) {
+export function runAgentAsync(config, { name, task, mode = 'read', entry = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, promptFile = null, signal, usage = {}, effort = null, intercom = null, work = null }) {
   usage = withMember(usage, extraEnv);
   let prepared;
   try {
-    prepared = prepare(config, { name, task, mode, model, cli, noSubagents, cwd, promptFile, effort, cmd, intercom });
+    prepared = prepare(config, { name, task, mode, entry, noSubagents, cwd, promptFile, effort, intercom });
   } catch (error) {
     return Promise.reject(error);
   }
-  const { invocation, usageFile } = prepared;
-  const env = childEnv({ ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv, ...intercomEnv(intercom) });
+  const { invocation, usageFile, entryEnv } = prepared;
+  const env = childEnv({ ...entryEnv, ...(invocation.env ?? {}), PIPELINE_AGENT_NAME: name, PIPELINE_AGENT_WORK: work ?? name, PIPELINE_AGENT_MODE: mode, PIPELINE_USAGE_FILE: usageFile, ...extraEnv, ...intercomEnv(intercom) });
   // On Windows, npm-installed CLIs are .cmd shims that only start through a shell.
-  const useShell = process.platform === 'win32' && !config.agent.cmd && !cmd;
-  const guard = protectedSnapshot(config, cwd, name);
+  const useShell = process.platform === 'win32' && !config.agent.cmd && invocation.cli !== 'custom';
+  const guard = protectedSnapshot(config, cwd, work ?? name);
   const started = Date.now();
   const sup = useShell ? null : supervise(config, invocation, { cwd, timeoutSec });
   const limitSec = sup?.timeoutSec ?? timeoutSec;
@@ -500,6 +481,15 @@ export function runAgentAsync(config, { name, task, mode = 'read', model = null,
       // Through a shell the agent is a grandchild that holds the output pipes open, so kill the whole
       // tree and stop waiting on the pipes.
       if (useShell) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      // Elsewhere the child is the agent supervisor, and the agent runs under it: SIGKILL cannot be passed on, so the whole
+      // tree goes (an aborted or timed-out run never leaves its agent running).
+      else {
+        try {
+          killTree(child.pid, 'SIGKILL');
+        } catch {
+          // best effort: the supervisor itself is killed below
+        }
+      }
       child.kill('SIGKILL');
       child.stdout.destroy();
       child.stderr.destroy();

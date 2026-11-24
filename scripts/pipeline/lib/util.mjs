@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describeCall, externalKind, externalRetries, externalTimeoutSec, noteExternal, retrySafe, transientFailure } from './external.mjs';
+import { describeCall, externalKind, externalRetries, externalRetryPauseMs, externalTimeoutSec, noteExternal, retrySafe, transientFailure } from './external.mjs';
 
 export const sha = (text, length = 12) => createHash('sha256').update(text).digest('hex').slice(0, length);
 
@@ -75,7 +75,7 @@ export function run(cmd, args, { cwd, input, env, timeoutSec, allowFail = true, 
   return out;
 }
 
-const retryPauseMs = (attempt, env) => Number(env.FACTORY_EXTERNAL_PAUSE_MS ?? 2000) * 2 ** (attempt - 1);
+const retryPauseMs = (attempt, env) => externalRetryPauseMs(attempt, env);
 export const sleepSync = (ms) => ms > 0 && Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 function runOnce(cmd, args, { cwd, input, env, timeoutSec, shell, killSignal }) {

@@ -81,12 +81,17 @@ before(() => {
   for (const dir of ['scripts/pipeline', 'scripts/review', 'scripts/feature-verification', 'scripts/implement', 'scripts/pr-check', 'scripts/board', 'scripts/models', 'scripts/pr-video', 'scripts/review-gate', 'scripts/retro', 'scripts/factory', 'scripts/stack', 'scripts/teststack'].filter((d) => fs.existsSync(path.join(source, d)))) {
     fs.cpSync(path.join(source, dir), path.join(repo, dir), { recursive: true, filter: (p) => !p.startsWith(path.join(source, dir, 'test')) });
   }
+  // Every section's defaults and descriptions: a stage reads the others' (scripts/pipeline/lib/settings.mjs).
+  for (const d of fs.readdirSync(path.join(source, 'scripts'))) for (const f of ['config.json', 'settings.json']) if (fs.existsSync(path.join(source, 'scripts', d, f)) && !fs.existsSync(path.join(repo, 'scripts', d, f))) {
+    fs.mkdirSync(path.join(repo, 'scripts', d), { recursive: true });
+    fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
+  }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
   // The fixture app keeps its tests under tests/ and e2e/: its own settings say so, as an app repository's would.
   fs.mkdirSync(path.join(repo, '.factory'), { recursive: true });
   fs.writeFileSync(path.join(repo, '.factory/config.json'), `${JSON.stringify(FIXTURE_SETTINGS, null, 2)}\n`);
   const config = JSON.parse(read('scripts/feature-verification/config.json'));
-  config.precheck.runTests = false;
+  config.featureVerification.precheck.runTests = false;
   write('scripts/feature-verification/config.json', JSON.stringify(config, null, 2));
   // The PR check's own hook flow is covered in scripts/pr-check/test.
   const prCheckConfig = JSON.parse(read('scripts/pr-check/config.json'));
@@ -119,21 +124,26 @@ test('workflow 1: plan loops with a fresh verifier until 10/10, logs denials, an
   assert.equal(result.status, 0, result.stderr);
 
   // Round 1: deterministic precheck (no sad case) fails before any verifier call.
-  // Round 2: verifier denies 7/10. Round 3: verifier passes 10/10.
-  assert.deepEqual(calls(), { 'test-planner': 3, 'test-plan-verifier': 2 });
+  // Round 2: verifier denies 7/10. Round 3: verifier passes 10/10, and one pass verifies the plan (GEN-8: nothing asks for a
+  // repeated pass on unchanged work).
+  // The stage's orchestrator decided first; unscripted, it gave no readable decision and the stage delegated as usual.
+  assert.deepEqual(calls(), { 'stage-orchestrator': 1, 'test-planner': 3, 'test-plan-verifier': 2 });
   assert.match(jsonl('precheck-failures.jsonl')[0].errors.join('\n'), /no sad-path case/);
   const denials = jsonl('verifier-denials.jsonl');
   assert.equal(denials.length, 1);
   assert.deepEqual([denials[0].category, denials[0].subtype, denials[0].attributed_agent, denials[0].round], ['missing-sad-path', 'auth', 'test-planner', 2]);
   assert.deepEqual(jsonl('verifier-runs.jsonl').map((r) => [r.score, r.passed]), [[7, false], [10, true]]);
-  assert.match(prompts(), /Fix every gap:\n1\. \[missing-sad-path\/auth\] \(plan-wide\): no unauthenticated case/);
+  assert.match(prompts(), /Fix every gap:\n1\. (`[^`]+` )?\[missing-sad-path\/auth\] \(plan-wide\): no unauthenticated case/);
   // Decision log: why the plan has these cases (each round past the precheck), and why the verifier ruled as it did.
-  const decisions = jsonl('decisions.jsonl');
+  // The orchestrator's decision (GEN-10), then the stage's own records (the council's round records sit beside them
+  // as council-testPlan).
+  assert.deepEqual(jsonl('decisions.jsonl').filter((d) => d.stage === 'testPlan-orchestrator').map((d) => [d.agent, d.decision, d.subject]), [['stage-orchestrator', 'delegate', 'testPlan']]);
+  const decisions = jsonl('decisions.jsonl').filter((d) => !d.stage.startsWith('council-') && !d.stage.endsWith('-orchestrator'));
   assert.deepEqual(decisions.map((d) => [d.stage, d.round, d.decision]), [['plan', 2, 'plan-written'], ['plan-verify', 2, 'denied'], ['plan', 3, 'plan-written'], ['plan-verify', 3, 'approved']]);
   assert.deepEqual([decisions[0].reason, decisions[0].excluded], ['one case per outcome', [{ item: 'rate limits', reason: 'out of scope' }]]);
   assert.deepEqual(decisions[0].items.map((i) => [i.case, i.type, i.reason]), [['TC-DEMO-1-01', 'happy', 'protects rule 0'], ['TC-DEMO-1-02', 'sad', 'protects rule 1']]);
   assert.deepEqual([decisions[1].agent, decisions[1].subject, decisions[1].reason, decisions[1].score], ['test-plan-verifier', 'test-planner', 'no auth case', 7]);
-  assert.deepEqual(decisions[1].items, [{ case: null, category: 'missing-sad-path', subtype: 'auth', location: null, root_stage: 'plan', reason: 'no unauthenticated case', subject: 'test-planner' }]);
+  assert.deepEqual(decisions[1].items.map(({ id: _id, ...i }) => i), [{ case: null, category: 'missing-sad-path', subtype: 'auth', location: null, root_stage: 'plan', reason: 'no unauthenticated case', subject: 'test-planner' }]);
   // Every agent call is a separate child process flagged so hooks inside it stay quiet.
   assert.doesNotMatch(prompts(), /child=undefined/);
 
@@ -169,7 +179,7 @@ test('workflow 1: plan loops with a fresh verifier until 10/10, logs denials, an
 test('workflow 2: the dispatcher runs the review stage first, then automation loops to 10/10 and routes plan-level gaps back to the plan agent', async () => {
   const blocking = { verdict: 'CHANGES_REQUESTED', summary: 'bypasses ownership check', findings: [{ severity: 'blocking', category: 'security', file: 'src/Basket/Coupons.cs', line: 1, issue: 'no owner check', fix: 'check buyer id' }] };
   agentScript({
-    'architecture-reviewer': [{ result: blocking }, { result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+    'architecture-reviewer': [{ result: blocking }, { result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
     'test-automation': [{ writeTests: [1], result: { status: 'done' } }, { writeTests: [1, 2, 3], result: { status: 'done' } }],
     'test-automation-verifier': [
       { result: { score: 6, gaps: [{ case: 'TC-DEMO-1-02', category: 'missing-assertion', detail: 'status only', location: 'e2e/teststack/demo-1.spec.ts:2' }, { case: 'TC-DEMO-1-03', category: 'tests-different-path', root_stage: 'plan', detail: 'case does not say which coupons' }] } },
@@ -213,7 +223,8 @@ test('workflow 2: the dispatcher runs the review stage first, then automation lo
   const state = stateOf('DEMO-1');
   assert.ok(state.automation.log, 'automation log path is recorded');
   assert.equal(state.automation.status, 'verified', read(state.automation.log));
-  assert.deepEqual(calls(), { 'architecture-reviewer': 2, 'test-automation': 3, 'test-automation-verifier': 2, 'test-planner': 1, 'test-plan-verifier': 1 });
+  // Three orchestrator decisions, each delegating: the review's (who fixes round 1), the tests', and the plan's re-plan.
+  assert.deepEqual(calls(), { 'architecture-reviewer': 2, 'stage-orchestrator': 3, 'test-automation': 3, 'test-automation-verifier': 2, 'test-planner': 1, 'test-plan-verifier': 1 });
   assert.match(jsonl('precheck-failures.jsonl').at(-1).errors.join('\n'), /TC-DEMO-1-02 has no automated test/);
 
   const autoDenials = jsonl('verifier-denials.jsonl').filter((d) => d.stage === 'automation');
@@ -221,7 +232,7 @@ test('workflow 2: the dispatcher runs the review stage first, then automation lo
     ['TC-DEMO-1-02', 'test-automation', 'automation'],
     ['TC-DEMO-1-03', 'test-planner', 'plan'],
   ]);
-  assert.match(prompts(), /traced these problems to the test cases themselves:\n1\. \[tests-different-path\] TC-DEMO-1-03/);
+  assert.match(prompts(), /traced these problems to the test cases themselves:\n1\. (`[^`]+` )?\[tests-different-path\] TC-DEMO-1-03/);
   assert.deepEqual(jsonl('arch-reviews.jsonl').map((r) => r.verdict), ['CHANGES_REQUESTED', 'APPROVED']);
   const reviews = jsonl('decisions.jsonl').filter((d) => d.stage === 'review');
   assert.deepEqual(reviews.map((d) => [d.agent, d.subject, d.decision, d.reason]), [['architecture-reviewer', 'implementer', 'changes-requested', 'bypasses ownership check'], ['architecture-reviewer', 'implementer', 'approved', 'ok']]);
@@ -301,11 +312,11 @@ test('a crashed automation run resumes from its last round, is retried, then esc
   };
   const pipelineConfig = read('scripts/pipeline/config.json');
   const config = JSON.parse(pipelineConfig);
-  config.recovery = { maxAttempts: 1, backoffSec: 0, startingGraceSec: 120 };
+  config.recovery = { maxRetries: 1, retryDelaySec: 0, startingGraceSec: 120 };
   write('scripts/pipeline/config.json', JSON.stringify(config, null, 2));
   try {
     agentScript({
-      'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+      'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
       // Round 1 leaves two cases untested (precheck fails); the runner dies in round 2.
       'test-automation': [{ writeTests: [1], result: { status: 'done' } }, { killRunner: 'automation' }, { writeTests: [1, 2, 3], result: { status: 'done' } }],
       'test-automation-verifier': [{ result: { score: 10, gaps: [] } }],
@@ -324,7 +335,7 @@ test('a crashed automation run resumes from its last round, is retried, then esc
     assert.match(prompts().split('=== test-automation #3')[1], /previous test automation run was interrupted[\s\S]*TC-DEMO-1-02 has no automated test/, 'the resumed round keeps its feedback');
 
     // A run that keeps crashing is escalated once its attempts are used up, and not restarted by itself.
-    agentScript({ 'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }], 'test-automation': [{ killRunner: 'automation' }] });
+    agentScript({ 'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }], 'test-automation': [{ killRunner: 'automation' }] });
     write('src/Basket/Coupons.cs', '// coupons v3 crashes the runner\n');
     assert.match(stop().systemMessage, /started in the background/);
     await crashed();
@@ -353,12 +364,12 @@ test('the Architecture Policy Pack gates each review round for code agents and l
     { decision: 'WARN', review_id: 'r2', summary: 'WARN: 1 warning', action_items: [item('WARN', 'OBS-001')] },
   ]));
   const config = JSON.parse(read('scripts/review/config.json'));
-  config.review.policy.agent = 'scripts/review/review.mjs';
-  config.review.policy.command = [process.execPath, fakePolicy];
-  config.review.policy.lessonsCommand = [process.execPath, fakePolicy, 'get_lessons'];
+  config.architectureReview.policy.agent = 'scripts/review/review.mjs';
+  config.architectureReview.policy.command = [process.execPath, fakePolicy];
+  config.architectureReview.policy.lessonsCommand = [process.execPath, fakePolicy, 'get_lessons'];
   write('scripts/review/config.json', JSON.stringify(config, null, 2));
   agentScript({
-    'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+    'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
     'test-automation': [{ writeTests: [1, 2, 3], result: { status: 'done' } }],
     'test-automation-verifier': [{ result: { score: 10, gaps: [] } }],
   });
@@ -421,7 +432,7 @@ test('product bugs found by the integration tests are logged with their reasons 
 test('the lessons run holds a factory retro over the decision log and keeps only edits to allowed paths', () => {
   // This fixture is the factory working on itself (install root = repository), so its docs are a path the
   // retro may edit; an app repository allows only its own .factory/ folders.
-  write('.factory/config.json', `${JSON.stringify({ ...FIXTURE_SETTINGS, lessons: { retro: { allowedPaths: ['docs/', '.factory/agents/'] } } }, null, 2)}\n`);
+  write('.factory/config.json', `${JSON.stringify({ ...FIXTURE_SETTINGS, retro: { allowedPaths: ['docs/', '.factory/agents/'] } }, null, 2)}\n`);
   gitc('add', '-f', '.factory/config.json');
   gitc('commit', '-qm', 'factory settings');
   agentScript({
@@ -435,7 +446,11 @@ test('the lessons run holds a factory retro over the decision log and keeps only
   const { status, branch } = JSON.parse(result.stdout.slice(result.stdout.indexOf('{')));
   assert.equal(status, 'committed');
   assert.match(prompts(), /## Factory retro[\s\S]*"casesThatCaughtBugs": \[\s*\{\s*"story": "DEMO-1",\s*"case": "TC-DEMO-1-02"/);
-  assert.deepEqual(gitc('show', '--name-only', '--format=', branch).stdout.trim().split('\n'), ['docs/ai-pipeline/feature-verification.md']);
+  // The harness writes the council scorecard beside the lessons (the earlier tests' councils: every row still unknown, one
+  // seat each); the agent's edit outside the allowed paths is gone.
+  assert.deepEqual(gitc('show', '--name-only', '--format=', branch).stdout.trim().split('\n'), ['.factory/lessons/scorecard.json', 'docs/ai-pipeline/feature-verification.md']);
+  const card = JSON.parse(gitc('show', `${branch}:.factory/lessons/scorecard.json`).stdout);
+  assert.ok(card.rows.length && card.rows.every((r) => r.unknown && r.score === null), JSON.stringify(card.rows));
   assert.match(gitc('log', '-1', '--format=%B', branch).stdout, /Proposed factory changes \(needs human review\)[\s\S]*`docs\/ai-pipeline\/feature-verification\.md`: TC-DEMO-1-02 caught a missing expiry check/);
   gitc('branch', '-D', branch);
 });
@@ -565,9 +580,9 @@ test('an interrupted review round runs again on the next stop, escalates after r
     write('.factory/state/stories/DEMO-1.json', JSON.stringify(state));
   };
   const config = JSON.parse(read('scripts/review/config.json'));
-  config.review.policy.enabled = false;
+  config.architectureReview.policy.enabled = false;
   write('scripts/review/config.json', JSON.stringify(config, null, 2));
-  agentScript({ 'architecture-reviewer': [{ result: { verdict: 'APPROVED', summary: 'ok', findings: [] } }] });
+  agentScript({ 'architecture-reviewer': [{ result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }] });
   assert.equal(pipeline(['start', 'DEMO-1']).status, 0);
   assert.equal(pipeline(['done']).status, 0);
 
@@ -690,4 +705,48 @@ test('a configured policy that cannot run blocks the review instead of being ski
     else delete process.env.FACTORY_PYTHON;
   }
   assert.ok(reviewRound, 'reviewRound turns ERROR into a blocking finding (see review.mjs)');
+});
+
+// GEN-10: the test plan's orchestrator decides to write the plan itself: the test planner never starts, the decision
+// and its reason are in the decision log, and the stage's council still verifies the plan.
+test('a stage orchestrator that does the work itself: no test planner runs, the decision is logged, the verifier still sits', () => {
+  seedTicket(repo, { key: 'DEMO-3', slug: 'DEMO-3-gift-note', text: '# DEMO-3 Gift note\n\nRule: a note of up to 200 characters is printed on the slip; a longer one is rejected with 400.\n' });
+  agentScript({
+    'stage-orchestrator': [
+      { result: { decision: 'self', reason: 'two cases on one endpoint: one pass' } },
+      { writePlan: [{ title: 'Short note printed', type: 'happy' }, { title: 'Long note rejected', type: 'sad' }], result: { status: 'done', cases: 2, summary: 'one case per outcome' } },
+    ],
+    'test-plan-verifier': [{ result: { score: 10, summary: 'complete', gaps: [] } }],
+  });
+  const r = fv(['plan', 'DEMO-3']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /DEMO-3: verified/);
+  assert.deepEqual(calls(), { 'stage-orchestrator': 2, 'test-plan-verifier': 1 }, 'the orchestrator decided, then wrote the plan; the planner never ran');
+  assert.match(prompts(), /=== stage-orchestrator #2[\s\S]*# You are doing the test-planner work yourself[\s\S]*# Test planner/);
+  const led = jsonl('decisions.jsonl').filter((d) => d.stage === 'testPlan-orchestrator' && d.story === 'DEMO-3');
+  assert.deepEqual(led.map((d) => [d.agent, d.decision, d.reason, d.entry]), [['stage-orchestrator', 'self', 'two cases on one endpoint: one pass', 'opus']]);
+});
+
+// GEN-10: the architecture review's orchestrator fixes the council's findings itself; the review sits again at once,
+// with the same council (not the orchestrator) ruling, and approves.
+test('the architecture review\'s orchestrator fixes the findings itself, and the council reviews again at once', () => {
+  const config = JSON.parse(read('scripts/review/config.json'));
+  config.architectureReview.policy.enabled = false;
+  write('scripts/review/config.json', JSON.stringify(config, null, 2));
+  const blocking = { verdict: 'CHANGES_REQUESTED', summary: 'no length check', findings: [{ severity: 'blocking', category: 'correctness', file: 'src/Basket/Coupons.cs', line: 1, issue: 'a 300-character note is accepted', fix: 'reject notes over 200 characters', evidence: 'src/Basket/Coupons.cs:1' }] };
+  agentScript({
+    'architecture-reviewer': [{ result: blocking }, { result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+    'stage-orchestrator': [{ result: { decision: 'self', reason: 'one line to change' } }, { writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'length checked' } }],
+  });
+  assert.equal(pipeline(['start', 'DEMO-3']).status, 0);
+  write('src/Basket/Coupons.cs', '// coupons with gift notes\n');
+  assert.equal(pipeline(['done']).status, 0);
+  const r = cli('scripts/review/review.mjs', ['hook', 'stop'], { input: '{}' });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.match(out.systemMessage, /approved DEMO-3 \(round 2\)/, 'no stop was blocked: the orchestrator fixed round 1 and round 2 approved');
+  assert.deepEqual(calls(), { 'architecture-reviewer': 2, 'stage-orchestrator': 2 });
+  assert.match(prompts(), /=== stage-orchestrator #2[\s\S]*# You are doing the implementer work yourself[\s\S]*a 300-character note is accepted/);
+  const led = jsonl('decisions.jsonl').filter((d) => d.stage === 'architectureReview-orchestrator' && d.story === 'DEMO-3');
+  assert.deepEqual(led.map((d) => [d.decision, d.reason]), [['self', 'one line to change']]);
 });

@@ -71,7 +71,7 @@ round goes on with round 1 alone.
 
 `mergeCouncil` takes every finding the discussion disposed of (withdrawn, dropped, noted, held for the owner, awaiting
 a ruling) out by its `<seat>:<n>` key before it groups findings, so it never joins another member's finding, counts for
-`blockOn` or sets a severity. It stays as a note with its `disposition` (the earlier one wins: a vote, then a later
+`blockQuorum` or sets a severity. It stays as a note with its `disposition` (the earlier one wins: a vote, then a later
 withdrawal, reads as the vote), and it still explains its member's low score. The architecture review never lifts such
 a note to blocking, and the PR check never sends it to the debate, the judge or the fixer. Revised scores are used. A
 council with an owner question or a split awaiting a ruling does not pass. Owner questions go where each stage already
@@ -127,7 +127,7 @@ none of it, and the same file can be submitted again.
 
 ## Settings
 
-Under `council.intercom`, and per stage under `council.stages.<stage>.intercom`; validated when the configuration
+Under `council.intercom`, and per stage under `<stage>.councilIntercom` (for example `architectureReview.councilIntercom`); validated when the configuration
 loads; `factory doctor` and `factory council check` report them.
 
 | Setting | Default | Meaning |
