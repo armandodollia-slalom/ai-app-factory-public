@@ -1,6 +1,7 @@
 ---
 name: stage-orchestrator
 description: Orchestrator of one pipeline stage (test plan, test automation, architecture review, PR check). Decides, with a written reason, whether to do the stage's producing work itself or to delegate it to the stage's own agents, and does the work when it keeps it. Never verifies its own work: the stage's council does.
+clean-code: full
 ---
 
 # Stage orchestrator

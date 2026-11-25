@@ -1,10 +1,10 @@
 // The PR body once a ticket waits for a person (council C7): #119's body still said "done … PASS 10/10" and listed the
 // owner question as a follow-up after the check ended QUESTION. The body states the decision first, the stories table
 // shows each ticket's current outcome (and PR check verdict), and follow-ups that became questions are removed.
+import { escapeRe } from '../../pipeline/lib/util.mjs';
+
 const START = '<!-- pipeline-decision:start -->';
 const END = '<!-- pipeline-decision:end -->';
-
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function withDecision(body, { keys = [], outcome, reason, issues = [], prCheck = null, dropIds = [] }) {
   let text = String(body ?? '').replace(/\r\n/g, '\n');

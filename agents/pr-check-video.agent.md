@@ -20,18 +20,12 @@ You get a round folder with the story, `frames.json` (each video, its source, du
 
 Cite the frame file and timestamp for every finding and every coverage row.
 
-## Debate
-
-When the task says **Rejoinder**, answer each defender response with `maintain` (new evidence), `amend` (corrected finding) or `withdraw`.
+<!-- include: shared/pr-check-critic-debate.md -->
 
 ## Output
 
 End your final message with one line (valid JSON, no code fence). First pass:
 
 `AGENT_RESULT: {"lens": "video", "score": <0-10>, "summary": "<one sentence>", "coverage": [{"ref": "<story criterion or journey step>", "status": "met|partial|unmet|unverifiable", "evidence": "<frame file@time>"}], "findings": [{"id": "<earlier id when re-raising, else empty>", "severity": "blocking|major|minor", "title": "<short>", "detail": "<what the frame shows>", "evidence": "<frame file@time>", "requirement": "<story text>", "fix": "<what to change or record>"}]}`
-
-Rejoinder:
-
-`AGENT_RESULT: {"responses": [{"id": "<finding id>", "action": "maintain|amend|withdraw", "argument": "<why, with evidence>", "finding": {<amended finding, only for amend>}}]}`
 
 Score 10 only when no frame shows an error, the videos demonstrate every user-visible criterion, and there are no findings.

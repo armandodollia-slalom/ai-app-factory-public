@@ -156,3 +156,20 @@ test('the PR check video critic takes one frame per step, however slow the video
   fs.writeFileSync(path.join(dir, 'many.vtt'), cues(40, 1).replace(/00:00:(\d\d)/g, (m, s) => `00:${String(Math.floor(Number(s) / 60)).padStart(2, '0')}:${String(Number(s) % 60).padStart(2, '0')}`));
   assert.equal(stepTimes(path.join(dir, 'many.webm'), { maxFrames: 24 }).length, 24, 'capped');
 });
+
+// The pinned ffmpeg is asked of the video toolchain's Python once per process: a later probe that fails (a slow Python
+// start under load) does not take ffmpeg away from a run that already had it. Seen as a flaky full run: a test's second
+// resolveTools() found no ffmpeg and rendering got a null path.
+test('the pinned ffmpeg found once stays found in the process, though a later probe fails', { skip: process.platform === 'win32' ? 'the fake Python is a shell script' : false }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'video-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const exe = path.join(home, 'ffmpeg');
+  fs.writeFileSync(exe, '');
+  const counter = path.join(home, 'probes');
+  fs.mkdirSync(path.join(home, 'venv', 'bin'), { recursive: true });
+  // Answers the first probe with the binary, then fails.
+  fs.writeFileSync(path.join(home, 'venv', 'bin', 'python'), `#!/bin/sh\nif [ -f "${counter}" ]; then exit 1; fi\ntouch "${counter}"\necho "${exe}"\n`, { mode: 0o755 });
+  const env = { FACTORY_VIDEO_HOME: home };
+  assert.equal(resolveTools({}, { env }).ffmpeg, exe);
+  assert.equal(resolveTools({}, { env }).ffmpeg, exe, 'the second resolution still has it');
+});

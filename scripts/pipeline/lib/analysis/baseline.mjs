@@ -82,7 +82,6 @@ export function canonicalFindingId(id) {
   const m = /^tool:(.+):([0-9a-f]{8,64})(~\d+)?$/.exec(s);
   return m ? `tool:fp-${m[2]}${m[3] ?? ''}:${m[1]}` : s;
 }
-export const sameFindingId = (a, b) => canonicalFindingId(a) === canonicalFindingId(b);
 
 // Splits a tool's findings into the ones the change introduced and the pre-existing ones it can see.
 //   scope     changed-lines | changed-files | repo

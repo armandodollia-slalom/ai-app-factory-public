@@ -29,18 +29,12 @@ The task carries the lint and format check of the changed lines, run by the harn
 
 Formatter-only nits are `minor`; a convention that changes how the code works or is maintained is `major`. Do not raise personal preferences that the repository does not follow.
 
-## Debate
-
-When the task says **Rejoinder**, answer each defender response with `maintain` (new evidence), `amend` (corrected finding) or `withdraw`.
+<!-- include: shared/pr-check-critic-debate.md -->
 
 ## Output
 
 End your final message with one line (valid JSON, no code fence). First pass:
 
 `AGENT_RESULT: {"lens": "style", "score": <0-10>, "summary": "<one sentence>", "coverage": [{"ref": "<guideline>", "status": "met|partial|unmet|unverifiable", "evidence": "<file:line>"}], "findings": [{"id": "<earlier id when re-raising, else empty>", "severity": "blocking|major|minor", "title": "<short>", "detail": "<what is wrong>", "evidence": "<file:line>", "requirement": "<guideline and where it is written or the example it should follow>", "fix": "<what to change>"}]}`
-
-Rejoinder:
-
-`AGENT_RESULT: {"responses": [{"id": "<finding id>", "action": "maintain|amend|withdraw", "argument": "<why, with evidence>", "finding": {<amended finding, only for amend>}}]}`
 
 Score 10 only when there are no findings.

@@ -20,6 +20,8 @@ import { writeText } from './redact.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const SCRIPTS_DIR = path.resolve(here, '../..');
 export const INSTALL_ROOT = path.resolve(SCRIPTS_DIR, '..');
+// The install's language packs.
+export const packsDir = (installRoot = INSTALL_ROOT) => path.join(installRoot, 'packs');
 // Defaults files that hold one section of the settings (a tool's own), not the top level.
 export const SECTION_DIRS = { lsp: 'lsp', stack: 'stack', teststack: 'teststack', models: 'models' };
 export const RENAMED_FILE = path.join(SCRIPTS_DIR, 'pipeline', 'renamed-settings.json');
@@ -574,20 +576,27 @@ export function computedReads(root = INSTALL_ROOT) {
   return out;
 }
 
+// The factory's JavaScript files: each with its path from the install and the tool whose section its config reads
+// (TOOL_CODE).
+const jsFiles = (root) =>
+  codeFiles(root)
+    .filter((f) => /\.m?js$/.test(f))
+    .map((file) => {
+      const rel = path.relative(root, file).split(path.sep).join('/');
+      return { file, rel, tool: Object.entries(TOOL_CODE).find(([p]) => rel.startsWith(p))?.[1] };
+    });
+
 // Setting names the code reads as `config.<a>.<b>...` (the loaded settings), or through the settings accessor as
 // `setting(<settings>, '<a>.<b>')` with a literal name, with the file of the first read.
 // `plain` (a Set) gets only the plain reads, which alone count a described setting as read: `config.a.b` (`config['a']`
 // too) and a literal `setting(config, 'a.b')`. Every other form only adds names the check reports when undescribed.
 export function codeReads(root = INSTALL_ROOT, { byFile = null, plain = null } = {}) {
   const reads = new Map();
-  const files = codeFiles(root).filter((f) => /\.m?js$/.test(f)).map((f) => ({ rel: path.relative(root, f).split(path.sep).join('/'), text: codeText(fs.readFileSync(f, 'utf8')) }));
+  const files = jsFiles(root).map(({ file, rel }) => ({ rel, text: codeText(fs.readFileSync(file, 'utf8')) }));
   const fns = functionIndex(files);
   const callArg = new RegExp(`\\b(${[...fns.keys()].map((n) => n.replace(/\$/g, '\\$')).join('|') || '(?!)'})\\(([^;]*)`, 'g');
   const re = /(?<![.\w$])config\??\.((?:[A-Za-z_$][\w$]*)(?:\??\.[A-Za-z_$][\w$]*)*)/g;
-  for (const file of codeFiles(root)) {
-    if (!/\.m?js$/.test(file)) continue;
-    const rel = path.relative(root, file).split(path.sep).join('/');
-    const tool = Object.entries(TOOL_CODE).find(([p]) => rel.startsWith(p))?.[1];
+  for (const { file, rel, tool } of jsFiles(root)) {
     const text = codeText(fs.readFileSync(file, 'utf8'));
     // The accessor names the whole setting from the top of the settings (it is not a tool's own section).
     const calls = rel !== 'scripts/pipeline/lib/settings.mjs' ? settingCalls(text).filter((c) => c.name) : [];
@@ -766,10 +775,7 @@ export function fallbackLiterals(root = INSTALL_ROOT, { scriptsDir = SCRIPTS_DIR
   }
   const out = [];
   const re = /\bconfig\??\.((?:[A-Za-z_$][\w$]*)(?:\??\.[A-Za-z_$][\w$]*)*)\s*(?:\?\?|\|\|)\s*(-?\d[\d_.]*|'[^']*'|"[^"]*"|true|false|\[[^\]]*\]|\{[^}]*\})/g;
-  for (const file of codeFiles(root)) {
-    if (!/\.m?js$/.test(file)) continue;
-    const rel = path.relative(root, file).split(path.sep).join('/');
-    const tool = Object.entries(TOOL_CODE).find(([p]) => rel.startsWith(p))?.[1];
+  for (const { file, rel, tool } of jsFiles(root)) {
     const text = fs.readFileSync(file, 'utf8');
     for (const m of text.matchAll(re)) {
       const keys = m[1].replace(/\?/g, '').split('.');

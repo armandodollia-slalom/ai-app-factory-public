@@ -10,23 +10,22 @@ import { git } from '../../pipeline/lib/git.mjs';
 import { metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, nowIso, run as defaultRun, tail } from '../../pipeline/lib/util.mjs';
 import { machineCache } from '../../pipeline/lib/analysis/runner.mjs';
+import { CI_DATA, CI_SCRIPT } from '../../pipeline/lib/analysis/ci.mjs';
 import { toolSandbox } from '../../pipeline/lib/analysis/baseline.mjs';
 import { dropUnpushedSecrets, foldStoryBranch } from '../../pipeline/lib/analysis/history.mjs';
 import { judgeSecret, visibleCredentials } from '../../pipeline/lib/analysis/secret-table.mjs';
 import { onlyInHistory } from '../../pipeline/lib/analysis/secrets.mjs';
-import { FAKE_SECRET_MARKER } from '../../pipeline/lib/analysis/config.mjs';
+import { PLACEHOLDER_MARKER } from '../../pipeline/lib/redact.mjs';
 import { parityGate } from './ci-parity.mjs';
 
-export const JOBS_DATA = '.factory/bin/analysis/jobs.json';
-export const JOBS_SCRIPT = '.factory/bin/analysis/ci.mjs';
 export const DECISIONS_METRICS = 'secret-decisions.jsonl';
 export const AGREEMENT_METRICS = 'analysis-agreement.jsonl';
 // The pre-push gate's result per job and head: ran or not, the verdict, why it could not run (no value).
-export const GATE_METRICS = 'analysis-gate.jsonl';
+import { GATE_METRICS } from '../../pipeline/lib/analysis/fixloop.mjs';
 
 // The analysis jobs CI runs on this commit (from the committed job data; [] when the repository has none).
 export function committedJobs(root, rev = 'HEAD') {
-  const r = git(root, ['show', `${rev}:${JOBS_DATA}`]);
+  const r = git(root, ['show', `${rev}:${CI_DATA}`]);
   if (r.status !== 0) return [];
   try {
     return JSON.parse(r.stdout).jobs ?? [];
@@ -52,7 +51,7 @@ export function runAnalysisJobs(root, base, { run = defaultRun, cacheDir = machi
       const box = toolSandbox({ ...process.env, FACTORY_CACHE_DIR: cacheDir });
       let r;
       try {
-        r = run(process.execPath, [JOBS_SCRIPT, '--job', j.id, '--base', base, '--json', json], { cwd: wt, env: box.env, timeoutSec: j.timeoutSec * 60 });
+        r = run(process.execPath, [CI_SCRIPT, '--job', j.id, '--base', base, '--json', json], { cwd: wt, env: box.env, timeoutSec: j.timeoutSec * 60 });
       } finally {
         const left = box.cleanup(root);
         if (left.length) log(`${j.id}: removed ${left.length} git worktree(s) a tool left behind`);
@@ -107,7 +106,7 @@ export function analysisFindings(results) {
         ...(f.file ? { file: f.file, line: f.line ?? null } : {}),
         requirement: 'The pull request passes every analysis job CI runs on it; the same job script ran here on this commit.',
         fix: f.secret
-          ? `Replace the value at ${where(f)} with a fake one that contains "${FAKE_SECRET_MARKER}" (the secret scanner's allow-list accepts it; analysis.secrets.allow in .factory/config.json lists the repository's own) or refer to the setting by name. Never a real value. Do not rewrite history or add an ignore or suppression file: the harness removes the old value from unpushed history itself.`
+          ? `Replace the value at ${where(f)} with a fake one that contains "${PLACEHOLDER_MARKER}" (the secret scanner's allow-list accepts it; analysis.secrets.allow in .factory/config.json lists the repository's own) or refer to the setting by name. Never a real value. Do not rewrite history or add an ignore or suppression file: the harness removes the old value from unpushed history itself.`
           : 'Fix the reported finding in the code without changing behavior; never add a suppression or an ignore file.',
       });
     }

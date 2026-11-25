@@ -3,10 +3,10 @@ import { entryFor } from '../../pipeline/lib/pool.mjs';
 import fs from 'node:fs';
 import { remoteHost } from '../../pipeline/lib/hosts/index.mjs';
 import path from 'node:path';
-import { agentDefinition, runAgent } from '../../pipeline/lib/agents.mjs';
+import { IMPLEMENTER, PR_CHECK_FIXER, agentDefinition, runAgent } from '../../pipeline/lib/agents.mjs';
 import { INSTALL_ROOT, loadConfig } from '../../pipeline/lib/config.mjs';
 import { pull as sinkPull, push as sinkPush, sinkSettings } from '../../pipeline/lib/sink.mjs';
-import { MANIFEST, render } from '../../factory/lib/render.mjs';
+import { MANIFEST, PIN, render } from '../../factory/lib/render.mjs';
 import { openPullRequest, prPublisher } from '../../pipeline/lib/bot.mjs';
 import { deliverFinished } from '../../implement/lib/implement.mjs';
 import { ciGate } from '../../implement/lib/ci-wait.mjs';
@@ -17,8 +17,9 @@ import { AGENT_STAGE, categoryStats, loadMetrics } from '../../feature-verificat
 import { automationStatus, planStatus } from '../../feature-verification/lib/plans.mjs';
 import { automationVerifierTaskFor, planVerifierTaskFor } from '../../feature-verification/lib/workflows.mjs';
 import { spawnBackground } from '../../pipeline/lib/background.mjs';
+import { LESSONS_STAGE } from '../../pipeline/lib/decisions.mjs';
 import { RECOVERY_DONE, nextAttempt, runDied } from '../../pipeline/lib/recovery.mjs';
-import { clearEscalation, escalate, logFile, stateDir } from '../../pipeline/lib/state.mjs';
+import { clearEscalation, escalate, logFile, stateDir, trackedWriteFile } from '../../pipeline/lib/state.mjs';
 import { listStories } from '../../pipeline/lib/stories.mjs';
 import { lessonsDisabled } from '../../pipeline/lib/run-tags.mjs';
 import { acquireLock, appendJsonl, extractResult, lockHolder, log, nowIso, readJson, releaseLock, run, selfProcess, sha, writeJson } from '../../pipeline/lib/util.mjs';
@@ -28,6 +29,7 @@ import { VERIFIER, metricsFile, runVerifier } from '../../feature-verification/l
 import { LENSES } from '../../pr-check/lib/loop.mjs';
 import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 import { computeScorecard, scorecardPath, scorecardRecords, writeScorecard } from '../../pipeline/lib/scorecard.mjs';
+import { WRITER_RULES_LOG, ledgerRows, ledgerSection, planWriterRules, readLedger, writeWriterRules, writerRuleRecords } from '../../pipeline/lib/writer-rules.mjs';
 
 const RULE = /^##\s+(L\d+)[:.]?\s*(.*)$/;
 const MARKER = /<!--\s*category:\s*([^;>]+?)\s*(?:;\s*subtype:\s*([^;>]*?)\s*)?;\s*added:\s*([0-9T:.\-Z]+)\s*(?:;[^>]*)?-->/;
@@ -136,7 +138,7 @@ export function checkLessons(config, root, { runAgentImpl = runAgent } = {}) {
   const found = [];
   for (const x of files) {
     const task = [`## ${x.agent}`, '', '### Definition', '', '````markdown', agentDefinition(definitions, x.agent).body, '````', '', '### Lessons file', '', '````markdown', x.text.trimEnd(), '````', ''].join('\n');
-    const res = runAgentImpl(config, { name: 'lessons-check', mode: 'read', cwd: root, usage: { stage: 'lessons', story: null }, timeoutSec: setting(config, 'featureVerification.timeoutsSec.lessons'), task });
+    const res = runAgentImpl(config, { name: 'lessons-check', mode: 'read', cwd: root, usage: { stage: LESSONS_STAGE, story: null }, timeoutSec: setting(config, 'featureVerification.timeoutsSec.lessons'), task });
     if (!res?.ok) {
       log(`lessons: the lessons check of ${x.agent} did not run; none of its rules was removed.`);
       continue;
@@ -155,8 +157,6 @@ export function checkLessons(config, root, { runAgentImpl = runAgent } = {}) {
 
 // The implementer learns from architecture review denials (.factory/metrics/arch-reviews.jsonl): every
 // blocking finding, from the Architecture Policy Pack (subtype = rule id) or the LLM reviewer.
-export const IMPLEMENTER = 'implementer';
-
 function reviewDenials(reviews = []) {
   return reviews
     .filter((r) => r.verdict === 'CHANGES_REQUESTED')
@@ -199,7 +199,6 @@ function productBugs(decisions = []) {
 // - implementer: findings upheld in round 1, i.e. against the code as the implementer wrote it;
 // - pr-check-fixer: findings upheld again after the fixer had a round to fix them;
 // - each critic (pr-check-<lens>): its findings the judge dismissed (false positives).
-export const PR_CHECK_FIXER = 'pr-check-fixer';
 // The agent that produced what a PR-check finding is about: the video lens and findings located in the e2e
 // specs, test projects or scenarios are the test automation's work, everything else the implementer's
 // (council C1: a feature's video findings became implementer lessons, none reached test-automation).
@@ -384,7 +383,7 @@ export function factorySource(config) {
   // The factory working on itself has one root: its fixes are ordinary edits of the lessons branch.
   if (!settings.enabled || path.resolve(INSTALL_ROOT) === path.resolve(config.mainRoot ?? config.root)) return null;
   if (!fs.existsSync(path.join(INSTALL_ROOT, '.git'))) return null;
-  const pin = readJson(path.join(config.root, '.factory/factory.json'), {}) ?? {};
+  const pin = readJson(path.join(config.root, PIN), {}) ?? {};
   const origin = git(INSTALL_ROOT, ['remote', 'get-url', 'origin']);
   return { from: INSTALL_ROOT, source: settings.source ?? pin.source ?? ((origin.status === 0 && origin.stdout.trim()) || null) };
 }
@@ -517,7 +516,7 @@ function proposalsFrom(output) {
 // start with its leftover worktree and branch removed. lessons-last.json is written only when a run ends,
 // so a crashed run is still due.
 const RETRO_CLI = path.join(INSTALL_ROOT, 'scripts/retro/retro.mjs');
-const LESSONS_KEY = 'lessons';
+export const LESSONS_KEY = 'lessons';
 const LESSONS_STORY = { key: LESSONS_KEY };
 // Removes a retro worktree completely. `git worktree remove` leaves the folders git ignores (build output, the
 // knowledge graph, the factory checkout under .factory/state/factory-src) behind, and an agent could later read
@@ -611,6 +610,34 @@ function compareUrl(host, branch) {
   return repo ? `${repo}, branch ${branch}` : null;
 }
 
+// Edits the retro agent made outside the paths it may write (the lessons, and with a digest the allowed factory paths)
+// are logged and, on a branch of its own, discarded.
+function discardOutside(config, root, { digest, local }) {
+  const writable = [config.lessonsDir, ...(digest ? allowedPaths(config) : [])];
+  const outside = changedFiles(root).filter((c) => !inside(c.file, writable));
+  if (!outside.length) return;
+  log(`lessons: discarding edits outside ${writable.join(', ')}: ${outside.map((c) => c.file).join(', ')}`);
+  if (local) return;
+  const tracked = outside.filter((c) => !c.untracked).map((c) => c.file);
+  if (tracked.length) git(root, ['checkout', '--', ...tracked]);
+  for (const c of outside.filter((x) => x.untracked)) fs.rmSync(path.join(root, c.file), { force: true });
+}
+
+// The writer-rule plan's rows appended to `file`, a writer-rules.jsonl stream.
+function logWriterRules(file, plan) {
+  const rows = ledgerRows(plan);
+  if (rows.length) appendJsonl(file, rows.map((r) => ({ ts: nowIso(), ...r })));
+}
+
+// The writers' clean-code rule set written (writer-rules.mjs), and every change of it logged in the tracked stream of
+// `root`, the retro's own checkout: its commit carries the rows with the set file they explain, whether or not this
+// checkout spools its metrics (a spool is never committed).
+function writeWriterRulesLogged(config, root) {
+  const writer = writeWriterRules(config, root);
+  logWriterRules(trackedWriteFile({ ...config, root }, WRITER_RULES_LOG), writer.plan);
+  return writer;
+}
+
 export async function lessonsCommand(config, { dryRun = false, local = false, ifDue = false, push = true, resume = false, since = null } = {}) {
   // `since`: an ISO date, or 'all' for the whole history in the store; by default the window starts at the last lessons commit.
   const windowStart = since === 'all' ? '1970-01-01T00:00:00.000Z' : since ? new Date(since).toISOString() : null;
@@ -685,11 +712,16 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
     const scorecard = computeScorecard(config, scorecardRecords(config));
     const scorecardNow = readJson(scorecardPath(config), null);
     const scorecardDue = scorecardNow?.version !== scorecard.version;
-    const summaryOfRun = { actionable: actionable.map((r) => r.agent), retro: digest ? digest.counts : null, lessonsChecked: lastRun.lessonsChecked ?? null, scorecard: scorecard.version };
+    // The writers' clean-code rules (writer-rules.mjs): arithmetic too, written by the harness; a change is reason enough.
+    const writerPlan = planWriterRules(config, writerRuleRecords(config), readLedger(config));
+    const summaryOfRun = { actionable: actionable.map((r) => r.agent), retro: digest ? digest.counts : null, lessonsChecked: lastRun.lessonsChecked ?? null, scorecard: scorecard.version, writerRules: writerPlan.changes.map((c) => `${c.action} ${c.rule}`) };
     last = { ts: nowIso(), ...summaryOfRun };
-    if (dryRun || (actionable.length === 0 && !digest && !checkDue && !scorecardDue)) {
+    if (dryRun || (actionable.length === 0 && !digest && ![checkDue, scorecardDue, writerPlan.changes.length > 0].some(Boolean))) {
       log(dryRun ? 'lessons: dry run' : 'lessons: no recurring denials past the threshold, no rules to retire or revert and no new decisions to review.');
-      return { status: dryRun ? 'dry-run' : 'nothing-to-do', reports, digest };
+      // The writer-rule step runs on a quiet retro too (its rows, an insufficient-evidence one among them, and its section).
+      // Nothing is committed: the rows go where this checkout's records go (its spool, when it spools).
+      if (!dryRun) logWriterRules(metricsFile(config, WRITER_RULES_LOG), writerPlan);
+      return { status: dryRun ? 'dry-run' : 'nothing-to-do', reports, digest, writerRules: ledgerSection(writerPlan) };
     }
 
     let root = config.root;
@@ -717,18 +749,9 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
         }
       }
       // Only the lessons check is due: no retro agent run.
-      const result = actionable.length || digest ? runAgent(config, { name: 'retro', mode: 'write', cwd: root, usage: { stage: 'lessons', story: null }, timeoutSec: setting(config, 'featureVerification.timeoutsSec.lessons'), task: lessonsTask(config, actionable, root, digest, factoryDir) }) : { ok: true, output: '' };
+      const result = actionable.length || digest ? runAgent(config, { name: 'retro', mode: 'write', cwd: root, usage: { stage: LESSONS_STAGE, story: null }, timeoutSec: setting(config, 'featureVerification.timeoutsSec.lessons'), task: lessonsTask(config, actionable, root, digest, factoryDir) }) : { ok: true, output: '' };
       if (!result.ok) throw new Error('lessons agent failed');
-      const writable = [config.lessonsDir, ...(digest ? allowedPaths(config) : [])];
-      const outside = changedFiles(root).filter((c) => !inside(c.file, writable));
-      if (outside.length) {
-        log(`lessons: discarding edits outside ${writable.join(', ')}: ${outside.map((c) => c.file).join(', ')}`);
-        if (!local) {
-          const tracked = outside.filter((c) => !c.untracked).map((c) => c.file);
-          if (tracked.length) git(root, ['checkout', '--', ...tracked]);
-          for (const c of outside.filter((x) => x.untracked)) fs.rmSync(path.join(root, c.file), { force: true });
-        }
-      }
+      discardOutside(config, root, { digest, local });
       // Agent addenda have generated copies for the agent tools; keep them in step with any retro edit.
       if (fs.existsSync(path.join(root, MANIFEST)) && changedFiles(root).some((c) => c.file.startsWith('.factory/agents/'))) render(root, INSTALL_ROOT);
       const proposals = digest ? proposalsFrom(result.output) : [];
@@ -750,8 +773,9 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
           log(`retro: factory issues not filed (${error.message})`);
         }
       }
-      // Last, over any edit the agent made to it: the scorecard of the records.
+      // Last, over any edit the agent made to it: the scorecard of the records and the writers' clean-code rules.
       writeScorecard(config, root);
+      const writer = writeWriterRulesLogged(config, root);
       const contradicting = checkLessons(config, root);
       last.lessonsChecked = lessonsHash(config, root);
       // The approvals policy proposals (computed in code, guarded) go into this PR for a person to approve.
@@ -794,8 +818,8 @@ export async function lessonsCommand(config, { dryRun = false, local = false, if
       const upstreamNote = upstream ? `\n\n### Proposed upstream to the factory\n\n${upstream.url ? `Pull request: ${upstream.url}` : upstream.patch ? `Saved as a patch for a person to send: \`${upstream.patch}\`` : `Branch \`${upstream.branch}\` pushed to the factory; a person opens its PR${upstream.compare ? ` (${upstream.compare})` : ''}`} (${upstream.files.map((f) => `\`${f}\``).join(', ')}).` : '';
       const title = 'Update agent lessons from verifier, architecture review and PR check findings';
       const trailer = agentTrailer(entryFor(config, { name: 'retro' }).cli);
-      const message = `${title}\n\n${summary}${scorecardLine}${factory}${trailer ? `\n\n${trailer}` : ''}`;
-      const body = `Generated by \`factory retro run\` from \`.factory/metrics/\`.\n\n${summary}${scorecardLine}${factory}${upstreamNote}\n\nReview each rule: it should be concrete, generalize beyond the examples, and not contradict the agent definition.`;
+      const message = `${title}\n\n${summary}${scorecardLine}\n\n${ledgerSection(writer.plan)}${factory}${trailer ? `\n\n${trailer}` : ''}`;
+      const body = `Generated by \`factory retro run\` from \`.factory/metrics/\`.\n\n${summary}${scorecardLine}\n\n${ledgerSection(writer.plan)}${factory}${upstreamNote}\n\nReview each rule: it should be concrete, generalize beyond the examples, and not contradict the agent definition.`;
       git(root, ['commit', '-m', message], { allowFail: false });
       saveRun(config, { phase: 'committed', title, body });
       return { ...(await publish(config, { branch, push, title, body })), worktree: push ? undefined : root, proposals, upstream, observations, contradicting };
@@ -860,10 +884,10 @@ export function recoverLessons(config, { force = false } = {}) {
     escalate(config, LESSONS_STORY, 'retro', `lessons run crashed ${next.attempts} times`, `The lessons and factory retro run (\`factory retro run\`) died ${next.attempts} times. Last log: ${runRec.log ?? 'none'}.\nRetry with \`factory fv resume --force\`.`);
     return { kind: 'lessons', action: 'crashed' };
   }
-  const file = logFile(config, LESSONS_KEY, 'lessons');
+  const file = logFile(config, LESSONS_KEY, LESSONS_STAGE);
   const logPath = path.relative(config.root, file);
   writeJson(lessonsRunFile(config), { ...runRec, status: 'starting', pid: null, boot: null, requestedAt: nowIso(), log: logPath, ...next.fields });
-  spawnBackground(config, { script: RETRO_CLI, key: LESSONS_KEY, stage: 'lessons', args: ['run', '--resume'], file });
+  spawnBackground(config, { script: RETRO_CLI, key: LESSONS_KEY, stage: LESSONS_STAGE, args: ['run', '--resume'], file });
   return { kind: 'lessons', action: 'resumed', attempt: next.attempt, log: logPath };
 }
 

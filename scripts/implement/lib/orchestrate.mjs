@@ -7,21 +7,22 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ceiling, runAgentAsync } from '../../pipeline/lib/agents.mjs';
+import { IMPLEMENTER, ceiling, runAgentAsync } from '../../pipeline/lib/agents.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
 import { readDecisions } from '../../pipeline/lib/human-decisions.mjs';
-import { metricsFile } from '../../pipeline/lib/state.mjs';
+import { RUN_CONDITIONS_FILE, metricsFile } from '../../pipeline/lib/state.mjs';
 import { appendJsonl, extractResult, log as defaultLog, nowIso, readJson, runAsync, tail, writeJson } from '../../pipeline/lib/util.mjs';
-import { changedSince, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, memberRunEnv, councilRounds, disputesFor, guardProtectedTests, lateBox, protectedTestFinding, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
+import { changedSince, councilReadOnly, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, memberRunEnv, councilRounds, disputesFor, guardProtectedTests, lateBox, protectedTestFinding, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { ownerQuestionsText, runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { runTags } from '../../pipeline/lib/run-tags.mjs';
 import { addUsage } from '../../pipeline/lib/usage.mjs';
-import { SUBTASK_RUNS_FILE, crossFindings, decisionRecord, planDecisionLog, roundRecord, subtaskRunRecord, verdictDecisionLog } from './decisions.mjs';
+import { PLAN_STAGE, SUBTASK_RUNS_FILE, VERIFY_STAGE, crossFindings, decisionRecord, planDecisionLog, roundRecord, subtaskRunRecord, verdictDecisionLog } from './decisions.mjs';
 import { HARNESS_EXCLUDES, commitAll, commitEnv, createSubtaskWorktree, diffSince, discardChanges, filesChanged, headSha, mergeInProgress, removeWorktree, unmergedFiles } from './gitops.mjs';
 import { disputeCounts, formatDisputes, openDisputes, parseImplementerReport, ruleDisputes, withIds } from './disputes.mjs';
 import { diagnosticFindings, formatDiagnostics, lspAdapter, signatureChanges } from './lsp.mjs';
 import { matchesAny } from './plan.mjs';
+import { searchCalls } from '../../pipeline/lib/search-calls.mjs';
 import { pairHandoff } from '../../pipeline/lib/finding-route.mjs';
 import { isUiStory, parsePlanOutput, uiRules, parseVerdict, scopeViolations, topoOrder, validatePlan, validateRewrite } from './plan.mjs';
 import { entryFor, poolEntry, subtaskModels, withFamily } from '../../pipeline/lib/pool.mjs';
@@ -124,10 +125,10 @@ function limit(ctx, outcome, message) {
 }
 
 // Token usage is attributed to a stage per role; `step` is the plan, the merge or the subtask id.
-const USAGE_STAGE = { orchestrator: 'implement', pairImplementer: 'implement-pair', verifier: 'implement-verify', uiVerifier: 'implement-ui-verify' };
+const USAGE_STAGE = { orchestrator: 'implement', pairImplementer: 'implement-pair', verifier: VERIFY_STAGE, uiVerifier: 'implement-ui-verify' };
 
 // Runs one agent under the story's budget and the machine-wide agent semaphore.
-export async function callAgent(ctx, { role, name, task, mode, entry = null, effort = null, cwd, timeoutSec, step = null, round = null, env = {}, member = null, seat = null, signal = null, intercom = null }) {
+export async function callAgent(ctx, { role, name, task, mode, entry = null, effort = null, cwd, timeoutSec, step = null, round = null, env = {}, member = null, seat = null, signal = null, intercom = null, cleanCode }) {
   checkBudget(ctx);
   const release = await ctx.deps.acquire(`${ctx.key}:${name}`);
   if (!release) throw limit(ctx, 'limit-wall-clock', 'no agent slot (maxConcurrentAgents) before the story deadline');
@@ -144,7 +145,7 @@ export async function callAgent(ctx, { role, name, task, mode, entry = null, eff
     // The story's own ticket (story and mockups) is open to every agent of its run, in whichever worktree
     // it works (the story guard matches the key in any checkout's ticket cache); nothing else is added.
     const extraEnv = { PIPELINE_STORY_SOURCES: [process.env.PIPELINE_STORY_SOURCES, ctx.key].filter(Boolean).join(path.delimiter), ...env };
-    const res = await ctx.deps.runAgent(ctx.config, { name, task, mode, entry: own.name, ...(effort ? { effort } : {}), noSubagents: true, cwd, timeoutSec: Math.max(1, Math.min(timeoutSec, left)), signal: signal ? AbortSignal.any([ctx.abort.signal, signal]) : ctx.abort.signal, extraEnv, intercom, usage: { stage: USAGE_STAGE[role] ?? 'implement', story: ctx.key, step: member ? `${step}:${member.name}` : step, round, ...(seat ? { member: seat.name, lens: seat.lens } : {}) } });
+    const res = await ctx.deps.runAgent(ctx.config, { name, task, mode, entry: own.name, ...(effort ? { effort } : {}), cleanCode, noSubagents: true, cwd, timeoutSec: Math.max(1, Math.min(timeoutSec, left)), signal: signal ? AbortSignal.any([ctx.abort.signal, signal]) : ctx.abort.signal, extraEnv, intercom, usage: { stage: USAGE_STAGE[role] ?? 'implement', story: ctx.key, step: member ? `${step}:${member.name}` : step, round, ...(seat ? { member: seat.name, lens: seat.lens } : {}) } });
     if (ctx.abort.signal.aborted) throw new AbortedError('aborted');
     if (res.outage && !member) throw limit(ctx, 'agent-unavailable', `the agent provider is unavailable: ${res.outage}`);
     if (res.timedOut && Date.now() >= ctx.deadline) throw limit(ctx, 'limit-wall-clock', `the story ran past its ${ceiling(ctx.config, ctx.s.storyWallClockSec)}s ceiling while ${name} was running`);
@@ -251,10 +252,13 @@ export async function planStory(ctx) {
   const limits = { ...limitsOf(ctx.s, ctx.config), hasMockups: hasMockups(mockupsOf(ctx)) };
   let errors = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const started = Date.now();
     const res = await callAgent(ctx, {
       role: 'orchestrator',
       name: 'implementer',
       mode: 'read',
+      // Planning is the orchestrator's work: it knows every clean-code rule and writes the writers' guidance.
+      cleanCode: 'full',
       step: 'plan',
       round: attempt,
       cwd: ctx.worktree,
@@ -263,14 +267,16 @@ export async function planStory(ctx) {
       task: planTask({ key: ctx.key, storyFile: ctx.storyFile, worktree: ctx.worktree, uiStory, limits, project: ctx.config.project, errors, epicNote: ctx.epicNote, mockups: uiStory ? mockupText(ctx) : null, decisions: ctx.decisions }) + (ctx.resume ? `\n\n${RESUME_NOTE}` : ''),
     });
     const raw = parsePlanOutput(res.output);
-    const agent = { cli: res.cli, model: res.model, version: res.version };
+    // The searches the plan run made (graphify, language server) to find what its guidance names: the implementer's in
+    // this worktree during the run, which no other implementer run overlaps (the pairs start after the plan).
+    const agent = { cli: res.cli, model: res.model, version: res.version, searches: searchCalls(ctx.worktree, { agent: IMPLEMENTER, from: started }).length };
     if (raw?.status === 'blocked') {
-      logDecision(ctx.config, planDecisionLog(decisionRecord({ ts: nowIso(), key: ctx.key, attempt, accepted: false, errors: [`blocked: ${raw.reason ?? ''}`], agent, raw, storyText: ctx.storyText, uiStory }), { blocked: true }));
+      logDecision(ctx.config, planDecisionLog(decisionRecord({ ts: nowIso(), key: ctx.key, attempt, accepted: false, errors: [`blocked: ${raw.reason ?? ''}`], agent, raw, storyText: ctx.storyText, uiStory }), { blocked: true, searches: agent.searches }));
       return { fail: 'blocked', reason: raw.reason ?? 'the orchestrator reported the story blocked' };
     }
     const v = raw ? validatePlan(raw, { storyText: ctx.storyText, limits }) : { ok: false, errors: ['no plan found: end your reply with `AGENT_RESULT: <plan JSON on one line>`'], fatal: [] };
     const decisionId = v.ok ? randomUUID() : null;
-    logDecision(ctx.config, planDecisionLog(decisionRecord({ ts: nowIso(), key: ctx.key, decisionId, attempt, accepted: v.ok, errors: v.errors, agent, raw, plan: v.plan, storyText: ctx.storyText, uiStory })));
+    logDecision(ctx.config, planDecisionLog(decisionRecord({ ts: nowIso(), key: ctx.key, decisionId, attempt, accepted: v.ok, errors: v.errors, agent, raw, plan: v.plan, storyText: ctx.storyText, uiStory }), { searches: agent.searches }));
     if (v.ok) {
       // Every pool entry the plan needs must resolve before any pair starts.
       try {
@@ -331,7 +337,7 @@ async function leaseUi(ctx, st, rec) {
   rec.leaseWaitSec += Math.round((Date.now() - t0) / 1000);
   ctx.metrics.leaseWaitSec += Math.round((Date.now() - t0) / 1000);
   try {
-    record(ctx, 'run-conditions.jsonl', { ts: nowIso(), story: ctx.key, kind: 'stack-slot', stage: `UI verifier (${st.id})`, slot: lease?.slot ?? null, waitedSec: Math.round((Date.now() - t0) / 1000), outcome: lease ? 'leased' : 'none' });
+    record(ctx, RUN_CONDITIONS_FILE, { ts: nowIso(), story: ctx.key, kind: 'stack-slot', stage: `UI verifier (${st.id})`, slot: lease?.slot ?? null, waitedSec: Math.round((Date.now() - t0) / 1000), outcome: lease ? 'leased' : 'none' });
   } catch {
     /* best effort */
   }
@@ -434,7 +440,8 @@ function seatPairCouncil(ctx, stage) {
 async function councilVerify(ctx, st, council, { worktree, base = null, round, rec, taskFor, role, name, mode, ui = false, timeoutSec, env = {} }) {
   rec.late ??= lateBox();
   const memory = councilMemory({ file: memoryFile(ctx.config.root, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }), cwd: worktree, round, fixes: fixesFile(worktree, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }) });
-  const readOnly = { cwd: worktree, exclude: [ctx.config.metricsDir, ctx.config.stateDir, ...(ctx.config.implExclude ?? []), ...(ui ? uiArtifactDirs(ctx.config) : [])] };
+  // A UI member's screenshots and traces are its own output, not a change to the checkout.
+  const readOnly = councilReadOnly(ctx.config, worktree, ui ? uiArtifactDirs(ctx.config) : []);
   const out = await runCouncil({
     council,
     round,
@@ -492,7 +499,8 @@ async function councilVerify(ctx, st, council, { worktree, base = null, round, r
     step: st.id,
     round,
     retries: ctx.config.agent.resultParseRetries,
-    readOnly: { cwd: worktree, exclude: [ctx.config.metricsDir, ctx.config.stateDir, ...(ctx.config.implExclude ?? [])] },
+    // Adjudication runs every member as the code verifier (no browser), so no UI folders are excluded.
+    readOnly: councilReadOnly(ctx.config, worktree),
     log: ctx.log,
   });
   // Named as the implementer will see them (disputes.mjs withIds), so its fix declaration matches what is remembered.
@@ -522,6 +530,10 @@ export function councilPairVerdict(merged) {
   if (!merged.pass && !blocking.length && !ownerQuestions.length) return null;
   return { verdict: merged.pass ? 'APPROVED' : 'CHANGES_REQUESTED', summary: merged.summary, findings, disputes: merged.disputes, contradictions: merged.contradictions, ...(ownerQuestions.length ? { ownerQuestions } : {}), council: { score: merged.score, members: merged.members } };
 }
+
+// How a pair round runs its implementer, whatever it asks: a pair implementer on the pool entry the planner named for the
+// subtask (the orchestrator doing the work on its own), in the subtask's worktree, with the pair implementer's time.
+const implementerRun = (ctx, st, { worktree, implementer, role }) => ({ role, name: implementer, mode: 'implement', entry: role === 'pairImplementer' ? st.model ?? null : null, cwd: worktree, timeoutSec: ctx.s.timeoutsSec.pairImplementer });
 
 // The implement/verify loop of one subtask. Returns { status: approved | exhausted | blocked, findings, reason }.
 export async function runPair(ctx, st, opts) {
@@ -559,13 +571,7 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
     if (!skipImplementer) {
       const before = headSha(worktree);
       const res = await agentFor(ctx, rec, 'implementer', {
-        role,
-        name: implementer,
-        mode: 'implement',
-        // A pair implementer runs on the pool entry the planner named for the subtask; the orchestrator on its own.
-        entry: role === 'pairImplementer' ? st.model ?? null : null,
-        cwd: worktree,
-        timeoutSec: ctx.s.timeoutsSec.pairImplementer,
+        ...implementerRun(ctx, st, { worktree, implementer, role }),
         // route: pairHandoff (findings = the last round's handoff.mine)
         task: pairImplementerTask({ key: ctx.key, storyFile: path.join(worktree, path.relative(ctx.worktree, ctx.storyFile)), st, worktree, branch, base, round, maxRounds: max, findings, screenshots, diagnostics: diagText, self: Boolean(st.self), mockups: st.verify === 'ui' ? mockupText(ctx) : null, mockupRenders, decisions: ctx.decisions }) + (ctx.resume && st.self && round === 1 ? `\n\n${RESUME_NOTE}` : '') + (council ? `\n\n${councilActionsText()}` : '') + (council && findings?.length ? `\n\n${fixDeclarationText(fixesFile(worktree, ctx.config.stateDir, { stage: pairStage(st), story: ctx.key, step: st.id }), findings)}` : ''),
       });
@@ -638,12 +644,7 @@ async function pairLoop(ctx, st, { worktree, branch, base, rec, others = [], imp
         const finding = sigNoRefsFinding(sigNoRefsRound);
         ctx.log(`${st.id} round ${round}: ${finding.issue}; the implementer answers before the verifiers sit`);
         const answer = await agentFor(ctx, rec, 'implementer', {
-          role,
-          name: implementer,
-          mode: 'implement',
-          entry: role === 'pairImplementer' ? st.model ?? null : null,
-          cwd: worktree,
-          timeoutSec: ctx.s.timeoutsSec.pairImplementer,
+          ...implementerRun(ctx, st, { worktree, implementer, role }),
           task: `Story ${ctx.key}, subtask ${st.id}. You own: ${st.owns.join(', ')}.\n\n${finding.issue}\n\n${finding.fix} Commit any change.\n\nEnd with one line: AGENT_RESULT: {"status":"done","reason":"<what you checked and changed, or why no caller exists>"}`,
         });
         commitAll(worktree, `${ctx.key}: ${st.id} callers of changed signatures (round ${round})`);
@@ -769,12 +770,7 @@ async function pairAnalysis(ctx, st, { worktree, base, round, rec, implementer, 
       exec: ctx.deps.analysisExec,
       askImplementer: async (task) => {
         await agentFor(ctx, rec, 'implementer', {
-          role,
-          name: implementer,
-          mode: 'implement',
-          entry: role === 'pairImplementer' ? st.model ?? null : null,
-          cwd: worktree,
-          timeoutSec: ctx.s.timeoutsSec.pairImplementer,
+          ...implementerRun(ctx, st, { worktree, implementer, role }),
           task: `Story ${ctx.key}, subtask ${st.id}. You own: ${st.owns.join(', ')}.\n\n${task}\n\nEnd with one line: AGENT_RESULT: {"status":"done","reason":"<what you fixed>"}`,
         });
       },
@@ -862,10 +858,10 @@ export async function runSubtask(ctx, st, others) {
     const d = extractResult(res.output) ?? {};
     const priorFindings = r.findings;
     logDecision(ctx.config, {
-      stage: 'implement-plan',
+      stage: PLAN_STAGE,
       story: ctx.key,
       round: null,
-      agent: 'implementer',
+      agent: IMPLEMENTER,
       agentVer: res.version,
       subject: 'pair-implementer',
       decision: ['rewrite', 'takeover'].includes(d.action) ? `escalation-${d.action}` : 'gave-up',
@@ -891,7 +887,7 @@ export async function runSubtask(ctx, st, others) {
       rec.escalation = 'takeover';
       ctx.metrics.takeovers++;
       st = next;
-      r = await runPair(ctx, st, { worktree: wt.path, branch: wt.branch, base: wt.base, rec, others, implementer: 'implementer', role: 'orchestrator', startAtVerify: true });
+      r = await runPair(ctx, st, { worktree: wt.path, branch: wt.branch, base: wt.base, rec, others, implementer: IMPLEMENTER, role: 'orchestrator', startAtVerify: true });
     } else if (r.status !== 'failed') {
       r = { status: 'failed', reason: d.action === 'takeover' ? 'the orchestrator asked for a second takeover (maxTakeovers)' : d.reason ?? 'the orchestrator gave the subtask up', findings: priorFindings };
     }
@@ -995,7 +991,7 @@ export async function runSelf(ctx, plan) {
   const base = headSha(ctx.worktree);
   ctx.subtasks.set(st.id, { status: 'starting', branch: ctx.branch, worktree: ctx.worktree, rounds: 0 });
   try {
-    const r = await runPair(ctx, st, { worktree: ctx.worktree, branch: ctx.branch, base, rec, implementer: 'implementer', role: 'orchestrator' });
+    const r = await runPair(ctx, st, { worktree: ctx.worktree, branch: ctx.branch, base, rec, implementer: IMPLEMENTER, role: 'orchestrator' });
     Object.assign(rec, { approved: r.status === 'approved', actual: numstat(ctx.worktree, base) });
     if (r.status === 'approved') return { ok: true, mode: 'self', plan };
     return failure(r.status === 'blocked' ? 'blocked' : 'pair-exhausted', r.status === 'blocked' ? r.reason : `the story was not approved by its verifier after ${pairRounds(ctx, st)} rounds (self mode)${noVerdictNote(rec)}`, r.findings);
@@ -1024,7 +1020,7 @@ export async function verifyLaterChange(ctx, { base, label, why }) {
   const rec = newRec(st);
   ctx.subtasks.set(st.id, { status: 'starting', branch: ctx.branch, worktree: ctx.worktree, rounds: 0 });
   try {
-    const r = await runPair(ctx, st, { worktree: ctx.worktree, branch: ctx.branch, base, rec, implementer: 'implementer', role: 'orchestrator', startAtVerify: true });
+    const r = await runPair(ctx, st, { worktree: ctx.worktree, branch: ctx.branch, base, rec, implementer: IMPLEMENTER, role: 'orchestrator', startAtVerify: true });
     Object.assign(rec, { approved: r.status === 'approved', actual: numstat(ctx.worktree, base) });
     if (r.status === 'approved') return { ok: true };
     return failure(r.status === 'blocked' ? 'blocked' : 'pair-exhausted', r.status === 'blocked' ? r.reason : `the change (${label}) was not approved by its verifier after ${pairRounds(ctx, st)} rounds${noVerdictNote(rec)}`, r.findings);

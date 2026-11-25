@@ -136,7 +136,8 @@ export function mockupSha(files) {
 // Rendering (Playwright)
 // ---------------------------------------------------------------------------------------------
 
-export async function loadChromium() {
+// Playwright's chromium from whichever Playwright package is installed; `missing` is the error when none is.
+export async function loadChromium(missing = 'Playwright is not available (run `npm ci` and `npx playwright install chromium`)') {
   for (const name of ['@playwright/test', 'playwright', 'playwright-core']) {
     try {
       const mod = await import(name);
@@ -146,7 +147,7 @@ export async function loadChromium() {
       // try the next package
     }
   }
-  throw new Error('Playwright is not available (run `npm ci` and `npx playwright install chromium`)');
+  throw new Error(missing);
 }
 
 // The in-page canvas runtime: renders the template for one variant and reports props and initial state.

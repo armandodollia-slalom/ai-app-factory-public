@@ -132,12 +132,59 @@ Per stack, enabled by file presence (`when`):
 | dotnet | `nuget-audit` | MIT | `dotnet list package --vulnerable --include-transitive --format json`: a report separate from restore's NU1901–NU1904 warnings, so a `NoWarn` of those codes (the eShop sample has one in `Directory.Build.props`) does not silence it. `NuGetAuditSuppress` items still apply and are listed as suppressions. Added to the `dependencies` job |
 | typescript | `eslint-security` | Apache-2.0 | eslint-plugin-security (4.x; 3.x does not run on ESLint 10) from the repository's own `node_modules`, with the factory's ESLint and TypeScript parser; reported as not installed where the repository does not have it |
 | python | `bandit` | Apache-2.0 | declared, parser tested against recorded output; **not exercised end to end** |
+| dotnet, typescript, python | `repeated-values-<pack>` | ISC (the factory's) | the [repeated-values check](#repeated-values): a fallback or literal that repeats a value with one source. Evidence for the clean-code reviewer, never blocking on its own. Pair, story level and PR check |
 | go | `gosec` | Apache-2.0 | declared, SARIF; **not exercised end to end** |
 | java | `spotbugs-findsecbugs` | LGPL-2.1 / LGPL-3.0 (run only) | needs a build; off by default; **not exercised end to end** |
 | rust | `cargo-deny` | MIT OR Apache-2.0 | declared, parser tested against recorded output; **not exercised end to end** |
-| security | `psalm-taint` (PHP), `jscpd`, `lizard`, `trivy-config` | MIT / MIT / MIT / Apache-2.0 | optional, off. `jscpd` and `lizard` are evidence for the `rewrite` lens; keep jscpd's semantic mode off (it downloads a large model). Trivy: pin it by digest yourself if you turn it on (its releases were compromised in March 2026, and its database and telemetry call out) |
+| security | `jscpd` | MIT | on: duplicated code the change adds ([below](#duplication-and-complexity)). A dependency of the factory (5.4.2); its semantic mode stays off (it downloads a large model). Pair, story level, PR check, feature verification |
+| security | `lizard` | MIT | on: functions the change adds or edits over the complexity or length limit ([below](#duplication-and-complexity)). A Python tool: `pip install lizard` (or `FACTORY_LIZARD` naming it); without it the tool is reported not installed, never failed. Pair, story level, PR check, feature verification |
+| security | `psalm-taint` (PHP), `trivy-config` | MIT / Apache-2.0 | optional, off. Trivy: pin it by digest yourself if you turn it on (its releases were compromised in March 2026, and its database and telemetry call out) |
 
 Not defaults, and why: CodeQL (CLI terms forbid closed-source code without paid GitHub Advanced Security), Bearer (Elastic License), MegaLinter and Super-Linter (duplicate the stack packs, very large images), KICS (no release binaries; compromised in 2026), TruffleHog (AGPL; verifies secrets live by default), Snyk and DeepSource (hosted services), security-code-scan and Horusec (unmaintained).
+
+### Duplication and complexity
+
+`jscpd` and `lizard` run in the gate by default and report only what a change adds; existing duplication and
+complexity alone are never reported:
+
+- `jscpd` (`packs/security/analysis/duplication.mjs`) scans the repository, so the other copy is found wherever it is,
+  and keeps a clone only when at least one copy is on a line the change adds or edits. It is reported at that copy with
+  both places (`src/cart.ts:12: 14 lines (90 tokens) duplicated between src/cart.ts:10-23 and src/order.ts:40-53`).
+  `analysis.duplication.minTokens` (default 50) is the smallest clone it reports.
+- `lizard` (`packs/security/analysis/complexity.mjs`) reads the changed files and reports each function that overlaps a
+  changed line and is over `analysis.complexity.maxCyclomatic` (default 15) or `analysis.complexity.maxFunctionLines`
+  (default 100 lines), with the function's place.
+
+Like the repeated-values check, both are clean-code evidence (the report's `cleanCode` list), given to the clean-code
+reviewer on every stage that reviews code: the pair verifier, the architecture review, the test automation verifier
+(for the tests) and the PR check. A clone or a breach is a starting point: the reviewer upholds it as its own finding
+or says why it is not a problem (two copies that describe different knowledge), and only an upheld finding blocks.
+Each analysis run records the counts by kind (`cleanCode`: `clones`, `breaches`, `repeats` in `analysis-runs.jsonl`),
+so the retro can compare what the tools reported with what the reviewer upheld.
+
+### Repeated values
+
+`repeated-values-<pack>` (`packs/security/analysis/repeated-values.mjs` with the pack's `repeats.json`) reports, on the
+lines a change adds or edits:
+
+- `repeated-default`: a literal fallback equal to the default the configuration already defines for the same key, with
+  both places (`src/Basket/Service.cs:12: the fallback 900 repeats the default of TimeoutSec, which
+  src/Basket/BasketOptions.cs:5 already defines as 900`);
+- `repeated-constant`: a literal equal to a named constant of another file, for the same purpose (the constant's name
+  and the line share a word), with the constant's place.
+
+A change that only reads the configured value or the constant reports nothing, and duplication that was already there
+is not the change's. Its sources are `project.configSources`: globs of the files where configuration defaults live
+(options and settings classes and `appsettings*.json` in .NET, config modules and `.env.example` in Node, settings
+modules in Python; JSON files are read by key). `factory init` drafts them from the packs' candidates (`configSources`
+in each `pack.json`) and asks when it finds none; the `onboard-codebase` skill confirms them. A wrong source (a file
+that is not configuration, or one that is missing) is corrected in `.factory/config.json` (`project.configSources`), or
+with `factory init --set project.configSources=<globs>`. Named constants are read from every file of the pack's
+languages outside test code.
+
+Its findings are clean-code evidence: they go to the report's `cleanCode` list, not to the harness findings, so there
+is no fix bounce and nothing blocks on the tool alone. The clean-code reviewer upholds an item as its own finding
+(citing `CC-1`, both places) or says why it is not a problem; only an upheld finding blocks.
 
 ## Rule sets for Opengrep
 

@@ -4,6 +4,16 @@
     "solution": { "candidates": ["*.slnx", "*.sln", "*.slnf"] }
   },
   "tools": {
+    "repeated-values-dotnet": {
+      "description": "a fallback that repeats a configured default, or a literal that repeats a named constant (evidence for the clean-code reviewer; the patterns and file extensions are this pack's repeats.json, the configuration sources project.configSources)",
+      "licence": "ISC",
+      "run": ["node", "{packs}/security/analysis/repeated-values.mjs", "dotnet", "{files}"],
+      "parse": "lines",
+      "scope": "changed-lines",
+      "baseline": "lines",
+      "lens": "clean-code",
+      "okExit": [0, 1]
+    },
     "roslyn-security": {
       "description": "the .NET SDK's security analyzers on a full rebuild",
       "licence": "MIT",
@@ -34,9 +44,9 @@
     }
   },
   "stages": {
-    "story": ["roslyn-security", "nuget-audit"],
-    "prCheck": ["roslyn-security", "nuget-audit"],
-    "pair": ["nuget-audit"]
+    "story": ["roslyn-security", "nuget-audit", "repeated-values-dotnet"],
+    "prCheck": ["roslyn-security", "nuget-audit", "repeated-values-dotnet"],
+    "pair": ["nuget-audit", "repeated-values-dotnet"]
   },
   "protect": [".editorconfig", ".globalconfig", "CodeAnalysis.ruleset"],
   "suppressions": [

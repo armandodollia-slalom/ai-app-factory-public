@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { appendJsonl, nowIso, readJson, writeJson } from '../../pipeline/lib/util.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
-import { metricsFile } from '../../pipeline/lib/state.mjs';
+import { RUN_CONDITIONS_FILE, metricsFile } from '../../pipeline/lib/state.mjs';
 import { ciFor } from '../../pipeline/lib/ci/index.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 import { AFTER_OPEN, PRE_OPEN_DEFAULTS, addConfigWarning, deepMerge, preOpenProblems } from '../../pipeline/lib/config.mjs';
@@ -369,7 +369,7 @@ export async function proveBeforeOpen(config, { label, stories = [label], branch
     out.provenHead = headSha(worktree);
     out.fixRounds += gate.rounds ?? 0;
     log(`${label}: before its PR, on ${branch}@${out.provenHead.slice(0, 7)}: ${ciLine(gate)}`);
-    appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: nowIso(), story: stories[0], ...(stories.length > 1 ? { stories } : {}), kind: 'branch-ci', branch, head: out.provenHead, state: gate.state, rounds: gate.rounds ?? 0, pipelines: gate.names ?? [], prOnly: gate.prOnly ?? [] }]);
+    appendJsonl(metricsFile(config, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: stories[0], ...(stories.length > 1 ? { stories } : {}), kind: 'branch-ci', branch, head: out.provenHead, state: gate.state, rounds: gate.rounds ?? 0, pipelines: gate.names ?? [], prOnly: gate.prOnly ?? [] }]);
     return gate;
   };
   const judge = (gate) => (gate.state === 'none' ? null : deliveryDecision(gate, { issues }));

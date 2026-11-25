@@ -1,6 +1,16 @@
 {
   "$comment": "Static analysis for Python (docs/ai-pipeline/analysis.md). bandit (Apache-2.0): declared, with a parser tested against recorded output; not exercised end to end. It is the repository's own install (pip), not a pinned binary.",
   "tools": {
+    "repeated-values-python": {
+      "description": "a fallback that repeats a configured default, or a literal that repeats a named constant (evidence for the clean-code reviewer; the patterns and file extensions are this pack's repeats.json, the configuration sources project.configSources)",
+      "licence": "ISC",
+      "run": ["node", "{packs}/security/analysis/repeated-values.mjs", "python", "{files}"],
+      "parse": "lines",
+      "scope": "changed-lines",
+      "baseline": "lines",
+      "lens": "clean-code",
+      "okExit": [0, 1]
+    },
     "bandit": {
       "description": "Bandit security checks on the changed Python files",
       "licence": "Apache-2.0",
@@ -37,13 +47,16 @@
   },
   "stages": {
     "pair": [
-      "bandit"
+      "bandit",
+      "repeated-values-python"
     ],
     "story": [
-      "bandit"
+      "bandit",
+      "repeated-values-python"
     ],
     "prCheck": [
-      "bandit"
+      "bandit",
+      "repeated-values-python"
     ]
   },
   "suppressions": [

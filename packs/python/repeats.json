@@ -1,0 +1,17 @@
+{
+  "$comment": "Patterns of the repeated-values check (GEN-18, scripts/pipeline/lib/analysis/repeats.mjs) for Python. `defaults` read a configuration source (settings modules, `.env.example`; JSON files are read as JSON); `constants` read every module (UPPER_SNAKE names); `fallbacks` are matched on changed lines. {literal} is a number or a quoted string. Named groups: key/value, name/value, expr/value. `comments` matches a whole-line comment, whose literals are prose and are not checked.",
+  "extensions": [".py"],
+  "comments": "^\\s*#",
+  "defaults": [
+    "^(?<key>[A-Za-z_]\\w*)\\s*(?::\\s*[\\w\\[\\], .]+)?\\s*=\\s*(?<value>{literal})\\s*(?:#.*)?$",
+    "^(?<key>[A-Z][A-Z0-9_]*)=(?<value>{literal}|[^\\s#]+)\\s*$"
+  ],
+  "constants": [
+    "^(?<name>[A-Z][A-Z0-9_]*)\\s*(?::\\s*[\\w\\[\\], .]+)?\\s*=\\s*(?<value>{literal})\\s*(?:#.*)?$"
+  ],
+  "fallbacks": [
+    "\\.get\\(\\s*['\"](?<expr>[^'\"]+)['\"]\\s*,\\s*(?<value>{literal})\\s*\\)",
+    "getenv\\(\\s*['\"](?<expr>[^'\"]+)['\"]\\s*,\\s*(?<value>{literal})\\s*\\)",
+    "(?<expr>[\\w.]+)\\s+or\\s+(?<value>{literal})"
+  ]
+}

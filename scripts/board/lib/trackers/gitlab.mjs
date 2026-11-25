@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { restClient } from './http.mjs';
+import { DEFAULT_URL, gitlabLabelsAndState } from '../../../pipeline/lib/hosts/gitlab.mjs';
 import { LANES, TrackerError, UnsupportedError, boardItem, expandEnv, keyFromLabels, keyLabel, laneNames, safeKey, ticket as normalise, typeNames } from './shared.mjs';
 import { metaFor } from '../ticket-format.mjs';
 
@@ -41,7 +42,7 @@ export function decodeMeta(body) {
 
 export function gitlabTracker(config, { send } = {}) {
   const t = config.tracker ?? {};
-  const base = String(t.url ?? config.host?.url ?? 'https://gitlab.com').replace(/\/+$/, '');
+  const base = String(t.url ?? config.host?.url ?? DEFAULT_URL).replace(/\/+$/, '');
   const project = t.project ?? (config.host?.type === 'gitlab' ? config.host.repo : null);
   if (!project) throw new TrackerError('config', 'tracker.project is not set: the GitLab project ("group/project") that holds the issues');
   const lanes = () => laneNames(config);
@@ -130,13 +131,7 @@ export function gitlabTracker(config, { send } = {}) {
       const m = meta ?? current?.meta;
       data.description = `${body ?? current.text}${m ? `\n\n${encodeMeta(m)}` : ''}`;
     }
-    if (Array.isArray(labels)) data.labels = labels.join(',');
-    else if (labels) {
-      if (labels.add?.length) data.add_labels = labels.add.join(',');
-      if (labels.remove?.length) data.remove_labels = labels.remove.join(',');
-    }
-    if (state === 'closed') data.state_event = 'close';
-    if (state === 'open') data.state_event = 'reopen';
+    gitlabLabelsAndState(data, { labels, state });
     if (assignees) data.assignee_ids = userIds(Array.isArray(assignees) ? assignees : assignees.add ?? []);
     if (Object.keys(data).length) call('PUT', `${P}/issues/${n}`, data);
   }

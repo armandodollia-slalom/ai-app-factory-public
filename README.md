@@ -109,7 +109,7 @@ not masked and finished video frames are not scanned ([what the video checks cov
 | Component | Page | Set up by |
 | --- | --- | --- |
 | The pipeline stages: implement, review, feature verification, PR check, review gate, board, retro | [ai-pipeline/README.md](docs/ai-pipeline/README.md) | `factory init`, then the [`onboard-codebase`](skills/onboard-codebase/SKILL.md) skill |
-| 24 agent definitions, plus what each repository adds | [agents.md](docs/ai-pipeline/agents.md) | [`write-agent-addenda`](skills/write-agent-addenda/SKILL.md) skill |
+| 25 agent definitions, plus what each repository adds | [agents.md](docs/ai-pipeline/agents.md) | [`write-agent-addenda`](skills/write-agent-addenda/SKILL.md) skill |
 | Councils: several verifiers from different tools and models in one seat | [council.md](docs/ai-pipeline/council.md) | `council` in the config |
 | Council discussion (intercom): the members settle disagreements with each other, off by default | [council-intercom.md](docs/ai-pipeline/council-intercom.md) | `council.intercom` in the config |
 | Static analysis | [analysis.md](docs/ai-pipeline/analysis.md) | `analysis` in the config |

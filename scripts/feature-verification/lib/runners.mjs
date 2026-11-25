@@ -46,8 +46,8 @@ import path from 'node:path';
 import { matchGlob } from '../../implement/lib/plan.mjs';
 import { matchesAnyPath, packRunners } from '../../implement/lib/project.mjs';
 import { deepMerge } from '../../pipeline/lib/config.mjs';
+import { escapeRe } from '../../pipeline/lib/util.mjs';
 
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const posix = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 
 // The names a story key takes in commands, tags and test names.
@@ -236,7 +236,7 @@ export function coveringUnits(config, services, files, key, runners = testRunner
       const named = [svc.testProjects, svc.unitTests].flat().filter(Boolean).map((p) => posix(p).replace(/\/+$/, ''));
       if (named.includes(u.unit)) return true;
       const folders = (svc.paths ?? []).map((p) => posix(p).replace(/\/\*\*.*$/, '').split('/').pop()).filter((f) => f && f !== '**');
-      return folders.some((f) => new RegExp(`[\\\\/]${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\\\/"']|$)`, 'im').test(u.manifest));
+      return folders.some((f) => new RegExp(`[\\\\/]${escapeRe(f)}([\\\\/"']|$)`, 'im').test(u.manifest));
     });
     if (!covered.length) continue;
     const values = { ...storyTokens(key), unit: u.unit, files: [] };

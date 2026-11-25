@@ -10,6 +10,7 @@ It checks four things, plus video evidence:
 | Flow | `pr-check-flow` | always | the end-to-end journey (UI, API, events, data) matches the story's flow, including sad paths |
 | UI design | `pr-check-design` | frontend stories: `[FE` in the title, a mockup on the story's ticket, or a changed frontend file (see [Frontend files](#frontend-files)) | layout, components, states and copy match the mockup and the design system |
 | Code style | `pr-check-style` | always | the code follows the repository's convention files (`prCheck.conventions`: by default `AGENTS.md`, `CONTRIBUTING.md`, `.editorconfig`, `.markdownlint.json` and the implementer's addendum `.factory/agents/implementer.md`) and the existing patterns |
+| Clean code | `pr-check-clean-code` | always: the fixed [clean-code seat](council.md#the-clean-code-seat), also when `--lenses` narrows the others | the change keeps the [`clean-code`](../../skills/clean-code/SKILL.md) rules (one source of truth, no copied logic, names, functions, comments, dead code, tests); every upheld breach is blocking, and a finding without its rule id or both copies is a question |
 | Video evidence | `pr-check-video` | a video was found | frames show the journey working, with no error banners, 500s, blank screens or broken layouts |
 
 With `prCheck.councilMembers` (or `council.members`) above one, a council of verifiers from the model pool, on several CLIs and models, replaces the critics (the defender, judge and fixer stay), under the stage's own round limit and pass score; see [council.md](council.md).
@@ -172,6 +173,7 @@ The judge and critics run on the largest models. Each role is an agent with its 
 | Acceptance, flow, design, video critics, fixer | `pr-check-acceptance`, `pr-check-flow`, `pr-check-design`, `pr-check-video`, `pr-check-fixer` | `opus` |
 | Defender | `pr-check-defender` | `opus` (give it an entry of another family to keep the debate from being one model arguing with itself) |
 | Style critic | `pr-check-style` | `sonnet` |
+| Clean-code critic | `pr-check-clean-code` | `sonnet` |
 
 Every entry must be in `models.pool`; see [models](models.md). For one run, `PIPELINE_MODEL_OVERRIDE=<entry>` runs every role on one entry.
 

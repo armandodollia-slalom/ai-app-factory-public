@@ -8,8 +8,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { HostError } from './errors.mjs';
 import { createHttp } from './http.mjs';
+import { DEFAULT_URLS, defaultMergeMethod } from '../products.mjs';
 
-export const DEFAULT_URL = 'https://gitlab.com';
+export const DEFAULT_URL = DEFAULT_URLS['gitlab'];
+
+// GitLab's update fields for labels (the whole list, or { add, remove }) and an open or closed state, the same on issues
+// and merge requests, set on `data`.
+export function gitlabLabelsAndState(data, { labels, state }) {
+  if (Array.isArray(labels)) data.labels = labels.join(',');
+  else if (labels) {
+    if (labels.add?.length) data.add_labels = labels.add.join(',');
+    if (labels.remove?.length) data.remove_labels = labels.remove.join(',');
+  }
+  if (state === 'closed') data.state_event = 'close';
+  if (state === 'open') data.state_event = 'reopen';
+  return data;
+}
 
 const STATE = { opened: 'open', locked: 'open', merged: 'merged', closed: 'closed' };
 const DRAFT = /^\s*(\[draft\]|draft:|\(draft\)|wip:|\[wip\])\s*/i;
@@ -160,13 +174,7 @@ export function createGitlabHost(settings, deps = {}) {
         const data = {};
         if (title != null) data.title = title;
         if (body != null) data.description = body;
-        if (Array.isArray(labels)) data.labels = labels.join(',');
-        else if (labels) {
-          if (labels.add?.length) data.add_labels = labels.add.join(',');
-          if (labels.remove?.length) data.remove_labels = labels.remove.join(',');
-        }
-        if (state === 'closed') data.state_event = 'close';
-        if (state === 'open') data.state_event = 'reopen';
+        gitlabLabelsAndState(data, { labels, state });
         if (draft != null) {
           const current = data.title ?? (await host.pr.get(pr))?.title ?? '';
           const bare = current.replace(DRAFT, '');
@@ -282,7 +290,7 @@ export function createGitlabHost(settings, deps = {}) {
       },
       // Merges, bound to `headSha` (GitLab answers 409 when the source branch moved). `auto`: GitLab merges when the
       // checks pass (auto_merge, GitLab 17.11+; merge_when_pipeline_succeeds before), still bound to that SHA.
-      async merge(pr, { method = 'squash', auto = false, headSha = null, deleteBranch = false } = {}) {
+      async merge(pr, { method = defaultMergeMethod(), auto = false, headSha = null, deleteBranch = false } = {}) {
         const body = { squash: method === 'squash', should_remove_source_branch: Boolean(deleteBranch), ...(headSha ? { sha: headSha } : {}), ...(auto ? { auto_merge: true, merge_when_pipeline_succeeds: true } : {}) };
         const m = await api('PUT', `${MR(pr)}/merge`, { body });
         const merged = m?.state === 'merged';

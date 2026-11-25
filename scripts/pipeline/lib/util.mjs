@@ -2,11 +2,28 @@ import { installOutputRedaction, redact, redactValue } from './redact.mjs';
 import crypto, { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { describeCall, externalKind, externalRetries, externalRetryPauseMs, externalTimeoutSec, noteExternal, retrySafe, transientFailure } from './external.mjs';
 
+// A string as a literal inside a regular expression (every special character escaped).
+export const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export const sha = (text, length = 12) => createHash('sha256').update(text).digest('hex').slice(0, length);
+
+// The markers around the demo video section of a pull request body (pr-video.mjs writes it; other sections go before it).
+export const VIDEO_SECTION_START = '<!-- pr-demo-video:start -->';
+export const VIDEO_SECTION_END = '<!-- pr-demo-video:end -->';
+
+// True when the module at `metaUrl` is the script node was started with.
+export const isMain = (metaUrl) => {
+  try {
+    return fs.realpathSync(fileURLToPath(metaUrl)) === fs.realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+};
 
 export const nowIso = () => new Date().toISOString();
 
@@ -221,10 +238,9 @@ export function appendJsonl(file, records) {
   fs.appendFileSync(file, list.map((r) => JSON.stringify(redactValue(r))).join('\n') + '\n');
 }
 
-export function readJsonl(file) {
-  if (!fs.existsSync(file)) return [];
-  return fs
-    .readFileSync(file, 'utf8')
+// The records of JSON-lines text; a line that does not parse is skipped.
+export function parseJsonl(text) {
+  return String(text)
     .split('\n')
     .filter((line) => line.trim())
     .flatMap((line) => {
@@ -235,6 +251,8 @@ export function readJsonl(file) {
       }
     });
 }
+
+export const readJsonl = (file) => (fs.existsSync(file) ? parseJsonl(fs.readFileSync(file, 'utf8')) : []);
 
 // Minimal YAML front matter support: scalars, quoted strings and inline [a, b] lists.
 export function parseFrontMatter(text) {
@@ -422,4 +440,22 @@ export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function addendumText(raw) {
   if (!raw || /<!--\s*Addendum skeleton\./.test(raw)) return '';
   return raw.replace(/<!--[\s\S]*?-->/g, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// The PR body with a marked section (`start` and `end` marker lines) replaced, or added before the trailing generator
+// line (a robot, "Generated with", "Model:" or "Harness:" line), else before the demo video block, else at the end. An
+// empty section takes the old one out.
+export function withMarkedSection(body, section, [start, end]) {
+  let text = String(body ?? '').replace(/\r\n/g, '\n');
+  const a = text.indexOf(start);
+  const b = text.indexOf(end);
+  if (a >= 0 && b > a) text = `${text.slice(0, a).trimEnd()}\n\n${text.slice(b + end.length).trimStart()}`.trimEnd() + '\n';
+  if (!section) return text;
+  const block = `${start}\n${section}\n${end}`;
+  const lines = text.trimEnd().split('\n');
+  const last = lines.length - 1;
+  if (/^(🤖|Generated with|Model:|Harness:)/i.test(lines[last] ?? '')) return `${lines.slice(0, last).join('\n').trimEnd()}\n\n${block}\n\n${lines[last]}\n`;
+  const video = text.indexOf(VIDEO_SECTION_START);
+  if (video >= 0) return `${text.slice(0, video).trimEnd()}\n\n${block}\n\n${text.slice(video)}`;
+  return `${text.trimEnd()}\n\n${block}\n`;
 }

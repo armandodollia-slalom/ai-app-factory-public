@@ -20,7 +20,8 @@ test('the correctness severity rule states the principle in neutral terms', () =
 
 test('no agent prompt echoes the defects of the dogfood tickets', () => {
   const echoes = [/found nothing/i, /optional call/i, /every item of a category/i, /request recorded/i, /brand/i, /request id/i, /\badmin/i];
-  for (const file of fs.readdirSync(path.join(root, 'agents'))) {
+  // The definitions and the shared sections they include (agents/shared/).
+  for (const file of fs.readdirSync(path.join(root, 'agents'), { recursive: true }).filter((f) => String(f).endsWith('.md'))) {
     const text = fs.readFileSync(path.join(root, 'agents', file), 'utf8');
     for (const re of echoes) assert.doesNotMatch(text, re, `${file} matches ${re}`);
   }

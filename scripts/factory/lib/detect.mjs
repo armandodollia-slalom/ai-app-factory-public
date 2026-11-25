@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseRemote } from './hosting.mjs';
+import { matchGlob } from '../../implement/lib/plan.mjs';
 
 const globToRegExp = (glob) => new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`);
 const matchesAny = (name, globs = []) => globs.some((g) => globToRegExp(g).test(name));
@@ -61,6 +62,9 @@ function e2eDirs(root, configs) {
   return dirs;
 }
 
+// The pack's configuration-source candidates that match a file here (project.configSources; none found: init asks).
+const configSourcesIn = (pack, files, ignored) => (pack.configSources ?? []).filter((g) => files.some((f) => !ignored(f) && matchGlob(f, g)));
+
 export function detect(root, packs) {
   const files = repoFiles(root).filter((f) => !FACTORY_OWNED.test(f));
   const languages = [];
@@ -72,7 +76,8 @@ export function detect(root, packs) {
     const unitFiles = files.filter((f) => !ignored(f) && matchesAny(path.basename(f), pack.unitFiles));
     const rootFiles = files.filter((f) => !f.includes('/') && matchesAny(f, pack.rootFiles));
     if (!sources.length && !unitFiles.length) continue;
-    languages.push({ id: pack.id, name: pack.name, files: sources.length, units: unitFiles.length, rootFiles, topFiles: files.filter((f) => !f.includes('/')), manifests: unitFiles.slice(0, 200).map((f) => read(root, f)).join('\n') });
+    const configSources = configSourcesIn(pack, files, ignored);
+    languages.push({ id: pack.id, name: pack.name, files: sources.length, units: unitFiles.length, rootFiles, topFiles: files.filter((f) => !f.includes('/')), manifests: unitFiles.slice(0, 200).map((f) => read(root, f)).join('\n'), configSources });
     const testDir = pack.testHints?.dir ? new RegExp(pack.testHints.dir, 'i') : null;
     const testContent = pack.testHints?.content ? new RegExp(pack.testHints.content, 'i') : null;
     const frontContent = pack.frontendHints?.content ? new RegExp(pack.frontendHints.content, 'i') : null;
@@ -191,6 +196,7 @@ export function draftProject(found, packs) {
   return {
     name: found.name,
     languages: found.languages.map((l) => l.id),
+    configSources: [...new Set(found.languages.flatMap((l) => l.configSources ?? []))],
     toolPaths: [...new Set(used.flatMap((p) => p.toolPaths ?? []))],
     services,
     frontendPaths: services.filter((s) => s.kind === 'frontend' || s.ui).flatMap((s) => s.paths),

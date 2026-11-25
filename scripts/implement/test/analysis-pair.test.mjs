@@ -14,6 +14,7 @@ import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { readReport } from '../../pipeline/lib/analysis/report.mjs';
 import { createContext, orchestrate } from '../lib/orchestrate.mjs';
 import { councilSettings } from '../../pipeline/test/fixtures/pool.mjs';
+import { cleanCodeSeatAnswer } from '../../pipeline/test/fixtures/clean-code-seat.mjs';
 
 const sh = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -81,6 +82,8 @@ const fakeLsp = { start: async () => ({ ok: true }), stop: async () => {}, stopA
 function fakeAgents(script) {
   const calls = [];
   const runAgent = async (config, opts) => {
+    const seat = cleanCodeSeatAnswer(opts, script);
+    if (seat) return seat;
     const member = opts.extraEnv?.PIPELINE_COUNCIL_MEMBER;
     const key = member ? `${opts.name}@${member}` : opts.name;
     calls.push({ ...opts, key, member });

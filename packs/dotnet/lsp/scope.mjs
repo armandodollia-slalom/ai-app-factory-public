@@ -15,8 +15,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import { generateSlnf } from './slnf.mjs';
+import { isMain } from '../../../scripts/pipeline/lib/util.mjs';
 
 export { generateSlnf };
 
@@ -58,15 +58,8 @@ function parseArgs(argv) {
   return opts;
 }
 
-const isMain = (() => {
-  try {
-    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1]);
-  } catch {
-    return false;
-  }
-})();
 
-if (isMain) {
+if (isMain(import.meta.url)) {
   let result;
   try {
     const opts = parseArgs(process.argv.slice(2));
@@ -75,5 +68,5 @@ if (isMain) {
     result = { ok: false, projects: [], error: error.message };
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  process.exit(result.ok ? 0 : 1);
+  process.exitCode = result.ok ? 0 : 1;
 }

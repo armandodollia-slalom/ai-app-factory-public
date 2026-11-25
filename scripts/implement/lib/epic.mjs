@@ -13,7 +13,6 @@ import { writeText } from '../../pipeline/lib/redact.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 import { prAnalysisSection } from '../../pipeline/lib/analysis/fixloop.mjs';
 import { withStaticAnalysis } from '../../pipeline/lib/analysis/report.mjs';
-import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,7 +34,7 @@ import { councilRecords, councilReviewSection, withCouncilReview } from '../../p
 import { EPIC_PLAN_STAGE, featureGroupTitle, deliveryShape, epicDeps, journeyGroup, epicPlanDecision, epicPlanTask, epicPrBody, epicSlug, epicTestKey, groupDeps, groupOutcome, groupsDecision, journeyTicket, nextStories, noteMarkdown, singleGroups, validateNote } from './epic-plan.mjs';
 import { parityGate, paritySection } from './ci-parity.mjs';
 import { ciFixBudget } from './ci-wait.mjs';
-import { HARNESS_EXCLUDES, commitAll, commitEnv, commitRecords, headSha, mergeInProgress, mustGit, stackedRef, unmergedFiles } from './gitops.mjs';
+import { HARNESS_EXCLUDES, commitAll, commitEnv, commitRecords, headSha, mergeInProgress, stackedRef, unmergedFiles } from './gitops.mjs';
 import { adoptOpenedPr, afterOpen, prCheckFixSettings, cleanDelivered, confirmRecordedHold, loadRun, takeRemoteHead, publishRatingOrHold, prCheckHold, deliverFinished, deliveryIo, holdOpenPr, fullProjectRuns, fullProjectsSection, plan as planStories, prCheckFollowUps, runConditions, runConditionsSection, runsDir, saveRun, shipMetrics, skippedOutcome, startWorker, withoutResolved, ownerDecisionBlock, waitingForPerson } from './implement.mjs';
 import { lspAdapter } from './lsp.mjs';
 import { waitForMemory } from './resources.mjs';
@@ -169,6 +168,7 @@ async function planEpicOnce(env, { attempts = 2 } = {}) {
     const res = await deps.runAgent(planConfig, {
       name: 'implementer',
       mode: 'read',
+      cleanCode: 'full',
       noSubagents: true,
       cwd,
       timeoutSec: planConfig.implement.timeoutsSec.epicPlanner,

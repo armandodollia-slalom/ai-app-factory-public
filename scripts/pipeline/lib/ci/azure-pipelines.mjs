@@ -8,6 +8,7 @@
 //
 // settings: { url, repo ("organization/project/repository": the host's), token ("${AZURE_DEVOPS_TOKEN}"), project }.
 import { ciClient, run, secret } from './rest.mjs';
+import { DEFAULT_URL } from '../hosts/azure-devops.mjs';
 
 export const CAPABILITIES = { logs: true, expectedFromDefinition: true, runsByCommit: true, reviewEvents: false, schedules: true, rerun: true, branchPipelines: false };
 export const BUILD_POLICY = '0609b952-1397-4640-95ec-e00a01b2c241';
@@ -17,7 +18,7 @@ const API = 'api-version=7.1';
 
 export function createAzurePipelines(settings = {}, deps = {}) {
   const config = deps.config ?? {};
-  const url = String(settings.url ?? config.host?.url ?? 'https://dev.azure.com').replace(/\/+$/, '');
+  const url = String(settings.url ?? config.host?.url ?? DEFAULT_URL).replace(/\/+$/, '');
   const [org, project, repository] = String(settings.repo ?? config.host?.repo ?? '').split('/');
   const env = deps.env ?? process.env;
   const token = secret(settings.token, 'ci.token', env) ?? secret(config.host?.token, 'host.token', env) ?? env.AZURE_DEVOPS_TOKEN ?? env.SYSTEM_ACCESSTOKEN ?? null;

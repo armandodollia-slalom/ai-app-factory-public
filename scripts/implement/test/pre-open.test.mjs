@@ -152,6 +152,8 @@ function setup(name, scenario, { type = 'story', state = {} } = {}) {
     fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
   }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
+  // The clean-code skill the writers' and orchestrators' prompts are built from (it includes the council skill's lists).
+  for (const skill of ['clean-code', 'council']) fs.cpSync(path.join(source, 'skills', skill), path.join(repo, 'skills', skill), { recursive: true });
   // As an install has it: the CI adapters read the workflow definitions with the yaml package.
   fs.symlinkSync(path.join(source, 'node_modules'), path.join(repo, 'node_modules'), 'dir');
   editJson(path.join(repo, 'scripts/feature-verification/config.json'), (j) => (j.featureVerification.precheck.runTests = false));

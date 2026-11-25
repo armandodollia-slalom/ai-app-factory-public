@@ -1,0 +1,22 @@
+{
+  "$comment": "Patterns of the repeated-values check (GEN-18, scripts/pipeline/lib/analysis/repeats.mjs) for C#. `defaults` read a configuration source (options classes; appsettings*.json are read as JSON); `constants` read every C# file; `fallbacks` are matched on changed lines; a configuration read (`config[\"Shop:Timeout\"]`, `GetValue<T>(\"Shop:Timeout\")`) is matched by its qualified key. {literal} is a number or a quoted string. Named groups: key/value, name/value, expr/value. `comments` matches a whole-line comment, whose literals are prose and are not checked. `rootReceiver` names the root configuration a quoted read starts from (its key is the whole path), and `rootDeclared` finds a receiver declared as it ({name} is the receiver); `sectionAssign` finds a variable given a section ({name} is the variable), whose reads are under that section; a read on any other receiver is a section the scanner cannot resolve.",
+  "extensions": [
+    ".cs"
+  ],
+  "comments": "^\\s*(?://|/\\*|\\*)",
+  "defaults": [
+    "public\\s+[\\w<>?,\\[\\] ]+\\s+(?<key>\\w+)\\s*\\{\\s*get;\\s*(?:set|init);\\s*\\}\\s*=\\s*(?<value>{literal})\\s*;"
+  ],
+  "constants": [
+    "\\bconst\\s+[\\w<>?]+\\s+(?<name>\\w+)\\s*=\\s*(?<value>{literal})\\s*;",
+    "\\bstatic\\s+readonly\\s+[\\w<>?]+\\s+(?<name>\\w+)\\s*=\\s*(?<value>{literal})\\s*;"
+  ],
+  "rootReceiver": "^(?:[\\w.]*\\.)?_?[Cc]onfig(?:uration)?$",
+  "rootDeclared": "\\bIConfiguration(?:Root)?\\s+{name}\\b",
+  "sectionAssign": "\\b(?:var|IConfigurationSection|IConfiguration)\\s+{name}\\s*=\\s*(?<expr>[\\w.]+(?:\\s*\\.\\s*GetSection\\(\\s*\"[^\"]+\"\\s*\\))+)\\s*;",
+  "fallbacks": [
+    "(?<expr>(?:[\\w.]+\\(\\s*\"[^\"]+\"\\s*\\)\\s*\\.?\\s*)*[\\w.\\[\\]\"':]+)\\s*\\?\\?\\s*(?<value>{literal})",
+    "(?<expr>(?:[\\w.]+\\(\\s*\"[^\"]+\"\\s*\\)\\s*\\.?\\s*)*[\\w.]+<[\\w?]+>\\(\\s*\"[^\"]+\"\\s*\\))\\s*\\?\\?\\s*(?<value>{literal})",
+    "(?<expr>(?:[\\w.]+\\(\\s*\"[^\"]+\"\\s*\\)\\s*\\.?\\s*)*[\\w.]*GetValue<[\\w?]+>\\(\\s*\"[^\"]+\")\\s*,\\s*(?<value>{literal})\\s*\\)"
+  ]
+}

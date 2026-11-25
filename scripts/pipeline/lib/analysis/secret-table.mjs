@@ -18,7 +18,7 @@
 // branch's commits since the base and pushes with a lease: own branch, no PR, fake value only), escalate (a person: a
 // pushed value that may be real must be rotated, and an open PR's history is never rewritten).
 import { spawnSync } from 'node:child_process';
-import { FAKE_SECRET_MARKER } from './config.mjs';
+import { PLACEHOLDER_MARKER } from '../redact.mjs';
 import { findingValues } from './secrets.mjs';
 import { valueOnBase, whereOnRev } from './decide.mjs';
 
@@ -37,7 +37,7 @@ const CELLS = {
   'fake-flagged': (location) => ({
     verdict: 'block',
     wayOut: { uncommitted: ['implementer'], unpushed: ['implementer', 'fold-unpushed'], 'pushed-no-pr': ['implementer', 'fold-branch'], 'pr-open': ['escalate'] }[location],
-    why: { uncommitted: `a fake value the scanner flags: replaced by one holding "${FAKE_SECRET_MARKER}" or an allow-listed value`, unpushed: 'a fake value in a commit no remote has: replaced, then the unpushed commits fold into one', 'pushed-no-pr': 'a fake value on the story\'s own pushed branch with no PR: replaced, then the branch folds into one commit and is pushed with a lease', 'pr-open': 'an open PR\'s history is never rewritten: a person decides (the value is fake, nothing to rotate)' }[location],
+    why: { uncommitted: `a fake value the scanner flags: replaced by one holding "${PLACEHOLDER_MARKER}" or an allow-listed value`, unpushed: 'a fake value in a commit no remote has: replaced, then the unpushed commits fold into one', 'pushed-no-pr': 'a fake value on the story\'s own pushed branch with no PR: replaced, then the branch folds into one commit and is pushed with a lease', 'pr-open': 'an open PR\'s history is never rewritten: a person decides (the value is fake, nothing to rotate)' }[location],
   }),
 };
 CELLS['shares-span'] = (location, { fake = false } = {}) => ({ ...CELLS[fake ? 'fake-flagged' : 'new'](location), sharesSpan: true });

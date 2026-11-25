@@ -1,7 +1,8 @@
 // Pure logic of the orchestrated implement flow: the orchestrator's plan (parsing and validation), the
 // `owns` globs (matching, overlap, scope enforcement), dependency order, verifier verdicts and model
 // classes. No I/O, so all of it is unit tested.
-import { extractResult } from '../../pipeline/lib/util.mjs';
+import { guidanceProblems, normalizeGuidance } from '../../pipeline/lib/clean-code.mjs';
+import { escapeRe, extractResult } from '../../pipeline/lib/util.mjs';
 import { frontendPatterns, frontendServices, matchesAnyPath } from './project.mjs';
 import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
@@ -171,7 +172,6 @@ export function uiRules(config) {
   };
 }
 
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const PATH_WORD = /[\w@~-][\w@~./-]*\.[A-Za-z][\w.]*/g;
 
 // A UI story changes the app's frontend: a UI tag on the title, a frontend component in the title's
@@ -225,6 +225,7 @@ export function selfSubtask(plan, { uiStory }) {
     dependsOn: [],
     verify: given.verify === 'ui' && uiStory ? 'ui' : 'code',
     scenario: given.scenario ?? null,
+    guidance: normalizeGuidance(given.guidance),
     self: true,
   };
 }
@@ -257,6 +258,7 @@ export function validatePlan(raw, { storyText = '', limits = {} } = {}) {
     if (Array.isArray(raw.subtasks) && raw.subtasks.length > 1) errors.push('self mode takes at most one subtask entry (its goal, acceptance and verify)');
     const st = selfSubtask(raw, { uiStory });
     if (raw.subtasks?.[0]?.verify === 'ui' && !uiStory) errors.push('verify "ui" is only allowed for UI stories');
+    errors.push(...guidanceProblems(raw.subtasks?.[0]?.guidance, 'subtasks[0].guidance'));
     st.decision = decisionFields(raw.subtasks?.[0] ?? {}, null);
     return { ok: !errors.length, errors, fatal, plan: errors.length ? null : { mode: 'self', uiStory, subtasks: [st], notes: raw.notes ?? null, decision: planDecision } };
   }
@@ -297,6 +299,7 @@ export function validatePlan(raw, { storyText = '', limits = {} } = {}) {
     if (s.verify === 'ui' && !uiStory) errors.push(`${at}: verify "ui" is only allowed for UI stories`);
     if (s.scenario != null && !nonEmptyString(s.scenario)) errors.push(`${at}: \`scenario\` must be an app-stack scenario name`);
     else if (s.scenario != null && Array.isArray(limits.scenarios) && !limits.scenarios.includes(s.scenario)) errors.push(`${at}: \`scenario\` "${String(s.scenario).slice(0, 80)}" is not an app-stack scenario of this repository (${limits.scenarios.length ? `scenarios: ${limits.scenarios.join(', ')}` : 'it has none'}); name one of those or leave it out, and say in the goal or acceptance what data the UI verifier must set up itself`);
+    errors.push(...guidanceProblems(s.guidance).map((e) => `${at}: ${e}`));
     decisionFields(s, (e) => errors.push(`${at}: ${e}`));
     norm.push({
       id: s.id,
@@ -308,6 +311,7 @@ export function validatePlan(raw, { storyText = '', limits = {} } = {}) {
       verify: s.verify,
       justification: s.justification ?? null,
       scenario: s.scenario ?? null,
+      guidance: normalizeGuidance(s.guidance),
       decision: decisionFields(s, null),
     });
   });

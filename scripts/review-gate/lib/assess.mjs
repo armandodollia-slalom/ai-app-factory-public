@@ -7,6 +7,8 @@ import { normalizeLevel } from './levels.mjs';
 import { setting } from '../../pipeline/lib/settings.mjs';
 
 export const TRIAGE_AGENT = 'bug-triage';
+// The review gate's triage stage in decisions and token usage.
+export const TRIAGE_STAGE = 'bug-triage';
 export const FIELDS = ['impact', 'complexity', 'fixRisk'];
 const CATEGORIES = new Set(['auth', 'payments', 'migration', 'security']);
 
@@ -67,7 +69,7 @@ export function runTriage(config, input, { runAgent, log = () => {} }) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     let res;
     try {
-      res = runAgent(config, { name: TRIAGE_AGENT, task, mode: 'read', timeoutSec: setting(config, 'implement.reviewGate.timeoutSec'), cwd: input.cwd ?? config.root, usage: { stage: 'bug-triage', story: keys[0] ?? null, step: input.pr ?? null } });
+      res = runAgent(config, { name: TRIAGE_AGENT, task, mode: 'read', timeoutSec: setting(config, 'implement.reviewGate.timeoutSec'), cwd: input.cwd ?? config.root, usage: { stage: TRIAGE_STAGE, story: keys[0] ?? null, step: input.pr ?? null } });
     } catch (error) {
       log(`triage agent not run: ${error.message.split('\n')[0]}`);
       return { ratings: new Map(), errors: [error.message.split('\n')[0]] };

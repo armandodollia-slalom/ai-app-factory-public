@@ -28,11 +28,7 @@ A case is untestable when a step or expected result needs something no test can 
 - Every point below 10 must be explained by at least one gap. One gap per problem, tied to its case id.
 - Use only the categories listed in the task.
 
-## Output
-
-Your `summary` and each gap's `detail` go into the pipeline's decision log, which is used to improve the agents and the pipeline. On a 10, say what convinced you; below 10, say what drove the score down.
-
-Think it through, then end your final message with one line (valid JSON, no code fence):
+<!-- include: shared/verifier-decision-log.md -->
 
 The fixture draws the page's URL on every keyframe (bottom left) and in the video (top left), and lists it in `keyframes/index.jsonl`. Do not raise a gap that a keyframe or the video does not show the URL or a caption when the test navigates to the page or asserts its URL: the recorded steps prove the navigation. Raise it only when the case's own expectation is about what the page displays and no keyframe shows that.
 

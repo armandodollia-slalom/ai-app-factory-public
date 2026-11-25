@@ -129,10 +129,6 @@ export function allowedModels(provider, opts = {}) {
   return [...providerPolicy(provider, opts).allowed];
 }
 
-export function defaultModel(provider, opts = {}) {
-  return providerPolicy(provider, opts).default;
-}
-
 export function assertProviderUsable(provider, opts = {}) {
   const p = providerPolicy(provider, opts);
   if (p.allowed.length === 0) {

@@ -21,17 +21,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
-import { git } from '../../pipeline/lib/git.mjs';
 import { appendJsonl, nowIso, readJsonl, runAsync } from '../../pipeline/lib/util.mjs';
-import { metricsFile } from '../../pipeline/lib/state.mjs';
+import { RUN_CONDITIONS_FILE, metricsFile } from '../../pipeline/lib/state.mjs';
 import { defaultSettings } from '../../pipeline/lib/settings.mjs';
+import { LSP_FILE, callsBetween, lspDir } from '../../pipeline/lib/search-calls.mjs';
 
-export function gitDir(worktree) {
-  const r = git(worktree, ['rev-parse', '--git-dir']);
-  return r.status === 0 ? path.resolve(worktree, r.stdout.trim()) : path.join(worktree, '.git');
-}
 
-export const callsFile = (worktree) => path.join(gitDir(worktree), 'lsp', 'calls.jsonl');
+// The kind of a run-conditions record of a language server a worktree could not start (implement.mjs reads it back).
+export const LSP_RECORD = 'lsp';
+// The `lsp` MCP server's call log of a worktree (null outside a git checkout).
+export const callsFile = (worktree) => {
+  const dir = lspDir(worktree);
+  return dir ? path.join(dir, LSP_FILE) : null;
+};
+
+// The `lsp` MCP server's calls in a worktree of an agent between two times (ms), by the one call window.
+const lspCalls = (worktree, agent, from, to) => {
+  const file = callsFile(worktree);
+  return file ? readJsonl(file).filter(callsBetween({ agent, from, to })) : [];
+};
 
 function lastJson(text) {
   for (const line of String(text).trim().split('\n').reverse()) {
@@ -122,7 +130,7 @@ export function lspAdapter(config, { mainRoot = INSTALL_ROOT, log = () => {} } =
         // Recorded with the story, so every PR body that carries it (single ticket or group) can say so (council C3:
         // a story ran without C#, and its group PR did not say).
         try {
-          appendJsonl(metricsFile({ ...config, root: worktree }, 'run-conditions.jsonl'), [{ ts: nowIso(), story: key ?? process.env.PIPELINE_STORY ?? null, kind: 'lsp', worktree: path.basename(worktree), missing: unavailable.get(worktree) }]);
+          appendJsonl(metricsFile({ ...config, root: worktree }, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: key ?? process.env.PIPELINE_STORY ?? null, kind: LSP_RECORD, worktree: path.basename(worktree), missing: unavailable.get(worktree) }]);
         } catch {
           /* best effort */
         }
@@ -184,7 +192,7 @@ export function lspAdapter(config, { mainRoot = INSTALL_ROOT, log = () => {} } =
 
     // LSP tool calls an agent made in a worktree between two times (epoch ms).
     calls(worktree, agent, fromMs, toMs = Date.now()) {
-      return readJsonl(callsFile(worktree)).filter((c) => (!agent || c.agent === agent) && Date.parse(c.ts) >= fromMs - 1000 && Date.parse(c.ts) <= toMs + 1000);
+      return lspCalls(worktree, agent, fromMs, toMs);
     },
     isReferences,
   };

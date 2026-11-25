@@ -2,17 +2,15 @@ import fs from 'node:fs';
 import { registerConfigSecrets } from './redact.mjs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { run } from './util.mjs';
 import { policyTopologyProblems } from './policy-topology.mjs';
-import { councilProblems, intercomProblems } from './council-config.mjs';
+import { councilProblems, fixedSeatProblems, intercomProblems } from './council-config.mjs';
 import { ORCHESTRATED, poolProblems, poolWarnings } from './pool.mjs';
 import { configAnalysisProblems } from './analysis/config.mjs';
 import { withAnalysisGate } from './analysis/ci.mjs';
-import { allowedValues, defaultSettings, settingsProblems } from './settings.mjs';
+import { INSTALL_ROOT, SCRIPTS_DIR, allowedValues, defaultSettings, settingsProblems } from './settings.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-export const PIPELINE_DIR = path.resolve(here, '..');
+export const PIPELINE_DIR = path.join(SCRIPTS_DIR, 'pipeline');
 
 // A configuration that cannot load (not JSON, an invalid setting): the CLIs print its message, never a stack trace.
 export class ConfigError extends Error {
@@ -22,8 +20,7 @@ export class ConfigError extends Error {
     this.code = 'config';
   }
 }
-export const SCRIPTS_DIR = path.resolve(PIPELINE_DIR, '..');
-export const INSTALL_ROOT = path.resolve(SCRIPTS_DIR, '..');
+export { INSTALL_ROOT, SCRIPTS_DIR };
 
 export function repoRoot(cwd = process.cwd()) {
   if (process.env.PIPELINE_ROOT) return path.resolve(process.env.PIPELINE_ROOT);
@@ -57,6 +54,9 @@ const OPT_IN = ['analysis'];
 // engine runs) is governance and stays in config.json, which only people and the retro change. Only these
 // keys may appear in app.json; anything else fails loading, and the factory guard reverts it after a run.
 export const APP_FILE = `${FACTORY_DIR}/app.json`;
+// What `factory render` writes: the list of generated files, and the pin of the factory version.
+export const MANIFEST_FILE = `${FACTORY_DIR}/manifest.json`;
+export const PIN_FILE = `${FACTORY_DIR}/factory.json`;
 export const APP_KEYS = {
   project: ['services', 'frontendPaths', 'testRoots'],
   stack: ['ports', 'urls', 'baseUrl', 'env', 'services', 'rebuildAll', 'publishAppHost', 'publishOverrides'],
@@ -215,9 +215,6 @@ export function ensureToolPath(toolPaths = [], env = process.env) {
 // every name and value against the settings descriptions (scripts/<dir>/settings.json), filtered to that part.
 const partProblems = (doc, prefix) => settingsProblems(isObject(doc) ? doc : {}).filter((p) => p.startsWith(prefix));
 export const VIDEO_SCRIPT_SCOPES = allowedValues('video.script.scope');
-// `video.apiEvidence.paymentBodies`: a payment exchange's headers and bodies withheld (the default) or masked.
-export const PAYMENT_BODIES = allowedValues('video.apiEvidence.paymentBodies');
-export const apiEvidenceProblems = (config) => partProblems(config, 'video.apiEvidence.');
 export const videoScriptProblems = (config) => partProblems(config, 'video.script.');
 
 const cache = new Map();
@@ -234,7 +231,8 @@ export const preOpenProblems = (config) => partProblems(config, 'implement.preOp
 // The problems of the repository's own settings that every loader reports the same way (repoOverlay: a stage's config,
 // a tool's section, doctor): a config with any of them does not load, whichever command reads it first. Old and
 // misspelt names and values outside a setting's allowed ones come from the settings descriptions (settings.mjs).
-export const overlayProblems = (overlay) => [...settingsProblems(overlay ?? {}), ...listedMembers(overlay), ...poolOverlayProblems(overlay)];
+// The clean-code seat's own message comes first: a setting that tries to remove it is refused saying the seat is fixed.
+export const overlayProblems = (overlay) => [...fixedSeatProblems(overlay), ...settingsProblems(overlay ?? {}), ...listedMembers(overlay), ...poolOverlayProblems(overlay)];
 // A council written the old way, as a list of members: say where its members went (the pool) besides the type error.
 const listedMembers = (overlay) => (Array.isArray(overlay?.council?.members) ? councilProblems({ members: overlay.council.members }) : []);
 // The pool and every setting that names one of its entries, on the defaults with the repository's settings on top:

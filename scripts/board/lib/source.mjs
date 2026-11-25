@@ -89,17 +89,6 @@ export function writeTicket(config, key, { content, meta, issue = null, origin =
   return dir;
 }
 
-// Copies a cached ticket (story, meta, history, mockups) into another checkout's cache, e.g. a worktree.
-export function copyTicket(fromConfig, toConfig, key) {
-  const from = ticketDir(fromConfig, key);
-  if (!fs.existsSync(from)) return false;
-  const to = ticketDir(toConfig, key);
-  if (path.resolve(from) === path.resolve(to)) return true;
-  fs.mkdirSync(path.dirname(to), { recursive: true });
-  fs.cpSync(from, to, { recursive: true });
-  return true;
-}
-
 // Every ticket of the tracker: number (the tracker's id), title, labels, state, updatedAt, url (no bodies).
 export function listIssues(config, { gh = defaultGh } = {}) {
   return offline(() => tracker(config, gh).tickets.list()).map((t) => {

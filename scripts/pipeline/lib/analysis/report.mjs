@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { analysisDir } from './runner.mjs';
 import { suppressionsText } from './suppressions.mjs';
+import { withMarkedSection } from '../util.mjs';
 
 export const reportsDir = (config) => path.join(analysisDir(config), 'reports');
 export const reportFile = (config, sha, slot) => path.join(reportsDir(config), sha, `${slot}.json`);
@@ -92,6 +93,7 @@ export function evidenceText(report, { coverage = null } = {}) {
     parts.push('', 'Still open after the harness fix loop (already handed to the implementer as harness findings; do not raise them again, judge everything else):');
     parts.push(...report.findings.slice(0, 40).map((f) => `- ${f.severity} ${f.tool} ${f.rule} ${f.file ?? ''}${f.line ? `:${f.line}` : ''}: ${f.message}`));
   }
+  parts.push(...[cleanCodeEvidence(report)].filter(Boolean).flatMap((text) => ['', text]));
   if (report.preexisting.length) parts.push('', `Pre-existing findings in touched code (not this change's; follow-ups): ${report.preexisting.length}.`);
   const copies = valueNotes(report);
   if (copies.length) parts.push('', 'Values already on the base branch (notes, not blocking; refer to the setting by name instead of copying its value):', ...copies.map((t) => `- ${t}`));
@@ -106,6 +108,19 @@ export function evidenceText(report, { coverage = null } = {}) {
   const cov = coverage ?? report.coverage;
   if (cov?.text) parts.push('', cov.text);
   return parts.join('\n');
+}
+
+// What the clean-code lens tools (repeated values, duplication, complexity) report on this change: evidence for the
+// clean-code reviewer, who upholds each item as its own finding (citing the rule) or says why it is not a problem. An
+// item is never a finding by itself.
+export function cleanCodeEvidence(report, { limit = 40 } = {}) {
+  const items = report?.cleanCode ?? [];
+  if (!items.length) return '';
+  return [
+    'Clean-code evidence (tool reports on this change; not findings: the clean-code reviewer upholds each one as its own finding or says why it is not a problem):',
+    ...items.slice(0, limit).map((f) => `- ${f.tool} ${f.rule} ${f.file ?? ''}${f.line ? `:${f.line}` : ''}: ${f.message}`),
+    ...(items.length > limit ? [`- ... and ${items.length - limit} more`] : []),
+  ].join('\n');
 }
 
 // Secret findings whose value the base already holds (secrets.mjs): where the copy is and where the value lives.
@@ -190,17 +205,4 @@ export function staticAnalysisSection(reports, { fixLoops = [], head = null, slo
 }
 
 // The body with the section replaced, or added before the trailing generator line / the demo video block / the end.
-export function withStaticAnalysis(body, section) {
-  let text = String(body ?? '').replace(/\r\n/g, '\n');
-  const a = text.indexOf(SSTART);
-  const b = text.indexOf(SEND);
-  if (a >= 0 && b > a) text = `${text.slice(0, a).trimEnd()}\n\n${text.slice(b + SEND.length).trimStart()}`.trimEnd() + '\n';
-  if (!section) return text;
-  const block = `${SSTART}\n${section}\n${SEND}`;
-  const lines = text.trimEnd().split('\n');
-  const last = lines.length - 1;
-  if (/^(🤖|Generated with|Model:|Harness:)/i.test(lines[last] ?? '')) return `${lines.slice(0, last).join('\n').trimEnd()}\n\n${block}\n\n${lines[last]}\n`;
-  const video = text.indexOf('<!-- pr-demo-video:start -->');
-  if (video >= 0) return `${text.slice(0, video).trimEnd()}\n\n${block}\n\n${text.slice(video)}`;
-  return `${text.trimEnd()}\n\n${block}\n`;
-}
+export const withStaticAnalysis = (body, section) => withMarkedSection(body, section, [SSTART, SEND]);

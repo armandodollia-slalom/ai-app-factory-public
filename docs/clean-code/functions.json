@@ -1,0 +1,3239 @@
+{
+ "base": "ee8328f",
+ "limits": {
+  "maxCyclomatic": 15,
+  "maxFunctionLines": 100
+ },
+ "changed": [
+  "agents/implementer.agent.md",
+  "agents/pair-implementer.agent.md",
+  "agents/pair-ui-verifier.agent.md",
+  "agents/pair-verifier.agent.md",
+  "agents/pr-check-acceptance.agent.md",
+  "agents/pr-check-clean-code.agent.md",
+  "agents/pr-check-design.agent.md",
+  "agents/pr-check-fixer.agent.md",
+  "agents/pr-check-flow.agent.md",
+  "agents/pr-check-style.agent.md",
+  "agents/pr-check-video.agent.md",
+  "agents/shared/clean-code-arbiter.md",
+  "agents/shared/clean-code-search.md",
+  "agents/shared/pair-verifier-judging.md",
+  "agents/shared/pr-check-critic-debate.md",
+  "agents/shared/verifier-decision-log.md",
+  "agents/stage-orchestrator.agent.md",
+  "agents/test-automation-verifier.agent.md",
+  "agents/test-automation.agent.md",
+  "agents/test-plan-verifier.agent.md",
+  "packs/dotnet/analysis.json",
+  "packs/dotnet/clean-code.md",
+  "packs/dotnet/lsp/prepare.mjs",
+  "packs/dotnet/lsp/scope.mjs",
+  "packs/dotnet/pack.json",
+  "packs/dotnet/pr-video/aspnet-minimal-api.mjs",
+  "packs/dotnet/repeats.json",
+  "packs/dotnet/stack/aspire-publish.mjs",
+  "packs/dotnet/stack/publish-container.mjs",
+  "packs/python/analysis.json",
+  "packs/python/clean-code.md",
+  "packs/python/pack.json",
+  "packs/python/repeats.json",
+  "packs/security/analysis.json",
+  "packs/security/analysis/complexity.mjs",
+  "packs/security/analysis/duplication.mjs",
+  "packs/security/analysis/repeated-values.mjs",
+  "packs/typescript/analysis.json",
+  "packs/typescript/clean-code.md",
+  "packs/typescript/pack.json",
+  "packs/typescript/repeats.json",
+  "scripts/agents-claude.json",
+  "scripts/board/lib/board.mjs",
+  "scripts/board/lib/escalation.mjs",
+  "scripts/board/lib/evidence.mjs",
+  "scripts/board/lib/flow.mjs",
+  "scripts/board/lib/migrate.mjs",
+  "scripts/board/lib/outcomes.mjs",
+  "scripts/board/lib/source.mjs",
+  "scripts/board/lib/trackers/gitlab.mjs",
+  "scripts/board/lib/trackers/index.mjs",
+  "scripts/board/lib/trackers/shared.mjs",
+  "scripts/board/test/escalation.test.mjs",
+  "scripts/council/council.mjs",
+  "scripts/docs/build-explorer.mjs",
+  "scripts/docs/clean-code-report.mjs",
+  "scripts/docs/test/clean-code-report.test.mjs",
+  "scripts/factory/factory.mjs",
+  "scripts/factory/lib/detect.mjs",
+  "scripts/factory/lib/github.mjs",
+  "scripts/factory/lib/init.mjs",
+  "scripts/factory/lib/interview.mjs",
+  "scripts/factory/lib/render.mjs",
+  "scripts/factory/lib/workflow-safety.mjs",
+  "scripts/factory/test/prompt-severity.test.mjs",
+  "scripts/feature-verification/lib/metrics.mjs",
+  "scripts/feature-verification/lib/runners.mjs",
+  "scripts/feature-verification/lib/slots.mjs",
+  "scripts/feature-verification/lib/verify.mjs",
+  "scripts/feature-verification/lib/workflows.mjs",
+  "scripts/feature-verification/settings.json",
+  "scripts/feature-verification/test/unit.test.mjs",
+  "scripts/implement/lib/analysis-gate.mjs",
+  "scripts/implement/lib/ci-parity.mjs",
+  "scripts/implement/lib/ci-wait.mjs",
+  "scripts/implement/lib/decisions.mjs",
+  "scripts/implement/lib/epic.mjs",
+  "scripts/implement/lib/gitops.mjs",
+  "scripts/implement/lib/implement.mjs",
+  "scripts/implement/lib/lsp.mjs",
+  "scripts/implement/lib/mockups.mjs",
+  "scripts/implement/lib/orchestrate.mjs",
+  "scripts/implement/lib/plan.mjs",
+  "scripts/implement/lib/pr-check-return.mjs",
+  "scripts/implement/lib/pre-open.mjs",
+  "scripts/implement/lib/project.mjs",
+  "scripts/implement/lib/tasks.mjs",
+  "scripts/implement/settings.json",
+  "scripts/implement/test/analysis-gate-record.test.mjs",
+  "scripts/implement/test/analysis-pair.test.mjs",
+  "scripts/implement/test/council-pair.test.mjs",
+  "scripts/implement/test/implement.test.mjs",
+  "scripts/implement/test/orchestrate-e2e.test.mjs",
+  "scripts/implement/test/orchestrate.test.mjs",
+  "scripts/implement/test/pr-check-return.test.mjs",
+  "scripts/implement/test/pre-open.test.mjs",
+  "scripts/implement/test/slow-delivery.test.mjs",
+  "scripts/lsp/lib/common.mjs",
+  "scripts/lsp/mcp.mjs",
+  "scripts/models/config.json",
+  "scripts/models/lib/models.mjs",
+  "scripts/pipeline/config.json",
+  "scripts/pipeline/lib/agents.mjs",
+  "scripts/pipeline/lib/analysis/baseline.mjs",
+  "scripts/pipeline/lib/analysis/clean-code-tools.mjs",
+  "scripts/pipeline/lib/analysis/config.mjs",
+  "scripts/pipeline/lib/analysis/fixloop.mjs",
+  "scripts/pipeline/lib/analysis/install.mjs",
+  "scripts/pipeline/lib/analysis/licences.mjs",
+  "scripts/pipeline/lib/analysis/parsers.mjs",
+  "scripts/pipeline/lib/analysis/repeats.mjs",
+  "scripts/pipeline/lib/analysis/report.mjs",
+  "scripts/pipeline/lib/analysis/runner.mjs",
+  "scripts/pipeline/lib/analysis/scanners/github-code-scanning.mjs",
+  "scripts/pipeline/lib/analysis/secret-table.mjs",
+  "scripts/pipeline/lib/ci/azure-pipelines.mjs",
+  "scripts/pipeline/lib/ci/evidence.mjs",
+  "scripts/pipeline/lib/ci/github-actions.mjs",
+  "scripts/pipeline/lib/ci/gitlab-ci.mjs",
+  "scripts/pipeline/lib/clean-code.mjs",
+  "scripts/pipeline/lib/cli.mjs",
+  "scripts/pipeline/lib/config.mjs",
+  "scripts/pipeline/lib/costs.mjs",
+  "scripts/pipeline/lib/council-config.mjs",
+  "scripts/pipeline/lib/council.mjs",
+  "scripts/pipeline/lib/decisions.mjs",
+  "scripts/pipeline/lib/experiment.mjs",
+  "scripts/pipeline/lib/factory-guard.mjs",
+  "scripts/pipeline/lib/findings.mjs",
+  "scripts/pipeline/lib/hosts/azure-devops.mjs",
+  "scripts/pipeline/lib/hosts/bitbucket.mjs",
+  "scripts/pipeline/lib/hosts/github.mjs",
+  "scripts/pipeline/lib/hosts/gitlab.mjs",
+  "scripts/pipeline/lib/instruction-check.mjs",
+  "scripts/pipeline/lib/orchestrator.mjs",
+  "scripts/pipeline/lib/products.mjs",
+  "scripts/pipeline/lib/redact.mjs",
+  "scripts/pipeline/lib/scorecard.mjs",
+  "scripts/pipeline/lib/search-calls.mjs",
+  "scripts/pipeline/lib/selection.mjs",
+  "scripts/pipeline/lib/settings.mjs",
+  "scripts/pipeline/lib/sink.mjs",
+  "scripts/pipeline/lib/state.mjs",
+  "scripts/pipeline/lib/story-guard.mjs",
+  "scripts/pipeline/lib/usage.mjs",
+  "scripts/pipeline/lib/util.mjs",
+  "scripts/pipeline/lib/writer-rules.mjs",
+  "scripts/pipeline/pipeline.mjs",
+  "scripts/pipeline/settings.json",
+  "scripts/pipeline/test/agent-includes.test.mjs",
+  "scripts/pipeline/test/analysis.test.mjs",
+  "scripts/pipeline/test/clean-code-seat.test.mjs",
+  "scripts/pipeline/test/clean-code-tools.test.mjs",
+  "scripts/pipeline/test/clean-code.test.mjs",
+  "scripts/pipeline/test/council-every-stage.test.mjs",
+  "scripts/pipeline/test/council-intercom.test.mjs",
+  "scripts/pipeline/test/council-pool.test.mjs",
+  "scripts/pipeline/test/council-stages.test.mjs",
+  "scripts/pipeline/test/council.test.mjs",
+  "scripts/pipeline/test/e2e.test.mjs",
+  "scripts/pipeline/test/findings.test.mjs",
+  "scripts/pipeline/test/fixtures/clean-code-seat.mjs",
+  "scripts/pipeline/test/fixtures/fake-agent.mjs",
+  "scripts/pipeline/test/fixtures/real-agent.fixture.mjs",
+  "scripts/pipeline/test/gate-repo.mjs",
+  "scripts/pipeline/test/hosts.test.mjs",
+  "scripts/pipeline/test/repeats.test.mjs",
+  "scripts/pipeline/test/run.mjs",
+  "scripts/pipeline/test/selection.test.mjs",
+  "scripts/pipeline/test/settings-renames.test.mjs",
+  "scripts/pipeline/test/temp-preload.mjs",
+  "scripts/pipeline/test/test-temp.test.mjs",
+  "scripts/pipeline/test/writer-rules.test.mjs",
+  "scripts/pr-check/lib/decision-body.mjs",
+  "scripts/pr-check/lib/github.mjs",
+  "scripts/pr-check/lib/hooks.mjs",
+  "scripts/pr-check/lib/loop.mjs",
+  "scripts/pr-check/lib/pr-notes.mjs",
+  "scripts/pr-check/lib/video.mjs",
+  "scripts/pr-check/pr-check.mjs",
+  "scripts/pr-check/settings.json",
+  "scripts/pr-check/test/pr-check-council.test.mjs",
+  "scripts/pr-check/test/pr-check.test.mjs",
+  "scripts/pr-video/lib/api-evidence.mjs",
+  "scripts/pr-video/lib/api-summary.mjs",
+  "scripts/pr-video/lib/local.mjs",
+  "scripts/pr-video/lib/pr-video.mjs",
+  "scripts/pr-video/lib/tools.mjs",
+  "scripts/pr-video/test/render.test.mjs",
+  "scripts/retro/lib/digest.mjs",
+  "scripts/retro/lib/lessons.mjs",
+  "scripts/retro/retro.mjs",
+  "scripts/retro/test/lessons.test.mjs",
+  "scripts/review-gate/lib/assess.mjs",
+  "scripts/review-gate/lib/assessment.mjs",
+  "scripts/review-gate/lib/gate.mjs",
+  "scripts/review-gate/lib/github.mjs",
+  "scripts/review-gate/lib/sync.mjs",
+  "scripts/review-gate/test/helpers.mjs",
+  "scripts/review/lib/review.mjs",
+  "scripts/review/settings.json",
+  "skills/clean-code/SKILL.md",
+  "skills/clean-code/writer-rules.json",
+  "skills/onboard-codebase/SKILL.md"
+ ],
+ "rows": [
+  {
+   "file": "packs/dotnet/pr-video/aspnet-minimal-api.mjs",
+   "name": "statementEnd",
+   "base": {
+    "ccn": 18,
+    "length": 15
+   },
+   "head": {
+    "ccn": 18,
+    "length": 15
+   }
+  },
+  {
+   "file": "packs/dotnet/stack/aspire-publish.mjs",
+   "name": "transform",
+   "base": {
+    "ccn": 44,
+    "length": 76
+   },
+   "head": {
+    "ccn": 44,
+    "length": 76
+   }
+  },
+  {
+   "file": "scripts/board/lib/escalation.mjs",
+   "name": "renderEscalationComment",
+   "base": {
+    "ccn": 30,
+    "length": 28
+   },
+   "head": {
+    "ccn": 30,
+    "length": 28
+   }
+  },
+  {
+   "file": "scripts/board/lib/escalation.mjs",
+   "name": "resolveCheck",
+   "base": {
+    "ccn": 31,
+    "length": 33
+   },
+   "head": {
+    "ccn": 31,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/board/lib/evidence.mjs",
+   "name": "renderEvidence",
+   "base": {
+    "ccn": 17,
+    "length": 28
+   },
+   "head": {
+    "ccn": 17,
+    "length": 28
+   }
+  },
+  {
+   "file": "scripts/board/lib/flow.mjs",
+   "name": "applyEvent",
+   "base": {
+    "ccn": 32,
+    "length": 43
+   },
+   "head": {
+    "ccn": 32,
+    "length": 43
+   }
+  },
+  {
+   "file": "scripts/board/lib/migrate.mjs",
+   "name": "formatPlan",
+   "base": {
+    "ccn": 17,
+    "length": 23
+   },
+   "head": {
+    "ccn": 17,
+    "length": 23
+   }
+  },
+  {
+   "file": "scripts/board/lib/migrate.mjs",
+   "name": "applyMigration",
+   "base": {
+    "ccn": 32,
+    "length": 81
+   },
+   "head": {
+    "ccn": 32,
+    "length": 78
+   }
+  },
+  {
+   "file": "scripts/board/lib/migrate.mjs",
+   "name": "verifyMigration",
+   "base": {
+    "ccn": 32,
+    "length": 74
+   },
+   "head": {
+    "ccn": 32,
+    "length": 74
+   }
+  },
+  {
+   "file": "scripts/board/lib/migrate.mjs",
+   "name": "deleteLocal",
+   "base": {
+    "ccn": 19,
+    "length": 31
+   },
+   "head": {
+    "ccn": 19,
+    "length": 31
+   }
+  },
+  {
+   "file": "scripts/board/lib/outcomes.mjs",
+   "name": "recordLateOutcome",
+   "base": {
+    "ccn": 20,
+    "length": 40
+   },
+   "head": {
+    "ccn": 20,
+    "length": 40
+   }
+  },
+  {
+   "file": "scripts/board/lib/source.mjs",
+   "name": "sourceOfIssue",
+   "base": {
+    "ccn": 17,
+    "length": 24
+   },
+   "head": {
+    "ccn": 17,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/board/lib/source.mjs",
+   "name": "fetchTickets",
+   "base": {
+    "ccn": 39,
+    "length": 68
+   },
+   "head": {
+    "ccn": 39,
+    "length": 68
+   }
+  },
+  {
+   "file": "scripts/board/lib/trackers/gitlab.mjs",
+   "name": "gitlabTracker",
+   "base": {
+    "ccn": 8,
+    "length": 278
+   },
+   "head": {
+    "ccn": 8,
+    "length": 272
+   }
+  },
+  {
+   "file": "scripts/board/lib/trackers/gitlab.mjs",
+   "name": "update",
+   "base": {
+    "ccn": 20,
+    "length": 19
+   },
+   "head": {
+    "ccn": 14,
+    "length": 13
+   }
+  },
+  {
+   "file": "scripts/factory/factory.mjs",
+   "name": "doctor",
+   "base": {
+    "ccn": 101,
+    "length": 184
+   },
+   "head": {
+    "ccn": 101,
+    "length": 184
+   }
+  },
+  {
+   "file": "scripts/factory/factory.mjs",
+   "name": "main",
+   "base": {
+    "ccn": 132,
+    "length": 254
+   },
+   "head": {
+    "ccn": 130,
+    "length": 252
+   }
+  },
+  {
+   "file": "scripts/factory/lib/detect.mjs",
+   "name": "detect",
+   "base": {
+    "ccn": 47,
+    "length": 80
+   },
+   "head": {
+    "ccn": 47,
+    "length": 81
+   }
+  },
+  {
+   "file": "scripts/factory/lib/init.mjs",
+   "name": "draftConfig",
+   "base": {
+    "ccn": 19,
+    "length": 54
+   },
+   "head": {
+    "ccn": 19,
+    "length": 54
+   }
+  },
+  {
+   "file": "scripts/factory/lib/interview.mjs",
+   "name": "interview",
+   "base": {
+    "ccn": 24,
+    "length": 38
+   },
+   "head": {
+    "ccn": 24,
+    "length": 38
+   }
+  },
+  {
+   "file": "scripts/factory/lib/render.mjs",
+   "name": "outputs",
+   "base": {
+    "ccn": 34,
+    "length": 117
+   },
+   "head": {
+    "ccn": 34,
+    "length": 117
+   }
+  },
+  {
+   "file": "scripts/factory/lib/render.mjs",
+   "name": "render",
+   "base": {
+    "ccn": 16,
+    "length": 28
+   },
+   "head": {
+    "ccn": 16,
+    "length": 28
+   }
+  },
+  {
+   "file": "scripts/factory/lib/render.mjs",
+   "name": "check",
+   "base": {
+    "ccn": 17,
+    "length": 19
+   },
+   "head": {
+    "ccn": 17,
+    "length": 19
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/runners.mjs",
+   "name": "sharedFixtureErrors",
+   "base": {
+    "ccn": 17,
+    "length": 34
+   },
+   "head": {
+    "ccn": 17,
+    "length": 34
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/verify.mjs",
+   "name": "normalizeVerdict",
+   "base": {
+    "ccn": 25,
+    "length": 44
+   },
+   "head": {
+    "ccn": 25,
+    "length": 44
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/verify.mjs",
+   "name": "(anonymous) `const gaps = (Array.isArray(raw?.gaps) ? raw.gaps : []).map(`",
+   "base": {
+    "ccn": 16,
+    "length": 13
+   },
+   "head": {
+    "ccn": 16,
+    "length": 13
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/verify.mjs",
+   "name": "councilVerifier",
+   "base": {
+    "ccn": 23,
+    "length": 84
+   },
+   "head": {
+    "ccn": 21,
+    "length": 84
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/verify.mjs",
+   "name": "asGap",
+   "base": {
+    "ccn": 16,
+    "length": 9
+   },
+   "head": {
+    "ccn": 16,
+    "length": 9
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/workflows.mjs",
+   "name": "planLoop",
+   "base": {
+    "ccn": 50,
+    "length": 143
+   },
+   "head": {
+    "ccn": 50,
+    "length": 143
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/workflows.mjs",
+   "name": "precheckAutomation",
+   "base": {
+    "ccn": 66,
+    "length": 172
+   },
+   "head": {
+    "ccn": 63,
+    "length": 169
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/workflows.mjs",
+   "name": "automationLoop",
+   "base": {
+    "ccn": 17,
+    "length": 34
+   },
+   "head": {
+    "ccn": 17,
+    "length": 34
+   }
+  },
+  {
+   "file": "scripts/feature-verification/lib/workflows.mjs",
+   "name": "automationPass",
+   "base": {
+    "ccn": 62,
+    "length": 195
+   },
+   "head": {
+    "ccn": 61,
+    "length": 177
+   }
+  },
+  {
+   "file": "scripts/implement/lib/analysis-gate.mjs",
+   "name": "runAnalysisJobs",
+   "base": {
+    "ccn": 21,
+    "length": 42
+   },
+   "head": {
+    "ccn": 21,
+    "length": 42
+   }
+  },
+  {
+   "file": "scripts/implement/lib/analysis-gate.mjs",
+   "name": "remedyRedBranch",
+   "base": {
+    "ccn": 30,
+    "length": 49
+   },
+   "head": {
+    "ccn": 30,
+    "length": 49
+   }
+  },
+  {
+   "file": "scripts/implement/lib/ci-parity.mjs",
+   "name": "parityGate",
+   "base": {
+    "ccn": 20,
+    "length": 42
+   },
+   "head": {
+    "ccn": 20,
+    "length": 42
+   }
+  },
+  {
+   "file": "scripts/implement/lib/ci-wait.mjs",
+   "name": "ciState",
+   "base": {
+    "ccn": 20,
+    "length": 18
+   },
+   "head": {
+    "ccn": 20,
+    "length": 18
+   }
+  },
+  {
+   "file": "scripts/implement/lib/ci-wait.mjs",
+   "name": "waitForCi",
+   "base": {
+    "ccn": 33,
+    "length": 41
+   },
+   "head": {
+    "ccn": 33,
+    "length": 41
+   }
+  },
+  {
+   "file": "scripts/implement/lib/ci-wait.mjs",
+   "name": "ciGate",
+   "base": {
+    "ccn": 47,
+    "length": 43
+   },
+   "head": {
+    "ccn": 47,
+    "length": 43
+   }
+  },
+  {
+   "file": "scripts/implement/lib/ci-wait.mjs",
+   "name": "deliveryDecision",
+   "base": {
+    "ccn": 21,
+    "length": 17
+   },
+   "head": {
+    "ccn": 21,
+    "length": 17
+   }
+  },
+  {
+   "file": "scripts/implement/lib/ci-wait.mjs",
+   "name": "(anonymous) `return async (target, repo, _label, { timeoutSec = WAIT.time`",
+   "base": {
+    "ccn": 26,
+    "length": 30
+   },
+   "head": {
+    "ccn": 26,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/implement/lib/decisions.mjs",
+   "name": "decisionRecord",
+   "base": {
+    "ccn": 25,
+    "length": 23
+   },
+   "head": {
+    "ccn": 25,
+    "length": 23
+   }
+  },
+  {
+   "file": "scripts/implement/lib/decisions.mjs",
+   "name": "subtaskRunRecord",
+   "base": {
+    "ccn": 28,
+    "length": 30
+   },
+   "head": {
+    "ccn": 28,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/implement/lib/decisions.mjs",
+   "name": "labelDecisions",
+   "base": {
+    "ccn": 49,
+    "length": 51
+   },
+   "head": {
+    "ccn": 49,
+    "length": 51
+   }
+  },
+  {
+   "file": "scripts/implement/lib/decisions.mjs",
+   "name": "prCheckDesignFindings",
+   "base": {
+    "ccn": 17,
+    "length": 17
+   },
+   "head": {
+    "ccn": 17,
+    "length": 17
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "epicToJoin",
+   "base": {
+    "ccn": 19,
+    "length": 12
+   },
+   "head": {
+    "ccn": 19,
+    "length": 12
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "prepareUnitWorktree",
+   "base": {
+    "ccn": 16,
+    "length": 32
+   },
+   "head": {
+    "ccn": 16,
+    "length": 32
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "planEpicOnce",
+   "base": {
+    "ccn": 24,
+    "length": 40
+   },
+   "head": {
+    "ccn": 24,
+    "length": 41
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "openPr",
+   "base": {
+    "ccn": 21,
+    "length": 19
+   },
+   "head": {
+    "ccn": 21,
+    "length": 19
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "runEpic",
+   "base": {
+    "ccn": 19,
+    "length": 39
+   },
+   "head": {
+    "ccn": 19,
+    "length": 39
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "epicFlow",
+   "base": {
+    "ccn": 98,
+    "length": 207
+   },
+   "head": {
+    "ccn": 98,
+    "length": 207
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "deliverUnit",
+   "base": {
+    "ccn": 162,
+    "length": 294
+   },
+   "head": {
+    "ccn": 162,
+    "length": 294
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "runUnitStories",
+   "base": {
+    "ccn": 23,
+    "length": 86
+   },
+   "head": {
+    "ccn": 23,
+    "length": 86
+   }
+  },
+  {
+   "file": "scripts/implement/lib/epic.mjs",
+   "name": "formatEpicStatus",
+   "base": {
+    "ccn": 19,
+    "length": 13
+   },
+   "head": {
+    "ccn": 19,
+    "length": 13
+   }
+  },
+  {
+   "file": "scripts/implement/lib/gitops.mjs",
+   "name": "formattingOnlyHunks",
+   "base": {
+    "ccn": 16,
+    "length": 27
+   },
+   "head": {
+    "ccn": 16,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "startResolvedReruns",
+   "base": {
+    "ccn": 17,
+    "length": 30
+   },
+   "head": {
+    "ccn": 17,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "plan",
+   "base": {
+    "ccn": 72,
+    "length": 93
+   },
+   "head": {
+    "ccn": 72,
+    "length": 93
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "runBatch",
+   "base": {
+    "ccn": 29,
+    "length": 55
+   },
+   "head": {
+    "ccn": 29,
+    "length": 55
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "startWorker",
+   "base": {
+    "ccn": 27,
+    "length": 58
+   },
+   "head": {
+    "ccn": 27,
+    "length": 58
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "prepareWorktree",
+   "base": {
+    "ccn": 34,
+    "length": 76
+   },
+   "head": {
+    "ccn": 34,
+    "length": 76
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "recoverDeadRun",
+   "base": {
+    "ccn": 26,
+    "length": 29
+   },
+   "head": {
+    "ccn": 26,
+    "length": 29
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "implementStoryInner",
+   "base": {
+    "ccn": 278,
+    "length": 594
+   },
+   "head": {
+    "ccn": 278,
+    "length": 594
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "deliverFinished",
+   "base": {
+    "ccn": 107,
+    "length": 203
+   },
+   "head": {
+    "ccn": 107,
+    "length": 203
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "publishRatingOrHold",
+   "base": {
+    "ccn": 28,
+    "length": 34
+   },
+   "head": {
+    "ccn": 28,
+    "length": 34
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "afterOpen",
+   "base": {
+    "ccn": 68,
+    "length": 139
+   },
+   "head": {
+    "ccn": 68,
+    "length": 139
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "waitForHookPrCheck",
+   "base": {
+    "ccn": 33,
+    "length": 38
+   },
+   "head": {
+    "ccn": 33,
+    "length": 38
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "prCheckHold",
+   "base": {
+    "ccn": 17,
+    "length": 7
+   },
+   "head": {
+    "ccn": 17,
+    "length": 7
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "prCheckFollowUps",
+   "base": {
+    "ccn": 18,
+    "length": 12
+   },
+   "head": {
+    "ccn": 18,
+    "length": 12
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "runConditionsSection",
+   "base": {
+    "ccn": 21,
+    "length": 21
+   },
+   "head": {
+    "ccn": 21,
+    "length": 21
+   }
+  },
+  {
+   "file": "scripts/implement/lib/implement.mjs",
+   "name": "fixBeforePr",
+   "base": {
+    "ccn": 27,
+    "length": 29
+   },
+   "head": {
+    "ccn": 27,
+    "length": 29
+   }
+  },
+  {
+   "file": "scripts/implement/lib/lsp.mjs",
+   "name": "lspAdapter",
+   "base": {
+    "ccn": 7,
+    "length": 129
+   },
+   "head": {
+    "ccn": 7,
+    "length": 129
+   }
+  },
+  {
+   "file": "scripts/implement/lib/lsp.mjs",
+   "name": "start",
+   "base": {
+    "ccn": 24,
+    "length": 39
+   },
+   "head": {
+    "ccn": 24,
+    "length": 39
+   }
+  },
+  {
+   "file": "scripts/implement/lib/lsp.mjs",
+   "name": "diagnostics",
+   "base": {
+    "ccn": 17,
+    "length": 20
+   },
+   "head": {
+    "ccn": 17,
+    "length": 20
+   }
+  },
+  {
+   "file": "scripts/implement/lib/mockups.mjs",
+   "name": "dcVariants",
+   "base": {
+    "ccn": 19,
+    "length": 11
+   },
+   "head": {
+    "ccn": 19,
+    "length": 11
+   }
+  },
+  {
+   "file": "scripts/implement/lib/mockups.mjs",
+   "name": "dcRuntime",
+   "base": {
+    "ccn": 1,
+    "length": 102
+   },
+   "head": {
+    "ccn": 1,
+    "length": 102
+   }
+  },
+  {
+   "file": "scripts/implement/lib/mockups.mjs",
+   "name": "walkNode",
+   "base": {
+    "ccn": 23,
+    "length": 41
+   },
+   "head": {
+    "ccn": 23,
+    "length": 41
+   }
+  },
+  {
+   "file": "scripts/implement/lib/mockups.mjs",
+   "name": "render",
+   "base": {
+    "ccn": 16,
+    "length": 37
+   },
+   "head": {
+    "ccn": 16,
+    "length": 37
+   }
+  },
+  {
+   "file": "scripts/implement/lib/mockups.mjs",
+   "name": "renderScreens",
+   "base": {
+    "ccn": 17,
+    "length": 58
+   },
+   "head": {
+    "ccn": 17,
+    "length": 58
+   }
+  },
+  {
+   "file": "scripts/implement/lib/orchestrate.mjs",
+   "name": "callAgent",
+   "base": {
+    "ccn": 25,
+    "length": 30
+   },
+   "head": {
+    "ccn": 25,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/implement/lib/orchestrate.mjs",
+   "name": "planStory",
+   "base": {
+    "ccn": 22,
+    "length": 57
+   },
+   "head": {
+    "ccn": 22,
+    "length": 62
+   }
+  },
+  {
+   "file": "scripts/implement/lib/orchestrate.mjs",
+   "name": "verifyUi",
+   "base": {
+    "ccn": 18,
+    "length": 50
+   },
+   "head": {
+    "ccn": 18,
+    "length": 50
+   }
+  },
+  {
+   "file": "scripts/implement/lib/orchestrate.mjs",
+   "name": "pairLoop",
+   "base": {
+    "ccn": 64,
+    "length": 216
+   },
+   "head": {
+    "ccn": 60,
+    "length": 205
+   }
+  },
+  {
+   "file": "scripts/implement/lib/orchestrate.mjs",
+   "name": "runSubtask",
+   "base": {
+    "ccn": 19,
+    "length": 60
+   },
+   "head": {
+    "ccn": 19,
+    "length": 60
+   }
+  },
+  {
+   "file": "scripts/implement/lib/orchestrate.mjs",
+   "name": "runDelegated",
+   "base": {
+    "ccn": 32,
+    "length": 76
+   },
+   "head": {
+    "ccn": 32,
+    "length": 76
+   }
+  },
+  {
+   "file": "scripts/implement/lib/plan.mjs",
+   "name": "parseVerdict",
+   "base": {
+    "ccn": 20,
+    "length": 15
+   },
+   "head": {
+    "ccn": 20,
+    "length": 15
+   }
+  },
+  {
+   "file": "scripts/implement/lib/plan.mjs",
+   "name": "(anonymous) `.map((f, i) => {`",
+   "base": {
+    "ccn": 17,
+    "length": 9
+   },
+   "head": {
+    "ccn": 17,
+    "length": 9
+   }
+  },
+  {
+   "file": "scripts/implement/lib/plan.mjs",
+   "name": "intersects",
+   "base": {
+    "ccn": 20,
+    "length": 25
+   },
+   "head": {
+    "ccn": 20,
+    "length": 25
+   }
+  },
+  {
+   "file": "scripts/implement/lib/plan.mjs",
+   "name": "validatePlan",
+   "base": {
+    "ccn": 43,
+    "length": 91
+   },
+   "head": {
+    "ccn": 43,
+    "length": 94
+   }
+  },
+  {
+   "file": "scripts/implement/lib/plan.mjs",
+   "name": "(anonymous) `subtasks.forEach((s, i) => {`",
+   "base": {
+    "ccn": 40,
+    "length": 37
+   },
+   "head": {
+    "ccn": 40,
+    "length": 39
+   }
+  },
+  {
+   "file": "scripts/implement/lib/plan.mjs",
+   "name": "decisionFields",
+   "base": {
+    "ccn": 18,
+    "length": 17
+   },
+   "head": {
+    "ccn": 18,
+    "length": 17
+   }
+  },
+  {
+   "file": "scripts/implement/lib/pr-check-return.mjs",
+   "name": "routeFinding",
+   "base": {
+    "ccn": 25,
+    "length": 25
+   },
+   "head": {
+    "ccn": 25,
+    "length": 25
+   }
+  },
+  {
+   "file": "scripts/implement/lib/pr-check-return.mjs",
+   "name": "unaddressed",
+   "base": {
+    "ccn": 20,
+    "length": 25
+   },
+   "head": {
+    "ccn": 20,
+    "length": 25
+   }
+  },
+  {
+   "file": "scripts/implement/lib/pre-open.mjs",
+   "name": "confirmPrState",
+   "base": {
+    "ccn": 23,
+    "length": 24
+   },
+   "head": {
+    "ccn": 23,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/implement/lib/pre-open.mjs",
+   "name": "holdPr",
+   "base": {
+    "ccn": 23,
+    "length": 38
+   },
+   "head": {
+    "ccn": 23,
+    "length": 38
+   }
+  },
+  {
+   "file": "scripts/implement/lib/pre-open.mjs",
+   "name": "agentRunsAfterReady",
+   "base": {
+    "ccn": 18,
+    "length": 18
+   },
+   "head": {
+    "ccn": 18,
+    "length": 18
+   }
+  },
+  {
+   "file": "scripts/lsp/lib/common.mjs",
+   "name": "loadConfig",
+   "base": {
+    "ccn": 17,
+    "length": 20
+   },
+   "head": {
+    "ccn": 17,
+    "length": 20
+   }
+  },
+  {
+   "file": "scripts/lsp/lib/common.mjs",
+   "name": "acquireLease",
+   "base": {
+    "ccn": 21,
+    "length": 30
+   },
+   "head": {
+    "ccn": 21,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/models/lib/models.mjs",
+   "name": "discoverModels",
+   "base": {
+    "ccn": 17,
+    "length": 30
+   },
+   "head": {
+    "ccn": 17,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/models/lib/models.mjs",
+   "name": "checkConfigs",
+   "base": {
+    "ccn": 21,
+    "length": 49
+   },
+   "head": {
+    "ccn": 21,
+    "length": 49
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/agents.mjs",
+   "name": "cliInvocation",
+   "base": {
+    "ccn": 42,
+    "length": 98
+   },
+   "head": {
+    "ccn": 41,
+    "length": 98
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/agents.mjs",
+   "name": "finishRun",
+   "base": {
+    "ccn": 22,
+    "length": 63
+   },
+   "head": {
+    "ccn": 22,
+    "length": 63
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/agents.mjs",
+   "name": "prepare",
+   "base": {
+    "ccn": 16,
+    "length": 27
+   },
+   "head": {
+    "ccn": 16,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/agents.mjs",
+   "name": "runAgent",
+   "base": {
+    "ccn": 22,
+    "length": 19
+   },
+   "head": {
+    "ccn": 22,
+    "length": 19
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/agents.mjs",
+   "name": "runAgentAsync",
+   "base": {
+    "ccn": 20,
+    "length": 62
+   },
+   "head": {
+    "ccn": 20,
+    "length": 62
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "packAnalysis",
+   "base": {
+    "ccn": 24,
+    "length": 22
+   },
+   "head": {
+    "ccn": 24,
+    "length": 22
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "resolveAnalysis",
+   "base": {
+    "ccn": 55,
+    "length": 81
+   },
+   "head": {
+    "ccn": 55,
+    "length": 81
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "normalizeTool",
+   "base": {
+    "ccn": 41,
+    "length": 45
+   },
+   "head": {
+    "ccn": 41,
+    "length": 45
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "(anonymous) `return (Array.isArray(c) ? c : [c]).filter((e) => isObject(e`",
+   "base": {
+    "ccn": 16,
+    "length": 15
+   },
+   "head": {
+    "ccn": 16,
+    "length": 15
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "analysisProblems",
+   "base": {
+    "ccn": 141,
+    "length": 124
+   },
+   "head": {
+    "ccn": 141,
+    "length": 124
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "(anonymous) `list.forEach((r, i) => {`",
+   "base": {
+    "ccn": 19,
+    "length": 9
+   },
+   "head": {
+    "ccn": 19,
+    "length": 9
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "(anonymous) `list.forEach((e, i) => {`",
+   "base": {
+    "ccn": 29,
+    "length": 18
+   },
+   "head": {
+    "ccn": 29,
+    "length": 18
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/config.mjs",
+   "name": "installProblems",
+   "base": {
+    "ccn": 20,
+    "length": 14
+   },
+   "head": {
+    "ccn": 20,
+    "length": 14
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/fixloop.mjs",
+   "name": "fixLoop",
+   "base": {
+    "ccn": 20,
+    "length": 33
+   },
+   "head": {
+    "ccn": 20,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/fixloop.mjs",
+   "name": "prAnalysisSection",
+   "base": {
+    "ccn": 26,
+    "length": 43
+   },
+   "head": {
+    "ccn": 26,
+    "length": 43
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/licences.mjs",
+   "name": "check",
+   "base": {
+    "ccn": 22,
+    "length": 22
+   },
+   "head": {
+    "ccn": 22,
+    "length": 22
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/parsers.mjs",
+   "name": "parseSarif",
+   "base": {
+    "ccn": 30,
+    "length": 37
+   },
+   "head": {
+    "ccn": 30,
+    "length": 37
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/parsers.mjs",
+   "name": "parseOsvJson",
+   "base": {
+    "ccn": 25,
+    "length": 19
+   },
+   "head": {
+    "ccn": 25,
+    "length": 19
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/report.mjs",
+   "name": "evidenceText",
+   "base": {
+    "ccn": 20,
+    "length": 26
+   },
+   "head": {
+    "ccn": 20,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/report.mjs",
+   "name": "staticAnalysisSection",
+   "base": {
+    "ccn": 54,
+    "length": 49
+   },
+   "head": {
+    "ccn": 54,
+    "length": 49
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/runner.mjs",
+   "name": "runTool",
+   "base": {
+    "ccn": 60,
+    "length": 63
+   },
+   "head": {
+    "ccn": 60,
+    "length": 63
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/runner.mjs",
+   "name": "runPrecheck",
+   "base": {
+    "ccn": 18,
+    "length": 28
+   },
+   "head": {
+    "ccn": 18,
+    "length": 28
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/runner.mjs",
+   "name": "runSlot",
+   "base": {
+    "ccn": 41,
+    "length": 84
+   },
+   "head": {
+    "ccn": 41,
+    "length": 86
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/analysis/scanners/github-code-scanning.mjs",
+   "name": "result",
+   "base": {
+    "ccn": 32,
+    "length": 21
+   },
+   "head": {
+    "ccn": 32,
+    "length": 21
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/ci/evidence.mjs",
+   "name": "evaluateRuns",
+   "base": {
+    "ccn": 27,
+    "length": 31
+   },
+   "head": {
+    "ccn": 27,
+    "length": 31
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/ci/evidence.mjs",
+   "name": "headPipelines",
+   "base": {
+    "ccn": 24,
+    "length": 46
+   },
+   "head": {
+    "ccn": 22,
+    "length": 44
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/ci/github-actions.mjs",
+   "name": "workflowApplies",
+   "base": {
+    "ccn": 25,
+    "length": 24
+   },
+   "head": {
+    "ccn": 25,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/ci/github-actions.mjs",
+   "name": "expectedWorkflows",
+   "base": {
+    "ccn": 18,
+    "length": 21
+   },
+   "head": {
+    "ccn": 18,
+    "length": 21
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/ci/github-actions.mjs",
+   "name": "defaultRequiredChecks",
+   "base": {
+    "ccn": 31,
+    "length": 34
+   },
+   "head": {
+    "ccn": 26,
+    "length": 20
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/ci/github-actions.mjs",
+   "name": "providedChecks",
+   "base": {
+    "ccn": 17,
+    "length": 28
+   },
+   "head": {
+    "ccn": 15,
+    "length": 17
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/ci/github-actions.mjs",
+   "name": "uncoveredChecks",
+   "base": {
+    "ccn": 26,
+    "length": 42
+   },
+   "head": {
+    "ccn": 21,
+    "length": 28
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/config.mjs",
+   "name": "appSettingsProblems",
+   "base": {
+    "ccn": 34,
+    "length": 37
+   },
+   "head": {
+    "ccn": 34,
+    "length": 37
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/config.mjs",
+   "name": "loadConfig",
+   "base": {
+    "ccn": 20,
+    "length": 45
+   },
+   "head": {
+    "ccn": 20,
+    "length": 45
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/costs.mjs",
+   "name": "summarize",
+   "base": {
+    "ccn": 19,
+    "length": 69
+   },
+   "head": {
+    "ccn": 19,
+    "length": 69
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council-config.mjs",
+   "name": "intercomProblems",
+   "base": {
+    "ccn": 39,
+    "length": 35
+   },
+   "head": {
+    "ccn": 39,
+    "length": 35
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "memberTask",
+   "base": {
+    "ccn": 17,
+    "length": 42
+   },
+   "head": {
+    "ccn": 11,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "runCouncil",
+   "base": {
+    "ccn": 17,
+    "length": 54
+   },
+   "head": {
+    "ccn": 17,
+    "length": 55
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "sameDefect",
+   "base": {
+    "ccn": 20,
+    "length": 14
+   },
+   "head": {
+    "ccn": 20,
+    "length": 14
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "hasEvidence",
+   "base": {
+    "ccn": 23,
+    "length": 24
+   },
+   "head": {
+    "ccn": 23,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "mergeCouncil",
+   "base": {
+    "ccn": 96,
+    "length": 266
+   },
+   "head": {
+    "ccn": 96,
+    "length": 250
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "(anonymous) `const merged = clusters.map((c) => {`",
+   "base": {
+    "ccn": 50,
+    "length": 98
+   },
+   "head": {
+    "ccn": 50,
+    "length": 100
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "adjudicate",
+   "base": {
+    "ccn": 24,
+    "length": 22
+   },
+   "head": {
+    "ccn": 24,
+    "length": 22
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "sealFixes",
+   "base": {
+    "ccn": 27,
+    "length": 41
+   },
+   "head": {
+    "ccn": 27,
+    "length": 41
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "councilMemory",
+   "base": {
+    "ccn": 24,
+    "length": 76
+   },
+   "head": {
+    "ccn": 24,
+    "length": 76
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "recordCouncilRound",
+   "base": {
+    "ccn": 30,
+    "length": 52
+   },
+   "head": {
+    "ccn": 30,
+    "length": 55
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "councilReviewSection",
+   "base": {
+    "ccn": 36,
+    "length": 57
+   },
+   "head": {
+    "ccn": 36,
+    "length": 57
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "councilDoctorRows",
+   "base": {
+    "ccn": 27,
+    "length": 35
+   },
+   "head": {
+    "ccn": 27,
+    "length": 35
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/council.mjs",
+   "name": "guardProtectedTests",
+   "base": {
+    "ccn": 18,
+    "length": 27
+   },
+   "head": {
+    "ccn": 18,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/decisions.mjs",
+   "name": "(anonymous) `return (Array.isArray(bugs) ? bugs : []).map((bug) => {`",
+   "base": {
+    "ccn": 16,
+    "length": 9
+   },
+   "head": {
+    "ccn": 16,
+    "length": 9
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/experiment.mjs",
+   "name": "runExperiment",
+   "base": {
+    "ccn": 20,
+    "length": 35
+   },
+   "head": {
+    "ccn": 20,
+    "length": 35
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/experiment.mjs",
+   "name": "summarizeArm",
+   "base": {
+    "ccn": 20,
+    "length": 36
+   },
+   "head": {
+    "ccn": 20,
+    "length": 36
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/factory-guard.mjs",
+   "name": "shellSegments",
+   "base": {
+    "ccn": 19,
+    "length": 29
+   },
+   "head": {
+    "ccn": 19,
+    "length": 29
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/factory-guard.mjs",
+   "name": "inlineWriteTargets",
+   "base": {
+    "ccn": 19,
+    "length": 28
+   },
+   "head": {
+    "ccn": 19,
+    "length": 28
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/factory-guard.mjs",
+   "name": "shellWriteTargets",
+   "base": {
+    "ccn": 65,
+    "length": 90
+   },
+   "head": {
+    "ccn": 65,
+    "length": 90
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/factory-guard.mjs",
+   "name": "enforceProtected",
+   "base": {
+    "ccn": 19,
+    "length": 52
+   },
+   "head": {
+    "ccn": 19,
+    "length": 52
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/factory-guard.mjs",
+   "name": "factoryGuard",
+   "base": {
+    "ccn": 36,
+    "length": 57
+   },
+   "head": {
+    "ccn": 36,
+    "length": 57
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/findings.mjs",
+   "name": "recordRoundFindings",
+   "base": {
+    "ccn": 18,
+    "length": 33
+   },
+   "head": {
+    "ccn": 18,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/findings.mjs",
+   "name": "(anonymous) `all.forEach(({ f }, i) => {`",
+   "base": {
+    "ccn": 16,
+    "length": 8
+   },
+   "head": {
+    "ccn": 16,
+    "length": 8
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/findings.mjs",
+   "name": "recordPrCheckRound",
+   "base": {
+    "ccn": 22,
+    "length": 14
+   },
+   "head": {
+    "ccn": 22,
+    "length": 14
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/findings.mjs",
+   "name": "recordMisses",
+   "base": {
+    "ccn": 26,
+    "length": 13
+   },
+   "head": {
+    "ccn": 26,
+    "length": 13
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/azure-devops.mjs",
+   "name": "createAzureDevopsHost",
+   "base": {
+    "ccn": 12,
+    "length": 293
+   },
+   "head": {
+    "ccn": 12,
+    "length": 292
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/azure-devops.mjs",
+   "name": "normalize",
+   "base": {
+    "ccn": 16,
+    "length": 24
+   },
+   "head": {
+    "ccn": 16,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/azure-devops.mjs",
+   "name": "mergeState",
+   "base": {
+    "ccn": 17,
+    "length": 12
+   },
+   "head": {
+    "ccn": 17,
+    "length": 12
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/bitbucket.mjs",
+   "name": "normalizePr",
+   "base": {
+    "ccn": 21,
+    "length": 27
+   },
+   "head": {
+    "ccn": 21,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/bitbucket.mjs",
+   "name": "createBitbucketHost",
+   "base": {
+    "ccn": 12,
+    "length": 260
+   },
+   "head": {
+    "ccn": 12,
+    "length": 260
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/github.mjs",
+   "name": "normalizePr",
+   "base": {
+    "ccn": 24,
+    "length": 27
+   },
+   "head": {
+    "ccn": 24,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/github.mjs",
+   "name": "createGithubHost",
+   "base": {
+    "ccn": 17,
+    "length": 347
+   },
+   "head": {
+    "ccn": 17,
+    "length": 347
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/github.mjs",
+   "name": "fail",
+   "base": {
+    "ccn": 18,
+    "length": 15
+   },
+   "head": {
+    "ccn": 18,
+    "length": 15
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/github.mjs",
+   "name": "update",
+   "base": {
+    "ccn": 17,
+    "length": 18
+   },
+   "head": {
+    "ccn": 17,
+    "length": 18
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/github.mjs",
+   "name": "enforceReviewGate",
+   "base": {
+    "ccn": 19,
+    "length": 23
+   },
+   "head": {
+    "ccn": 19,
+    "length": 23
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/gitlab.mjs",
+   "name": "normalizeMr",
+   "base": {
+    "ccn": 28,
+    "length": 26
+   },
+   "head": {
+    "ccn": 28,
+    "length": 26
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/gitlab.mjs",
+   "name": "createGitlabHost",
+   "base": {
+    "ccn": 8,
+    "length": 314
+   },
+   "head": {
+    "ccn": 8,
+    "length": 308
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/gitlab.mjs",
+   "name": "reviews",
+   "base": {
+    "ccn": 27,
+    "length": 22
+   },
+   "head": {
+    "ccn": 27,
+    "length": 22
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/hosts/gitlab.mjs",
+   "name": "enforceReviewGate",
+   "base": {
+    "ccn": 21,
+    "length": 23
+   },
+   "head": {
+    "ccn": 21,
+    "length": 23
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/instruction-check.mjs",
+   "name": "textProblems",
+   "base": {
+    "ccn": 38,
+    "length": 46
+   },
+   "head": {
+    "ccn": 38,
+    "length": 46
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/instruction-check.mjs",
+   "name": "policyTextProblems",
+   "base": {
+    "ccn": 17,
+    "length": 37
+   },
+   "head": {
+    "ccn": 17,
+    "length": 37
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/orchestrator.mjs",
+   "name": "decide",
+   "base": {
+    "ccn": 16,
+    "length": 28
+   },
+   "head": {
+    "ccn": 12,
+    "length": 9
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/products.mjs",
+   "name": "detectHost",
+   "base": {
+    "ccn": 47,
+    "length": 47
+   },
+   "head": {
+    "ccn": 47,
+    "length": 47
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/products.mjs",
+   "name": "resolveProducts",
+   "base": {
+    "ccn": 34,
+    "length": 13
+   },
+   "head": {
+    "ccn": 34,
+    "length": 13
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/scorecard.mjs",
+   "name": "computeScorecard",
+   "base": {
+    "ccn": 42,
+    "length": 96
+   },
+   "head": {
+    "ccn": 42,
+    "length": 96
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/selection.mjs",
+   "name": "pickProblems",
+   "base": {
+    "ccn": 26,
+    "length": 31
+   },
+   "head": {
+    "ccn": 26,
+    "length": 31
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/selection.mjs",
+   "name": "harnessPick",
+   "base": {
+    "ccn": 26,
+    "length": 57
+   },
+   "head": {
+    "ccn": 26,
+    "length": 57
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/selection.mjs",
+   "name": "selectCouncil",
+   "base": {
+    "ccn": 23,
+    "length": 96
+   },
+   "head": {
+    "ccn": 20,
+    "length": 83
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "allowedText",
+   "base": {
+    "ccn": 26,
+    "length": 27
+   },
+   "head": {
+    "ccn": 26,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "valueOk",
+   "base": {
+    "ccn": 25,
+    "length": 27
+   },
+   "head": {
+    "ccn": 25,
+    "length": 27
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "walk",
+   "base": {
+    "ccn": 24,
+    "length": 25
+   },
+   "head": {
+    "ccn": 24,
+    "length": 25
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "settingCalls",
+   "base": {
+    "ccn": 17,
+    "length": 30
+   },
+   "head": {
+    "ccn": 17,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "codeReads",
+   "base": {
+    "ccn": 54,
+    "length": 124
+   },
+   "head": {
+    "ccn": 53,
+    "length": 121
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "(anonymous) `parts.forEach((arg, i) => {`",
+   "base": {
+    "ccn": 16,
+    "length": 13
+   },
+   "head": {
+    "ccn": 16,
+    "length": 13
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "fallbackLiterals",
+   "base": {
+    "ccn": 60,
+    "length": 102
+   },
+   "head": {
+    "ccn": 59,
+    "length": 99
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/settings.mjs",
+   "name": "settingsCheck",
+   "base": {
+    "ccn": 44,
+    "length": 108
+   },
+   "head": {
+    "ccn": 44,
+    "length": 108
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/story-guard.mjs",
+   "name": "touchedPaths",
+   "base": {
+    "ccn": 16,
+    "length": 15
+   },
+   "head": {
+    "ccn": 16,
+    "length": 15
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/story-guard.mjs",
+   "name": "installGuard",
+   "base": {
+    "ccn": 25,
+    "length": 61
+   },
+   "head": {
+    "ccn": 25,
+    "length": 61
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/story-guard.mjs",
+   "name": "networkGuard",
+   "base": {
+    "ccn": 45,
+    "length": 55
+   },
+   "head": {
+    "ccn": 45,
+    "length": 55
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/story-guard.mjs",
+   "name": "ticketWriteGuard",
+   "base": {
+    "ccn": 20,
+    "length": 20
+   },
+   "head": {
+    "ccn": 20,
+    "length": 20
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/story-guard.mjs",
+   "name": "foreignTestGuard",
+   "base": {
+    "ccn": 22,
+    "length": 33
+   },
+   "head": {
+    "ccn": 22,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/story-guard.mjs",
+   "name": "stackGuard",
+   "base": {
+    "ccn": 17,
+    "length": 10
+   },
+   "head": {
+    "ccn": 17,
+    "length": 10
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/usage.mjs",
+   "name": "usageRecords",
+   "base": {
+    "ccn": 27,
+    "length": 60
+   },
+   "head": {
+    "ccn": 27,
+    "length": 60
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/util.mjs",
+   "name": "run",
+   "base": {
+    "ccn": 28,
+    "length": 24
+   },
+   "head": {
+    "ccn": 28,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/util.mjs",
+   "name": "runAsync",
+   "base": {
+    "ccn": 21,
+    "length": 16
+   },
+   "head": {
+    "ccn": 21,
+    "length": 16
+   }
+  },
+  {
+   "file": "scripts/pipeline/lib/util.mjs",
+   "name": "stepRecord",
+   "base": {
+    "ccn": 16,
+    "length": 13
+   },
+   "head": {
+    "ccn": 16,
+    "length": 13
+   }
+  },
+  {
+   "file": "scripts/pipeline/pipeline.mjs",
+   "name": "main",
+   "base": {
+    "ccn": 82,
+    "length": 181
+   },
+   "head": {
+    "ccn": 76,
+    "length": 181
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/decision-body.mjs",
+   "name": "withDecision",
+   "base": {
+    "ccn": 16,
+    "length": 23
+   },
+   "head": {
+    "ccn": 16,
+    "length": 23
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/decision-body.mjs",
+   "name": "withCheckVerdict",
+   "base": {
+    "ccn": 17,
+    "length": 24
+   },
+   "head": {
+    "ccn": 17,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "scoreRound",
+   "base": {
+    "ccn": 67,
+    "length": 89
+   },
+   "head": {
+    "ccn": 67,
+    "length": 91
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "decidePass",
+   "base": {
+    "ccn": 24,
+    "length": 23
+   },
+   "head": {
+    "ccn": 24,
+    "length": 25
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "header",
+   "base": {
+    "ccn": 17,
+    "length": 33
+   },
+   "head": {
+    "ccn": 17,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "callAgent",
+   "base": {
+    "ccn": 25,
+    "length": 24
+   },
+   "head": {
+    "ccn": 24,
+    "length": 24
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "fixRound",
+   "base": {
+    "ccn": 21,
+    "length": 64
+   },
+   "head": {
+    "ccn": 18,
+    "length": 56
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "carryOver",
+   "base": {
+    "ccn": 32,
+    "length": 41
+   },
+   "head": {
+    "ccn": 32,
+    "length": 41
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "councilFindings",
+   "base": {
+    "ccn": 33,
+    "length": 81
+   },
+   "head": {
+    "ccn": 31,
+    "length": 81
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "runRound",
+   "base": {
+    "ccn": 44,
+    "length": 104
+   },
+   "head": {
+    "ccn": 44,
+    "length": 104
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "(anonymous) `reviews.forEach((review, i) => {`",
+   "base": {
+    "ccn": 19,
+    "length": 21
+   },
+   "head": {
+    "ccn": 19,
+    "length": 21
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/loop.mjs",
+   "name": "runPrCheck",
+   "base": {
+    "ccn": 82,
+    "length": 192
+   },
+   "head": {
+    "ccn": 72,
+    "length": 185
+   }
+  },
+  {
+   "file": "scripts/pr-check/lib/video.mjs",
+   "name": "videoSources",
+   "base": {
+    "ccn": 16,
+    "length": 36
+   },
+   "head": {
+    "ccn": 16,
+    "length": 36
+   }
+  },
+  {
+   "file": "scripts/pr-check/pr-check.mjs",
+   "name": "executeCheck",
+   "base": {
+    "ccn": 132,
+    "length": 271
+   },
+   "head": {
+    "ccn": 132,
+    "length": 271
+   }
+  },
+  {
+   "file": "scripts/pr-check/pr-check.mjs",
+   "name": "main",
+   "base": {
+    "ccn": 58,
+    "length": 115
+   },
+   "head": {
+    "ccn": 58,
+    "length": 115
+   }
+  },
+  {
+   "file": "scripts/pr-check/pr-check.mjs",
+   "name": "reverifyAfterFixes",
+   "base": {
+    "ccn": 22,
+    "length": 43
+   },
+   "head": {
+    "ccn": 22,
+    "length": 43
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "maskStructured",
+   "base": {
+    "ccn": 40,
+    "length": 173
+   },
+   "head": {
+    "ccn": 37,
+    "length": 165
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "finish",
+   "base": {
+    "ccn": 44,
+    "length": 58
+   },
+   "head": {
+    "ccn": 44,
+    "length": 58
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "maskXml",
+   "base": {
+    "ccn": 79,
+    "length": 123
+   },
+   "head": {
+    "ccn": 79,
+    "length": 123
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "echoMasker",
+   "base": {
+    "ccn": 22,
+    "length": 78
+   },
+   "head": {
+    "ccn": 22,
+    "length": 78
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "cleanExchange",
+   "base": {
+    "ccn": 28,
+    "length": 84
+   },
+   "head": {
+    "ccn": 28,
+    "length": 84
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "verifyApiBefore",
+   "base": {
+    "ccn": 17,
+    "length": 33
+   },
+   "head": {
+    "ccn": 17,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "validateProse",
+   "base": {
+    "ccn": 23,
+    "length": 22
+   },
+   "head": {
+    "ccn": 23,
+    "length": 22
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-evidence.mjs",
+   "name": "writeProse",
+   "base": {
+    "ccn": 23,
+    "length": 38
+   },
+   "head": {
+    "ccn": 23,
+    "length": 38
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-summary.mjs",
+   "name": "changedEndpoints",
+   "base": {
+    "ccn": 23,
+    "length": 25
+   },
+   "head": {
+    "ccn": 23,
+    "length": 25
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-summary.mjs",
+   "name": "renderEndpoint",
+   "base": {
+    "ccn": 19,
+    "length": 21
+   },
+   "head": {
+    "ccn": 19,
+    "length": 21
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/api-summary.mjs",
+   "name": "renderApiSection",
+   "base": {
+    "ccn": 20,
+    "length": 37
+   },
+   "head": {
+    "ccn": 20,
+    "length": 37
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/local.mjs",
+   "name": "renderRecorded",
+   "base": {
+    "ccn": 65,
+    "length": 79
+   },
+   "head": {
+    "ccn": 65,
+    "length": 79
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/local.mjs",
+   "name": "backendEvidence",
+   "base": {
+    "ccn": 28,
+    "length": 65
+   },
+   "head": {
+    "ccn": 28,
+    "length": 65
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/local.mjs",
+   "name": "produceLocal",
+   "base": {
+    "ccn": 52,
+    "length": 111
+   },
+   "head": {
+    "ccn": 52,
+    "length": 111
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/pr-video.mjs",
+   "name": "renderSection",
+   "base": {
+    "ccn": 24,
+    "length": 55
+   },
+   "head": {
+    "ccn": 24,
+    "length": 55
+   }
+  },
+  {
+   "file": "scripts/pr-video/lib/tools.mjs",
+   "name": "installTools",
+   "base": {
+    "ccn": 22,
+    "length": 40
+   },
+   "head": {
+    "ccn": 22,
+    "length": 40
+   }
+  },
+  {
+   "file": "scripts/retro/lib/lessons.mjs",
+   "name": "fileFactoryIssues",
+   "base": {
+    "ccn": 17,
+    "length": 38
+   },
+   "head": {
+    "ccn": 17,
+    "length": 38
+   }
+  },
+  {
+   "file": "scripts/retro/lib/lessons.mjs",
+   "name": "lessonsCommand",
+   "base": {
+    "ccn": 117,
+    "length": 205
+   },
+   "head": {
+    "ccn": 112,
+    "length": 202
+   }
+  },
+  {
+   "file": "scripts/retro/retro.mjs",
+   "name": "main",
+   "base": {
+    "ccn": 44,
+    "length": 78
+   },
+   "head": {
+    "ccn": 44,
+    "length": 78
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/assessment.mjs",
+   "name": "assessTicket",
+   "base": {
+    "ccn": 16,
+    "length": 30
+   },
+   "head": {
+    "ccn": 16,
+    "length": 30
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/gate.mjs",
+   "name": "decideGate",
+   "base": {
+    "ccn": 41,
+    "length": 47
+   },
+   "head": {
+    "ccn": 41,
+    "length": 47
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/gate.mjs",
+   "name": "gateState",
+   "base": {
+    "ccn": 16,
+    "length": 28
+   },
+   "head": {
+    "ccn": 16,
+    "length": 28
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/gate.mjs",
+   "name": "renderNotice",
+   "base": {
+    "ccn": 49,
+    "length": 46
+   },
+   "head": {
+    "ccn": 49,
+    "length": 46
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/github.mjs",
+   "name": "toView",
+   "base": {
+    "ccn": 17,
+    "length": 21
+   },
+   "head": {
+    "ccn": 17,
+    "length": 21
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/github.mjs",
+   "name": "mergePr",
+   "base": {
+    "ccn": 33,
+    "length": 33
+   },
+   "head": {
+    "ccn": 33,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "recordReopen",
+   "base": {
+    "ccn": 20,
+    "length": 20
+   },
+   "head": {
+    "ccn": 20,
+    "length": 20
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "rebuildAssessment",
+   "base": {
+    "ccn": 44,
+    "length": 63
+   },
+   "head": {
+    "ccn": 44,
+    "length": 63
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "(anonymous) `const tickets = (state.tickets ?? []).map((t) => {`",
+   "base": {
+    "ccn": 24,
+    "length": 12
+   },
+   "head": {
+    "ccn": 24,
+    "length": 12
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "postQuorumStatus",
+   "base": {
+    "ccn": 17,
+    "length": 15
+   },
+   "head": {
+    "ccn": 17,
+    "length": 15
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "regate",
+   "base": {
+    "ccn": 18,
+    "length": 33
+   },
+   "head": {
+    "ccn": 18,
+    "length": 33
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "syncGate",
+   "base": {
+    "ccn": 11,
+    "length": 105
+   },
+   "head": {
+    "ccn": 11,
+    "length": 105
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "(anonymous) `() => {`",
+   "base": {
+    "ccn": 28,
+    "length": 48
+   },
+   "head": {
+    "ccn": 28,
+    "length": 48
+   }
+  },
+  {
+   "file": "scripts/review-gate/lib/sync.mjs",
+   "name": "(anonymous) `() => {`",
+   "base": {
+    "ccn": 24,
+    "length": 66
+   },
+   "head": {
+    "ccn": 24,
+    "length": 66
+   }
+  },
+  {
+   "file": "scripts/review/lib/review.mjs",
+   "name": "councilArchitectureReview",
+   "base": {
+    "ccn": 30,
+    "length": 86
+   },
+   "head": {
+    "ccn": 28,
+    "length": 86
+   }
+  },
+  {
+   "file": "scripts/review/lib/review.mjs",
+   "name": "policyReview",
+   "base": {
+    "ccn": 32,
+    "length": 68
+   },
+   "head": {
+    "ccn": 32,
+    "length": 68
+   }
+  },
+  {
+   "file": "scripts/review/lib/review.mjs",
+   "name": "hookStop",
+   "base": {
+    "ccn": 30,
+    "length": 102
+   },
+   "head": {
+    "ccn": 26,
+    "length": 78
+   }
+  }
+ ]
+}

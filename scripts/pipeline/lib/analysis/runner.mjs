@@ -24,6 +24,7 @@ import { changedMap, decide, settleSecretFindings } from './decide.mjs';
 import { ruleSetDir } from './fetch.mjs';
 import { matchesAny } from '../../../implement/lib/plan.mjs';
 import { setting } from '../settings.mjs';
+import { CLEAN_CODE_LENS } from '../clean-code.mjs';
 
 // Whether a tool applies: `when` (globs one tracked file must match: a GitHub workflow linter only where workflows
 // exist) and, outside CI, `onChange` (globs a touched file must match: a dependency audit only when a manifest changed).
@@ -339,6 +340,9 @@ export async function baseFindings(config, tool, { cwd, mergeBase, files, exec =
   }
 }
 
+// Where a tool's findings go in the report: a clean-code lens tool's are evidence for the clean-code reviewer.
+const reportListOf = (tool) => (tool.lens === CLEAN_CODE_LENS ? 'cleanCode' : 'findings');
+
 // Runs a slot's tools on the change from `base` to the working tree of `cwd` and returns the report (not written).
 //   { version, slot, sha, base, mergeBase, configHash, tools: [{ id, status, wallMs, error, introduced, preexisting }],
 //     findings (introduced, each with severity and lens), preexisting, suppressions }
@@ -359,7 +363,9 @@ export async function runSlot(config, slot, { cwd = config.root, base, ids = nul
   const sha = git(cwd, ['rev-parse', 'HEAD']).stdout.trim();
   const unseen = [];
   const outDir = path.join(analysisDir(config), 'out', `${path.basename(cwd)}-${process.pid}`);
-  const report = { version: REPORT_VERSION, slot, sha, base, mergeBase, configHash: slotHash(resolved, slot), ts: new Date().toISOString(), tools: [...licenceBlocked], findings: [], preexisting: [], triaged: [], suppressions: addedSuppressions(cwd, base, resolved.suppressions) };
+  // `cleanCode`: what the clean-code lens tools found in this change, evidence for the clean-code reviewer only: never a
+  // harness finding, never a fix bounce (the reviewer upholds it or says why it is not a problem).
+  const report = { version: REPORT_VERSION, slot, sha, base, mergeBase, configHash: slotHash(resolved, slot), ts: new Date().toISOString(), tools: [...licenceBlocked], findings: [], cleanCode: [], preexisting: [], triaged: [], suppressions: addedSuppressions(cwd, base, resolved.suppressions) };
   try {
     for (const tool of wanted) {
       const release = (await acquire(semaphoreDir(cwd), resolved.maxConcurrent, { deadline, label: `analysis:${tool.id}` })) ?? (() => {});
@@ -406,7 +412,7 @@ export async function runSlot(config, slot, { cwd = config.root, base, ids = nul
       // only a commercial scanner's triage counts (an open-source tool's report has no such decision).
       const triaged = tool.commercial ? introduced.filter((f) => triageOf(f)) : [];
       report.triaged.push(...triaged.map((f) => ({ ...decorate(f), triage: triageOf(f), justification: f.triage?.justification ?? null })));
-      report.findings.push(...introduced.filter((f) => !triaged.includes(f)).map(decorate));
+      report[reportListOf(tool)].push(...introduced.filter((f) => !triaged.includes(f)).map(decorate));
       report.preexisting.push(...preexisting.map(decorate));
       report.tools.push({ id: tool.id, status: r.status, wallMs: r.wallMs, error: r.error, note: r.note, output: r.status === 'error' ? r.output : undefined, introduced: introduced.length, preexisting: preexisting.length });
     }

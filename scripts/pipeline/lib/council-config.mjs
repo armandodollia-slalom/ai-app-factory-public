@@ -6,6 +6,7 @@
 // docs/ai-pipeline/council.md.
 import net from 'node:net';
 import { defaultSettings } from './settings.mjs';
+import { CLEAN_CODE_LENS } from './clean-code.mjs';
 
 // The verifier stages, named after the code that runs them, and the settings section each one's round limit
 // (`<section>.maxCouncilRounds`), pass score (`<section>.councilPassScore`) and discussion override
@@ -28,13 +29,41 @@ export const COUNCIL_LENSES = {
   'test-value': 'Tests that add bloat. See "Useless tests".',
   rewrite: 'A simpler design. See "Rewrite".',
   ui: 'The running app against the mockup, with screenshots.',
+  // The fixed seat's lens (GEN-16): never a counted seat's, never in STAGE_LENSES.
+  [CLEAN_CODE_LENS]: 'The clean-code rules (CC-<n>): one source of truth, no copied logic, names, functions, comments, dead code, tests. A strict arbiter: every upheld breach blocks.',
 };
+
+// The clean-code seat (GEN-16): one member on the clean-code lens sits on every council, in addition to the seats
+// `council.members` and `<stage>.councilMembers` count. No setting removes it.
+export const CLEAN_CODE_SEAT = 'clean-code';
+const COUNT_SETTINGS = ['council.members', ...Object.values(COUNCIL_STAGES).map((s) => `${s.section}.councilMembers`)];
+const FIXED = 'the clean-code seat is fixed: it sits on every council in addition to the seats `council.members` and `<stage>.councilMembers` count, and no setting removes it or turns it off';
+// The settings a repository wrote to remove or turn off the clean-code seat: a key that names it, a list that names its
+// lens (an exclusion), or a count of 0. Each problem says the seat is fixed.
+export function fixedSeatProblems(overlay) {
+  const problems = [];
+  const sections = ['council', ...new Set(Object.values(COUNCIL_STAGES).map((s) => s.section))];
+  const walk = (node, at) => {
+    if (Array.isArray(node)) {
+      if (node.some((v) => typeof v === 'string' && /^clean[-_ ]?code$/i.test(v))) problems.push(`${at}: ${FIXED}`);
+      return;
+    }
+    if (!isObject(node)) return;
+    for (const [k, v] of Object.entries(node)) {
+      if (/clean[-_ ]?code/i.test(k)) problems.push(`${at}.${k}: ${FIXED}`);
+      else walk(v, `${at}.${k}`);
+    }
+  };
+  for (const s of sections) walk(overlay?.[s], s);
+  for (const name of COUNT_SETTINGS) {
+    const [section, key] = name.split('.');
+    if (overlay?.[section]?.[key] === 0) problems.push(`${name} is 0: ${FIXED}; a count of 1 seats the stage's own verifier beside it`);
+  }
+  return problems;
+}
 
 export const BLOCK_QUORUM = ['any', 'majority', 'all'];
 export const ON_UNAVAILABLE = ['fail', 'report'];
-// The council's defaults are in scripts/pipeline/config.json (`council`).
-const { members: _m, intercom: _i, ...councilDefaults } = defaultSettings().council;
-export const COUNCIL_DEFAULTS = councilDefaults;
 
 export const INTERCOM_ON_SPLIT = ['orchestrator', 'owner'];
 export const INTERCOM_MAX_TURNS = 20;

@@ -136,7 +136,7 @@ export function mergeIdentity(settings, env = process.env, { bot } = {}) {
   const identity = settings?.identity ?? AUTO_MERGE.identity;
   if (identity === 'gh-user') return { identity, env: undefined };
   if (identity === 'app') {
-    const name = settings.appTokenEnv ?? 'REVIEW_GATE_APP_TOKEN';
+    const name = settings.appTokenEnv ?? AUTO_MERGE.appTokenEnv;
     if (!env[name]) throw new Error(`implement.autoMerge.identity is "app" but ${name} is not set (the GitHub App's installation token)`);
     return { identity, env: { ...env, GH_TOKEN: env[name] }, token: env[name] };
   }

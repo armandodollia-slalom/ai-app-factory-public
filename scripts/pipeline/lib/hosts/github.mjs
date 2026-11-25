@@ -9,9 +9,10 @@
 import { run as runCmd } from '../util.mjs';
 import { HostAuthError, HostError, HostRefusedError } from './errors.mjs';
 import { httpStatusIn, isContentRefusal } from './refusal.mjs';
-import { ghLogin, loadCredentials } from '../bot.mjs';
+import { API, ghLogin, loadCredentials } from '../bot.mjs';
+import { DEFAULT_URLS, defaultMergeMethod } from '../products.mjs';
 
-export const DEFAULT_URL = 'https://github.com';
+export const DEFAULT_URL = DEFAULT_URLS['github'];
 
 // The gh CLI runner of the GitHub host (args, { input, env, cwd }) -> { status, stdout, stderr }. Other
 // GitHub-only code (the review gate's runner, doctor's checks) takes it from here.
@@ -300,7 +301,7 @@ export function createGithubHost(settings, deps = {}) {
       },
       // Merges now, or (auto) hands the merge to GitHub's auto-merge. `headSha`: GitHub refuses the merge if the branch
       // moved since the gate assessed that head (council C9). Returns { merged, mergedAt, autoMerge }.
-      merge(pr, { method = 'squash', auto = false, headSha = null, deleteBranch = false } = {}) {
+      merge(pr, { method = defaultMergeMethod(), auto = false, headSha = null, deleteBranch = false } = {}) {
         ok(['pr', 'merge', String(pr), ...R, ...(auto ? ['--auto'] : []), `--${method}`, ...(headSha ? ['--match-head-commit', headSha] : []), ...(deleteBranch ? ['--delete-branch'] : [])]);
         let view = null;
         try {
@@ -465,7 +466,7 @@ export function createGithubHost(settings, deps = {}) {
 export function githubRest(settings, { env = process.env, fetchImpl = null } = {}) {
   const token = env.GITHUB_TOKEN || env.GH_TOKEN || '';
   if (!token || !settings.repo) return null;
-  const base = settings.url && !/github\.com$/.test(new URL(settings.url).hostname) ? `${settings.url.replace(/\/+$/, '')}/api/v3` : 'https://api.github.com';
+  const base = settings.url && !/github\.com$/.test(new URL(settings.url).hostname) ? `${settings.url.replace(/\/+$/, '')}/api/v3` : API;
   const call = async (method, route, body) => {
     const { fetchWithTimeout } = await import('../external.mjs');
     const response = await (fetchImpl ?? fetchWithTimeout)(`${base}/repos/${settings.repo}${route}`, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body: body ? JSON.stringify(body) : undefined });

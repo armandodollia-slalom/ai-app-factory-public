@@ -10,9 +10,9 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import { findSolution } from './scope.mjs';
 import { solutionProjects } from './slnf.mjs';
+import { isMain } from '../../../scripts/pipeline/lib/util.mjs';
 
 // Where `dotnet tool restore` finds a local tool manifest (the root one is what .NET 10's `dotnet new tool-manifest` writes).
 export const TOOL_MANIFESTS = ['.config/dotnet-tools.json', 'dotnet-tools.json'];
@@ -57,12 +57,5 @@ function main() {
   return dotnet(['restore', target]) === 0 ? failed : 1;
 }
 
-const isMain = (() => {
-  try {
-    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1]);
-  } catch {
-    return false;
-  }
-})();
 
-if (isMain) process.exit(main());
+if (isMain(import.meta.url)) process.exit(main());

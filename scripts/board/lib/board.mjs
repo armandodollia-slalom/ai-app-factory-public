@@ -5,9 +5,7 @@ import { resetTrackers, trackerFor } from './trackers/index.mjs';
 // verifies the tests after the review approved the code. Failed holds stories the pipeline could not
 // finish: it sits after Pending Review, and a human moves it back to Ready.
 export const COLUMNS = ['backlog', 'ready', 'inProgress', 'testing', 'review', 'failed', 'done'];
-const KEY_TITLE = /^([A-Z][A-Z0-9]*-\d+):/;
 
-export const storyKeyOf = (title) => KEY_TITLE.exec(title ?? '')?.[1] ?? null;
 export const isForward = (from, to) => COLUMNS.indexOf(to) > COLUMNS.indexOf(from ?? 'backlog') || (from == null && to === 'backlog');
 
 // "[FE - ...]" stories change visible UI (they get a video); "[BE - ...]" stories are APIs (they get

@@ -1,0 +1,688 @@
+{
+  "$comment": "The triage of the clean-code baseline (GEN-19), written before any change: each item of baseline.json is fixed (in the batch named) or kept with a one-line reason. `items` name items by their key (every item with that key); `kinds` give the reason for the items of a kind no entry of `items` names, except a string literal that repeats a constant: it has no kind-level decision and needs an entry of its own. A fix entry whose copies are not all removed names the ones that stay in `keep` (`digests`, each clone occurrence's identity whatever its lines, and `reason`; `count` for items without a digest); every other copy left fails the closing check. A fix whose item left the measurement while none of its files changed is not a fix, unless the entry's `fixedIn` names the changed file that fixed it (the other declaration of a value written twice). A clone occurrence the baseline does not have is new even under an old key: it needs a reason of its own (a new key's entry, or `occurrences` by digest under an old one). Rendered by scripts/docs/clean-code-report.mjs --markdown.",
+  "notes": [
+    "Baseline: the branch's base (ee8328f), measured with the same tools as the closing report (the analysis gate's own jscpd and lizard scripts) and the same settings, so the report shows the epic's own effect.",
+    "Intended wording change (batch 3): the six PR check critics share the acceptance critic's debate wording, the same in meaning; no other output, setting, record or command changes.",
+    "Partly fixed: the third verify.mjs ~ review.mjs copy is the merge-then-adjudicate call shape every stage adapter writes (kept on its entry).",
+    "New repeats appear where constants the epic named (TOOL_TIMEOUT_SEC, CHARS_PER_TOKEN, the clean-code lens and seat, LSP_RECORD, LESSONS_STAGE) make other literals of the same value match them; each is kept on its own entry with what it is instead. Since council round 2 the repeated-values check skips whole-line comments (a literal in prose repeats nothing); both measurements were re-taken with it, which took the baseline from 152 to 142 repeats, all ten of them in comments. Since council round 3 it also reports a constant redeclared under the same name in another file (the same-name exclusion hid it); re-measured again, the baseline gained the two FINDINGS_FILE declarations that council round 1 had already made one.",
+    "Complexity: 412 to 408 only. The four gone are council.mjs memberTask (over the limit at the base, and made worse by this branch before council round 1 split it), github-actions.mjs providedChecks (split in council round 1 with the workflow reader), and gitlab.mjs update and orchestrator.mjs decide (split in council round 2, with the GitLab labels-and-state reader the code host and the tracker now share, and with the per-round guidance taken out of decide). No other pre-existing long or branching function was refactored; that is a follow-up, not something this epic delivered. What the branch does guarantee is the function table: no function it changed went over a limit or got worse.",
+    "Process: the batches 1 to 3 were committed after the tests of what they touched, not each after a green full run; the full suite ran green before batch 4 and runs again on the head after council round 1, which the council reviewed as a whole."
+  ],
+  "kinds": {
+    "complexity": {
+      "decision": "kept",
+      "reason": "a long or branching function that works and is tested; splitting it is a behaviour-preserving refactor of its own, with its own review, so it is a follow-up rather than part of these batches"
+    },
+    "repeat": {
+      "decision": "kept",
+      "reason": "a number repeated for another purpose (a timeout, a limit, a count): different knowledge, so one constant would couple settings that change for different reasons. A string literal that repeats a constant is never kept by this reason: it uses the constant or is kept on an entry of its own"
+    },
+    "clone": {
+      "decision": "kept",
+      "reason": "the copies follow each tracker's, code host's, CI provider's or store's own interface and change for different reasons; extracting them would couple adapters that must stay apart"
+    },
+    "instruction-clone": {
+      "decision": "kept",
+      "reason": "repeated in a vendored or worked-example text that is read on its own"
+    },
+    "dead-file": {
+      "decision": "kept",
+      "reason": "a fixture of the factory's own opengrep rules: `opengrep test` reads it through its folder, nothing imports it"
+    },
+    "dead-export": {
+      "decision": "fix",
+      "batch": "dead code"
+    }
+  },
+  "items": {
+    "dead-export scripts/pipeline/lib/config.mjs VIDEO_SCRIPT_SCOPES": {
+      "decision": "kept",
+      "reason": "named by the pipeline flow's checks (docs/pipeline-flow.json), which test it against the settings"
+    },
+    "clone scripts/pipeline/lib/analysis/report.mjs ~ scripts/pipeline/lib/council.mjs (8 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "one helper places a marked section in a PR body (before the trailer and the demo video block)"
+    },
+    "clone scripts/feature-verification/lib/verify.mjs ~ scripts/review/lib/review.mjs (7 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "one helper gives a council's read-only check of the checkout (councilReadOnly), used by every stage",
+      "keep": {
+        "reason": "the copy left is the merge-then-adjudicate call shape every stage adapter writes; removing it changes adjudicate's interface in four adapters, a follow-up",
+        "digests": [
+          "91593b0258ce"
+        ]
+      }
+    },
+    "clone scripts/implement/lib/tasks.mjs ~ scripts/implement/lib/tasks.mjs (18 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "the code and UI verifier tasks share one block of the harness's evidence (subtask, checks, diagnostics, diff)"
+    },
+    "clone packs/dotnet/lsp/prepare.mjs ~ packs/dotnet/lsp/scope.mjs (12 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "the .NET pack's scripts use the lsp module's isMain instead of four copies"
+    },
+    "clone packs/dotnet/lsp/prepare.mjs ~ packs/dotnet/stack/aspire-publish.mjs (12 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "as above"
+    },
+    "clone packs/dotnet/lsp/prepare.mjs ~ packs/dotnet/stack/publish-container.mjs (12 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "as above"
+    },
+    "clone packs/dotnet/lsp/scope.mjs ~ packs/dotnet/stack/aspire-publish.mjs (9 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "as above"
+    },
+    "clone packs/dotnet/lsp/scope.mjs ~ packs/dotnet/stack/publish-container.mjs (9 lines)": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "as above"
+    },
+    "instruction-clone agents/pr-check-acceptance.agent.md ~ agents/pr-check-design.agent.md (7 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "the PR check critics' debate and output rules live in one shared file their definitions include"
+    },
+    "instruction-clone agents/pr-check-acceptance.agent.md ~ agents/pr-check-flow.agent.md (7 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "as above"
+    },
+    "instruction-clone agents/pr-check-acceptance.agent.md ~ agents/pr-check-style.agent.md (7 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "as above"
+    },
+    "instruction-clone agents/pair-ui-verifier.agent.md ~ agents/pair-verifier.agent.md (13 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "the pair verifiers' shared rules live in one shared file both definitions include"
+    },
+    "instruction-clone agents/test-automation-verifier.agent.md ~ agents/test-plan-verifier.agent.md (7 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "the feature verification verifiers' shared rules live in one shared file both definitions include"
+    },
+    "instruction-clone skills/graphify/SKILL.md ~ skills/graphify/SKILL.md (8 lines)": {
+      "decision": "kept",
+      "reason": "the graphify skill is upstream's text, kept as published"
+    },
+    "instruction-clone skills/graphify/references/exports.md ~ skills/graphify/references/exports.md (9 lines)": {
+      "decision": "kept",
+      "reason": "the graphify skill is upstream's text, kept as published"
+    },
+    "instruction-clone skills/graphify/references/query.md ~ skills/graphify/references/query.md (8 lines)": {
+      "decision": "kept",
+      "reason": "the graphify skill is upstream's text, kept as published"
+    },
+    "repeat scripts/review-gate/lib/github.mjs repeated-default the fallback 'REVIEW_GATE_APP_TOKEN' repeats the default of implement:autoMerge:appTokenEnv, which scripts/implement/config.json": {
+      "decision": "fix",
+      "batch": "duplication",
+      "how": "read the default from the auto-merge defaults (AUTO_MERGE.appTokenEnv)"
+    },
+    "instruction-clone agents/pr-check-design.agent.md ~ agents/pr-check-flow.agent.md (9 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "the PR check critics' debate and output rules live in one shared file their definitions include"
+    },
+    "instruction-clone agents/pr-check-design.agent.md ~ agents/pr-check-style.agent.md (11 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "the PR check critics' debate and output rules live in one shared file their definitions include"
+    },
+    "instruction-clone agents/pr-check-design.agent.md ~ agents/pr-check-video.agent.md (11 lines)": {
+      "decision": "fix",
+      "batch": "instructions",
+      "how": "the PR check critics' debate and output rules live in one shared file their definitions include"
+    },
+    "clone scripts/pipeline/lib/analysis/parsers.mjs ~ scripts/pipeline/lib/analysis/parsers.mjs (6 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "the two one-line formats are one list (LINE_FORMATS) read by one branch"
+    },
+    "clone scripts/board/lib/migrate.mjs ~ scripts/board/lib/migrate.mjs (6 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "migrationOrder gives both migrations the issue numbers and the ticket order"
+    },
+    "clone scripts/factory/install-setup.mjs ~ scripts/pr-check/pr-check.mjs (12 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "pr-check.mjs uses util.mjs isMain (moved there from the lsp module, for every script); install-setup.mjs keeps its own, as it runs on bare Node before the factory's packages are installed"
+    },
+    "clone scripts/feature-verification/lib/workflows.mjs ~ scripts/feature-verification/lib/workflows.mjs (9 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "markAutomationVerified stamps the plan index and clears the escalation"
+    },
+    "clone scripts/implement/lib/ci-wait.mjs ~ scripts/implement/lib/ci-wait.mjs (10 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "flakyIn reads the retried tests of the successful runs"
+    },
+    "clone scripts/implement/lib/mockups.mjs ~ scripts/pr-check/lib/video.mjs (11 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "video.mjs uses mockups.mjs loadChromium, with its own message for a missing Playwright"
+    },
+    "clone scripts/pipeline/lib/ci/evidence.mjs ~ scripts/pipeline/lib/ci/evidence.mjs (6 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "notIgnored drops the pipelines the settings ignore"
+    },
+    "clone scripts/pipeline/lib/ci/github-actions.mjs ~ scripts/pipeline/lib/ci/github-actions.mjs (14 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "workflowDocs and pullRequestWorkflows read the workflows once"
+    },
+    "clone scripts/pipeline/lib/ci/github-actions.mjs ~ scripts/pipeline/lib/ci/github-actions.mjs (7 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "as above"
+    },
+    "clone scripts/pipeline/lib/sink.mjs ~ scripts/pipeline/lib/sink.mjs (7 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "util.mjs parseJsonl (readJsonl uses it too)"
+    },
+    "clone scripts/pr-check/lib/hooks.mjs ~ scripts/review/lib/review.mjs (6 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "isCodeAgentStop lives in cli.mjs beside the other hook-payload helpers; the architecture review and the PR check hook import it"
+    },
+    "clone scripts/pr-check/lib/loop.mjs ~ scripts/pr-check/lib/loop.mjs (6 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "checkRecordOf gives both round records their target and story"
+    },
+    "clone scripts/pr-video/lib/api-evidence.mjs ~ scripts/pr-video/lib/api-evidence.mjs (17 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "the JSON masking applies its edits with splice"
+    },
+    "clone scripts/pr-video/lib/api-summary.mjs ~ scripts/pr-video/lib/pr-video.mjs (7 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "pr-video.mjs latestAttempts, used by both"
+    },
+    "clone scripts/pipeline/lib/settings.mjs ~ scripts/pipeline/lib/settings.mjs (6 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "jsFiles lists the code files with their tool"
+    },
+    "clone scripts/implement/lib/orchestrate.mjs ~ scripts/implement/lib/orchestrate.mjs (10 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "implementerRun: the pair implementer's run options (its entry rule) written once"
+    },
+    "clone scripts/implement/lib/orchestrate.mjs ~ scripts/implement/lib/orchestrate.mjs (8 lines)": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "as above"
+    },
+    "complexity scripts/pipeline/lib/council.mjs memberTask": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "memberRole and memberWho"
+    },
+    "complexity scripts/pipeline/lib/ci/github-actions.mjs providedChecks": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "workflowDocs"
+    },
+    "clone scripts/pipeline/lib/analysis/runner.mjs ~ templates/analysis/ci.mjs (6 lines)": {
+      "decision": "kept",
+      "reason": "templates/analysis/ci.mjs is copied into an application's repository and runs there without the factory, so it cannot import the factory's copy"
+    },
+    "clone scripts/pipeline/lib/ci/github-actions.mjs ~ templates/analysis/ci.mjs (9 lines)": {
+      "decision": "kept",
+      "reason": "templates/analysis/ci.mjs is copied into an application's repository and runs there without the factory, so it cannot import the factory's copy"
+    },
+    "clone packs/dotnet/lsp/roslyn-proxy.mjs ~ scripts/lsp/launch.mjs (6 lines)": {
+      "decision": "kept",
+      "reason": "each is a language server's process wrapper, started as that server's command; the shared lines pass on its exit and signals, and the .NET proxy (a pack script) does more around them"
+    },
+    "clone scripts/pipeline/lib/hosts/refusal.mjs ~ scripts/pipeline/lib/hosts/refusal.mjs (14 lines)": {
+      "decision": "kept",
+      "reason": "a synchronous and an asynchronous copy of one loop (sendWithReduction, postOmitted): one cannot call the other without making every synchronous caller async"
+    },
+    "clone scripts/pipeline/lib/hosts/refusal.mjs ~ scripts/pipeline/lib/hosts/refusal.mjs (7 lines)": {
+      "decision": "kept",
+      "reason": "a synchronous and an asynchronous copy of one loop (sendWithReduction, postOmitted): one cannot call the other without making every synchronous caller async"
+    },
+    "clone scripts/pipeline/lib/hosts/refusal.mjs ~ scripts/pipeline/lib/hosts/refusal.mjs (8 lines)": {
+      "decision": "kept",
+      "reason": "a synchronous and an asynchronous copy of one loop (sendWithReduction, postOmitted): one cannot call the other without making every synchronous caller async"
+    },
+    "clone scripts/pr-check/pr-check.mjs ~ scripts/review/review.mjs (8 lines)": {
+      "decision": "kept",
+      "reason": "each stage's command dispatches its own hook events (reset, stop) to its own stage; the lines are the dispatch, not shared knowledge"
+    },
+    "repeat scripts/pipeline/lib/analysis/fetch.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat scripts/board/lib/trackers/azure-boards.mjs repeated-constant 4 repeats the constant CHARS_PER_TOKEN, which scripts/pipeline/lib/writer-rules.mjs": {
+      "decision": "kept",
+      "reason": "a retry count or a code length that happens to equal CHARS_PER_TOKEN, the writer-rule ledger's estimate of characters per token"
+    },
+    "repeat scripts/board/lib/trackers/gitlab.mjs repeated-constant 4 repeats the constant CHARS_PER_TOKEN, which scripts/pipeline/lib/writer-rules.mjs": {
+      "decision": "kept",
+      "reason": "a retry count or a code length that happens to equal CHARS_PER_TOKEN, the writer-rule ledger's estimate of characters per token"
+    },
+    "repeat scripts/board/lib/trackers/linear.mjs repeated-constant 4 repeats the constant CHARS_PER_TOKEN, which scripts/pipeline/lib/writer-rules.mjs": {
+      "decision": "kept",
+      "reason": "a retry count or a code length that happens to equal CHARS_PER_TOKEN, the writer-rule ledger's estimate of characters per token"
+    },
+    "repeat scripts/pipeline/lib/council-config.mjs repeated-constant 'clean-code' repeats the constant CLEAN_CODE_LENS, which scripts/pipeline/lib/clean-code.mjs": {
+      "decision": "kept",
+      "reason": "the `clean-code` front-matter key, the skill's folder or the seat's default name, which equal the lens id by choice and may differ from it"
+    },
+    "repeat scripts/docs/clean-code-report.mjs repeated-constant 120_000 repeats the constant GIT_TIMEOUT_MS, which scripts/teststack/lib/images.mjs": {
+      "decision": "kept",
+      "reason": "the report's own limit on a git call, not the test stack's image-build git limit"
+    },
+    "repeat scripts/factory/lib/prune.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat scripts/factory/lib/render.mjs repeated-constant 'clean-code' repeats the constant CLEAN_CODE_LENS, which scripts/pipeline/lib/clean-code.mjs": {
+      "decision": "kept",
+      "reason": "the `clean-code` front-matter key, the skill's folder or the seat's default name, which equal the lens id by choice and may differ from it"
+    },
+    "repeat scripts/feature-verification/lib/workflows.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat scripts/implement/lib/board-events.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat scripts/implement/lib/implement.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat scripts/implement/lib/lsp.mjs repeated-constant 'lsp' repeats the constant LSP_SERVER, which scripts/pipeline/lib/agents.mjs": {
+      "decision": "kept",
+      "reason": "the language-server state folder's name, not the MCP server's name"
+    },
+    "repeat scripts/pipeline/lib/agents.mjs repeated-constant 'clean-code' repeats the constant CLEAN_CODE_LENS, which scripts/pipeline/lib/clean-code.mjs": {
+      "decision": "kept",
+      "reason": "the `clean-code` front-matter key, the skill's folder or the seat's default name, which equal the lens id by choice and may differ from it"
+    },
+    "repeat scripts/pipeline/lib/ci/rest.mjs repeated-constant 4 repeats the constant CHARS_PER_TOKEN, which scripts/pipeline/lib/writer-rules.mjs": {
+      "decision": "kept",
+      "reason": "a retry count or a code length that happens to equal CHARS_PER_TOKEN, the writer-rule ledger's estimate of characters per token"
+    },
+    "repeat scripts/pipeline/lib/clean-code.mjs repeated-constant 'clean-code' repeats the constant CLEAN_CODE_SEAT, which scripts/pipeline/lib/council-config.mjs": {
+      "decision": "kept",
+      "reason": "the `clean-code` front-matter key, the skill's folder or the seat's default name, which equal the lens id by choice and may differ from it"
+    },
+    "repeat scripts/pipeline/lib/lint.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat scripts/pipeline/lib/sink.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat scripts/pr-check/lib/github.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "another 600-second limit (a command, a fetch, a CI step) that happens to equal TOOL_TIMEOUT_SEC, the analysis tools' limit the epic named; tying them would couple limits that change apart"
+    },
+    "repeat templates/analysis/ci.mjs repeated-constant 600 repeats the constant TOOL_TIMEOUT_SEC, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "kept",
+      "reason": "the generated CI script (.factory/bin/analysis/ci.mjs) runs on the CI machine with only Node and git, no factory install, so it cannot import analysis/config.mjs: at :106 and :163 the 600 is TOOL_TIMEOUT_SEC's own knowledge (an analysis tool's time limit when its definition names none), written again for that reason, and at :36 it is the sh helper's default for any command it runs"
+    },
+    "repeat scripts/pipeline/lib/analysis/ci.mjs repeated-constant '.factory/bin/analysis/ci.mjs' repeats the constant JOBS_SCRIPT, which scripts/implement/lib/analysis-gate.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (analysis/ci.mjs CI_SCRIPT and CI_DATA)",
+      "fixedIn": "scripts/implement/lib/analysis-gate.mjs"
+    },
+    "repeat scripts/pipeline/lib/analysis/ci.mjs repeated-constant '.factory/bin/analysis/jobs.json' repeats the constant JOBS_DATA, which scripts/implement/lib/analysis-gate.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (analysis/ci.mjs CI_SCRIPT and CI_DATA)",
+      "fixedIn": "scripts/implement/lib/analysis-gate.mjs"
+    },
+    "repeat scripts/pipeline/lib/analysis/fixloop.mjs repeated-constant 'analysis-gate.jsonl' repeats the constant GATE_METRICS, which scripts/implement/lib/analysis-gate.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (GATE_METRICS, now in analysis/fixloop.mjs)"
+    },
+    "repeat scripts/pipeline/lib/findings.mjs repeated-constant 'all' repeats the constant SOLE_LENS, which scripts/pipeline/lib/council-config.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (SOLE_LENS,)"
+    },
+    "repeat scripts/pipeline/lib/scorecard.mjs repeated-constant 'all' repeats the constant SOLE_LENS, which scripts/pipeline/lib/council-config.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (SOLE_LENS,)"
+    },
+    "repeat scripts/pipeline/lib/selection.mjs repeated-constant 'all' repeats the constant SOLE_LENS, which scripts/pipeline/lib/council-config.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (SOLE_LENS,)"
+    },
+    "repeat scripts/feature-verification/lib/metrics.mjs repeated-constant 'arch-reviews.jsonl' repeats the constant REVIEWS_FILE, which scripts/review/lib/review.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (REVIEWS_FILE,)"
+    },
+    "repeat scripts/feature-verification/lib/metrics.mjs repeated-constant 'decision-outcomes.jsonl' repeats the constant OUTCOMES_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (OUTCOMES_FILE,)"
+    },
+    "repeat scripts/feature-verification/lib/metrics.mjs repeated-constant 'pr-checks.jsonl' repeats the constant PR_CHECKS_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (PR_CHECKS_FILE)"
+    },
+    "repeat scripts/implement/lib/analysis-gate.mjs repeated-constant '.factory/bin/analysis/ci.mjs' repeats the constant CI_SCRIPT, which scripts/pipeline/lib/analysis/ci.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (analysis/ci.mjs CI_SCRIPT and CI_DATA)"
+    },
+    "repeat scripts/implement/lib/analysis-gate.mjs repeated-constant '.factory/bin/analysis/jobs.json' repeats the constant CI_DATA, which scripts/pipeline/lib/analysis/ci.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (analysis/ci.mjs CI_SCRIPT and CI_DATA)"
+    },
+    "repeat scripts/implement/lib/decisions.mjs repeated-constant 'pr-checks.jsonl' repeats the constant CHECKS_FILE, which scripts/pr-check/lib/loop.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (PR_CHECKS_FILE)"
+    },
+    "repeat scripts/implement/lib/implement.mjs repeated-constant 'token-usage.jsonl' repeats the constant USAGE_FILE, which scripts/pipeline/lib/usage.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (USAGE_FILE,)"
+    },
+    "repeat scripts/pipeline/lib/experiment.mjs repeated-constant 'decision-outcomes.jsonl' repeats the constant OUTCOMES_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (OUTCOMES_FILE,)"
+    },
+    "repeat scripts/pipeline/lib/experiment.mjs repeated-constant 'decisions.jsonl' repeats the constant DECISIONS_FILE, which scripts/pipeline/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (DECISIONS_FILE,)"
+    },
+    "repeat scripts/pipeline/lib/experiment.mjs repeated-constant 'subtask-runs.jsonl' repeats the constant SUBTASK_RUNS_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (SUBTASK_RUNS_FILE,)"
+    },
+    "repeat scripts/pipeline/lib/experiment.mjs repeated-constant 'token-usage.jsonl' repeats the constant USAGE_FILE, which scripts/pipeline/lib/usage.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (USAGE_FILE,)"
+    },
+    "repeat scripts/pipeline/lib/redact.mjs repeated-constant 'factoryfake' repeats the constant FAKE_SECRET_MARKER, which scripts/pipeline/lib/analysis/config.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (PLACEHOLDER_MARKER)"
+    },
+    "repeat scripts/pr-check/lib/loop.mjs repeated-constant 'pr-checks.jsonl' repeats the constant PR_CHECKS_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (PR_CHECKS_FILE)"
+    },
+    "repeat scripts/review-gate/lib/assessment.mjs repeated-constant 'decision-outcomes.jsonl' repeats the constant OUTCOMES_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (OUTCOMES_FILE,)"
+    },
+    "repeat scripts/review-gate/lib/assessment.mjs repeated-constant 'pr-checks.jsonl' repeats the constant PR_CHECKS_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (PR_CHECKS_FILE)"
+    },
+    "repeat scripts/review-gate/lib/assessment.mjs repeated-constant 'subtask-runs.jsonl' repeats the constant SUBTASK_RUNS_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (SUBTASK_RUNS_FILE,)"
+    },
+    "repeat scripts/review-gate/lib/sync.mjs repeated-constant 'pr-checks.jsonl' repeats the constant PR_CHECKS_FILE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (PR_CHECKS_FILE)"
+    },
+    "repeat scripts/pipeline/lib/analysis/config.mjs repeated-constant 'factoryfake' repeats the constant PLACEHOLDER_MARKER, which scripts/pipeline/lib/redact.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "reads the one definition (PLACEHOLDER_MARKER)"
+    },
+    "instruction-clone skills/clean-code/SKILL.md ~ skills/council/SKILL.md (6 lines)": {
+      "decision": "kept",
+      "reason": "the plugin serves skills/ as they are, so the clean-code skill carries a generated copy of the council skill's useless-tests list; prompts take the council's own, and clean-code.mjs --check and a test fail on a stale copy"
+    },
+    "repeat scripts/pipeline/lib/analysis/scanners/github-code-scanning.mjs repeated-constant 'https://api.github.com' repeats the constant API, which scripts/pipeline/lib/bot.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads API (bot.mjs)"
+    },
+    "clone scripts/board/lib/trackers/gitlab.mjs ~ scripts/pipeline/lib/hosts/gitlab.mjs (8 lines)": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "hosts/gitlab.mjs gitlabLabelsAndState, used by the tracker too"
+    },
+    "complexity scripts/board/lib/trackers/gitlab.mjs update": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "the update encoding is gitlabLabelsAndState"
+    },
+    "repeat scripts/board/lib/trackers/gitlab.mjs repeated-constant 'https://gitlab.com' repeats the constant DEFAULT_URL, which scripts/pipeline/lib/hosts/gitlab.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the host DEFAULT_URL, now one definition (products.mjs DEFAULT_URLS)"
+    },
+    "repeat scripts/pipeline/lib/scorecard.mjs repeated-constant 'implement-verify' repeats the constant VERIFY_STAGE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the stage constant, now in pipeline/lib/decisions.mjs"
+    },
+    "repeat scripts/factory/factory.mjs repeated-constant '.factory/config.json' repeats the constant OVERLAY, which scripts/retro/lib/lessons.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads OVERLAY_FILE (config.mjs)"
+    },
+    "repeat scripts/factory/lib/init.mjs repeated-constant 'https://gitlab.com' repeats the constant DEFAULT_URL, which scripts/pipeline/lib/hosts/gitlab.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the host DEFAULT_URL, now one definition (products.mjs DEFAULT_URLS)"
+    },
+    "repeat scripts/factory/lib/interview.mjs repeated-constant 'https://gitlab.com' repeats the constant DEFAULT_URL, which scripts/pipeline/lib/hosts/gitlab.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the host DEFAULT_URL, now one definition (products.mjs DEFAULT_URLS)"
+    },
+    "repeat scripts/implement/lib/implement.mjs repeated-constant 'implementer' repeats the constant IMPLEMENTER, which scripts/retro/lib/lessons.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads IMPLEMENTER (agents.mjs)"
+    },
+    "repeat scripts/implement/lib/orchestrate.mjs repeated-constant 'implement-plan' repeats the constant PLAN_STAGE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the stage constant, now in pipeline/lib/decisions.mjs"
+    },
+    "repeat scripts/implement/lib/orchestrate.mjs repeated-constant 'implement-verify' repeats the constant VERIFY_STAGE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the stage constant, now in pipeline/lib/decisions.mjs"
+    },
+    "repeat scripts/implement/lib/orchestrate.mjs repeated-constant 'implementer' repeats the constant IMPLEMENTER, which scripts/retro/lib/lessons.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads IMPLEMENTER (agents.mjs)"
+    },
+    "clone scripts/pipeline/lib/hosts/azure-devops.mjs ~ scripts/pipeline/lib/hosts/gitlab.mjs (7 lines)": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "the GitLab host update encoding is one helper (gitlabLabelsAndState)"
+    },
+    "complexity scripts/pipeline/lib/orchestrator.mjs decide": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "askOrchestrator and recordAnswer, shared with guide"
+    },
+    "repeat scripts/pipeline/lib/ci/azure-pipelines.mjs repeated-constant 'https://dev.azure.com' repeats the constant DEFAULT_URL, which scripts/pipeline/lib/hosts/azure-devops.mjs": {
+      "decision": "fix",
+      "batch": "council r3",
+      "how": "imports DEFAULT_URL from hosts/azure-devops.mjs, as gitlab-ci.mjs does from hosts/gitlab.mjs (council r3, F13: the item had left the measurement while the file was unchanged)"
+    },
+    "repeat scripts/pipeline/lib/ci/gitlab-ci.mjs repeated-constant 'https://gitlab.com' repeats the constant DEFAULT_URL, which scripts/pipeline/lib/hosts/gitlab.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the host DEFAULT_URL, now one definition (products.mjs DEFAULT_URLS)"
+    },
+    "repeat scripts/pipeline/lib/costs.mjs repeated-constant 'implement-verify' repeats the constant VERIFY_STAGE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the stage constant, now in pipeline/lib/decisions.mjs"
+    },
+    "repeat scripts/pipeline/lib/experiment.mjs repeated-constant 'implement-verify' repeats the constant VERIFY_STAGE, which scripts/implement/lib/decisions.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads the stage constant, now in pipeline/lib/decisions.mjs"
+    },
+    "repeat scripts/pipeline/lib/factory-guard.mjs repeated-constant '.factory/manifest.json' repeats the constant MANIFEST, which scripts/factory/lib/render.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads MANIFEST_FILE (config.mjs; render re-exports it)"
+    },
+    "repeat scripts/pipeline/lib/hosts/github.mjs repeated-constant 'https://api.github.com' repeats the constant API, which scripts/pipeline/lib/bot.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads API (bot.mjs)"
+    },
+    "repeat scripts/retro/lib/lessons.mjs repeated-constant '.factory/factory.json' repeats the constant PIN, which scripts/factory/lib/render.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "reads PIN (render.mjs, from config.mjs PIN_FILE)"
+    },
+    "clone scripts/board/lib/trackers/markdown.mjs ~ scripts/board/lib/trackers/markdown.mjs (7 lines)": {
+      "decision": "kept",
+      "reason": "parseInline and parseWikiInline parse two grammars (Markdown and Jira wiki markup); the shared lines are each scanner's own text accumulator and step, not a rule of either"
+    },
+    "clone scripts/board/lib/trackers/markdown.mjs ~ scripts/board/lib/trackers/markdown.mjs (8 lines)": {
+      "decision": "kept",
+      "reason": "as above: the two inline parsers' scanner set-up, for two grammars"
+    },
+    "repeat scripts/pipeline/lib/instruction-check.mjs repeated-constant 'lessons' repeats the constant LESSONS_KEY, which scripts/retro/lib/lessons.mjs": {
+      "decision": "kept",
+      "reason": "a display label of an instruction source (addendum, lessons, \u2026), not the retro's background run key"
+    },
+    "repeat scripts/pipeline/lib/redact.mjs repeated-constant '.factory' repeats the constant FACTORY_DIR, which scripts/pipeline/lib/config.mjs": {
+      "decision": "kept",
+      "reason": "redact.mjs is the redaction boundary every module loads first and imports no factory module: config.mjs, which defines FACTORY_DIR, imports it"
+    },
+    "clone scripts/pipeline/lib/hosts/azure-devops.mjs ~ scripts/pipeline/lib/hosts/gitlab.mjs (6 lines)": {
+      "decision": "kept",
+      "reason": "each code host's update method of the same adapter interface: the shared lines are its signature and the title and description fields, the state encodings differ (Azure's status, GitLab's state_event); it took this size when the GitLab encoding moved into gitlabLabelsAndState"
+    },
+    "repeat scripts/factory/install-setup.mjs repeated-constant 'lsp' repeats the constant LSP_RECORD, which scripts/implement/lib/lsp.mjs": {
+      "decision": "kept",
+      "reason": "the engine command `lsp` (`factory lsp setup`), not the run-conditions record kind"
+    },
+    "repeat scripts/factory/lib/init.mjs repeated-constant 'lsp' repeats the constant LSP_RECORD, which scripts/implement/lib/lsp.mjs": {
+      "decision": "kept",
+      "reason": "the pack part key `lsp` (a pack's lsp folder), not the run-conditions record kind"
+    },
+    "repeat scripts/pipeline/lib/agents.mjs repeated-constant 'lsp' repeats the constant LSP_RECORD, which scripts/implement/lib/lsp.mjs": {
+      "decision": "kept",
+      "reason": "LSP_SERVER, the MCP server's name, its own constant: not the run-conditions record kind"
+    },
+    "repeat scripts/pipeline/lib/settings.mjs repeated-constant 'lsp' repeats the constant LSP_RECORD, which scripts/implement/lib/lsp.mjs": {
+      "decision": "kept",
+      "reason": "the `lsp` settings section's folder (SECTION_DIRS), not the run-conditions record kind"
+    },
+    "repeat scripts/board/lib/escalation.mjs repeated-constant 'Other' repeats the constant OTHER, which scripts/review-gate/lib/systems.mjs": {
+      "decision": "kept",
+      "reason": "OTHER_ANSWER, the id of an escalation question's free-text answer, not the review gate's catch-all system OTHER: one names a reply option, the other the system of a file no system claims"
+    },
+    "repeat scripts/review-gate/lib/systems.mjs repeated-constant 'Other' repeats the constant OTHER_ANSWER, which scripts/board/lib/escalation.mjs": {
+      "decision": "kept",
+      "reason": "OTHER, the review gate's catch-all system of a file no system claims, not the escalation's free-text answer id"
+    },
+    "repeat scripts/factory/install-setup.mjs repeated-constant 'lsp' repeats the constant LSP_SERVER, which scripts/pipeline/lib/agents.mjs": {
+      "decision": "kept",
+      "reason": "the engine command `lsp` (`factory lsp setup`), not the MCP server's name"
+    },
+    "repeat scripts/factory/lib/init.mjs repeated-constant 'lsp' repeats the constant LSP_SERVER, which scripts/pipeline/lib/agents.mjs": {
+      "decision": "kept",
+      "reason": "the pack part key `lsp` (a pack's lsp folder), not the MCP server's name"
+    },
+    "repeat scripts/pipeline/lib/settings.mjs repeated-constant 'lsp' repeats the constant LSP_SERVER, which scripts/pipeline/lib/agents.mjs": {
+      "decision": "kept",
+      "reason": "the `lsp` settings section's folder (SECTION_DIRS), not the MCP server's name"
+    },
+    "repeat scripts/implement/lib/implement.mjs repeated-constant 'lsp' repeats the constant LSP_SERVER, which scripts/pipeline/lib/agents.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "the run-conditions record kind: uses LSP_RECORD"
+    },
+    "repeat scripts/factory/lib/workflow-safety.mjs repeated-constant '.gitlab-ci.yml' repeats the constant GITLAB_ROOT, which scripts/factory/lib/render.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "uses GITLAB_ROOT"
+    },
+    "repeat scripts/retro/retro.mjs repeated-constant 'lessons' repeats the constant LESSONS_KEY, which scripts/retro/lib/lessons.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "the retro's stage: uses LESSONS_STAGE (decisions.mjs), as its token usage, log and cost rows now do"
+    },
+    "repeat scripts/review-gate/lib/assess.mjs repeated-constant 'bug-triage' repeats the constant TRIAGE_STAGE, which scripts/review-gate/lib/assessment.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "uses TRIAGE_STAGE, now defined beside TRIAGE_AGENT"
+    },
+    "repeat scripts/review-gate/lib/assessment.mjs repeated-constant 'bug-triage' repeats the constant TRIAGE_AGENT, which scripts/review-gate/lib/assess.mjs": {
+      "decision": "fix",
+      "batch": "council r2",
+      "how": "uses TRIAGE_AGENT"
+    },
+    "repeat scripts/pipeline/lib/decisions.mjs repeated-constant 'lessons' repeats the constant LESSONS_KEY, which scripts/retro/lib/lessons.mjs": {
+      "decision": "kept",
+      "reason": "LESSONS_STAGE, the retro's stage in token usage and logs, not LESSONS_KEY, the lessons run's state key"
+    },
+    "repeat scripts/retro/lib/lessons.mjs repeated-constant 'lessons' repeats the constant LESSONS_STAGE, which scripts/pipeline/lib/decisions.mjs": {
+      "decision": "kept",
+      "reason": "LESSONS_KEY, the lessons run's state key, not LESSONS_STAGE, the retro's stage in token usage and logs"
+    },
+    "repeat scripts/pipeline/lib/instruction-check.mjs repeated-constant 'lessons' repeats the constant LESSONS_STAGE, which scripts/pipeline/lib/decisions.mjs": {
+      "decision": "kept",
+      "reason": "the label of an agent's lessons file among its instruction sources, not the retro's stage"
+    },
+    "repeat scripts/pipeline/lib/findings.mjs repeated-constant 'council-findings.jsonl' repeats the constant FINDINGS_FILE, which scripts/pipeline/lib/scorecard.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "one FINDINGS_FILE (findings.mjs), which scorecard.mjs imports; found when the repeated-values check stopped hiding a same-name redeclaration (council r3, sol-12)"
+    },
+    "repeat scripts/pipeline/lib/scorecard.mjs repeated-constant 'council-findings.jsonl' repeats the constant FINDINGS_FILE, which scripts/pipeline/lib/findings.mjs": {
+      "decision": "fix",
+      "batch": "council r1",
+      "how": "one FINDINGS_FILE (findings.mjs), which scorecard.mjs imports; found when the repeated-values check stopped hiding a same-name redeclaration (council r3, sol-12)"
+    },
+    "repeat scripts/pipeline/lib/hosts/bitbucket.mjs repeated-default the fallback 'squash' repeats the default of implement:autoMerge:method, which scripts/implement/config.json": {
+      "decision": "fix",
+      "batch": "council r3",
+      "how": "every host's merge() defaults to defaultMergeMethod() (products.mjs), the implement.autoMerge.method setting's default, instead of writing 'squash'"
+    },
+    "repeat scripts/factory/lib/adapters.mjs repeated-default the fallback 'none' repeats the default of metrics:sink:type, which scripts/pipeline/config.json": {
+      "decision": "kept",
+      "reason": "the doctor's product row text for no tracker (`tracker none`), not the metrics sink type's default"
+    }
+  }
+}

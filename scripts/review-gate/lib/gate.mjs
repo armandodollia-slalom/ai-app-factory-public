@@ -10,7 +10,6 @@
 // asked to review. CODEOWNERS stay optional reviewers on every PR: the gate only sets how many
 // approvals are required.
 import { describeSignals } from './confidence.mjs';
-import { addTicketLabel } from './fields.mjs';
 import { editPrLabels, findComment, prHost, requestReviewers, upsertComment } from './github.mjs';
 import { ownersOfFiles } from './systems.mjs';
 import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
@@ -241,12 +240,6 @@ export function applyReview(config, gh, a, d, state, { assignees, codeowners, au
   } else if (!currentLabels.includes(want) || stale.length) attempt('labels', () => editPrLabels(prHost(config, gh), repo, a.pr, { add: currentLabels.includes(want) ? [] : [want], remove: stale }));
   attempt('notice', () => upsertComment(prHost(config, gh), repo, a.pr, MARKER, renderNotice(a, d, { ...state, reviewers })));
   return { reviewers, problems };
-}
-
-// Marks the tickets of a reopened PR on their issues (the `reopened` label) so people and requeue see it.
-export function labelReopened(config, gh, tickets) {
-  const label = setting(config, 'implement.reviewGate.labels.reopened');
-  for (const t of tickets) if (t.issue?.number ?? t.issue) addTicketLabel(config, gh, t.issue?.number ?? t.issue, label);
 }
 
 // The part of the PR description that says why a person must review it because of a person's earlier rejection, or a

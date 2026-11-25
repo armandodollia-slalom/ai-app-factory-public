@@ -82,7 +82,5 @@ export function licenceRows(resolved, { acceptLicence = [], review = 'default' }
   return rows;
 }
 
-export const licenceProblems = (resolved, opts) => licenceRows(resolved, opts).filter((r) => !r.ok).map((r) => `${r.what}: ${r.problem}`);
-
 // The lines doctor and `factory analysis check` print: every licence, warnings for pending items, failures.
 export const licenceLine = (r) => `${r.ok ? (r.pending ? 'WARN  ' : r.off ? 'off   ' : 'ok    ') : 'FAILED'}  licence ${r.kind} ${r.what}: ${r.licence}${r.warning ? ` (${r.warning})` : ''}${r.problem ? `: ${r.problem}` : ''}`;

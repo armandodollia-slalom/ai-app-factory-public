@@ -12,18 +12,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COUNCIL_LENSES, COUNCIL_STAGES, SOLE_LENS, STAGE_LENSES, canDriveBrowser, resolveIntercom } from './council-config.mjs';
+import { CLEAN_CODE_SEAT, COUNCIL_LENSES, COUNCIL_STAGES, SOLE_LENS, STAGE_LENSES, canDriveBrowser, resolveIntercom } from './council-config.mjs';
+import { CLEAN_CODE_LENS, cleanCodeSection, ruleIdOf, writerRuleIds } from './clean-code.mjs';
+import { searchCalls } from './search-calls.mjs';
+import { sharedSection } from './agents.mjs';
 import { agentEnv, entryFor, familyOf, poolOf, subtaskModels } from './pool.mjs';
 import { recordRoundFindings } from './findings.mjs';
-import { setting } from './settings.mjs';
+import { INSTALL_ROOT, setting } from './settings.mjs';
 import { logDecision } from './decisions.mjs';
 import { metricsFile, readMetricsLocal } from './state.mjs';
-import { appendJsonl, log as defaultLog, extractResult, nowIso, parseFrontMatter, readJson, run, sha, writeJson } from './util.mjs';
+import { appendJsonl, escapeRe, extractResult, log as defaultLog, nowIso, parseFrontMatter, readJson, run, sha, withMarkedSection, writeJson } from './util.mjs';
 import { resolvesGiven, resolvesOf } from './finding-route.mjs';
 
-export { COUNCIL_STAGES, COUNCIL_LENSES, SOLE_LENS, agentEnv };
+export { CLEAN_CODE_SEAT, COUNCIL_STAGES, COUNCIL_LENSES, SOLE_LENS, agentEnv };
 export const COUNCIL_FILE = 'council-rounds.jsonl';
-const INSTALL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export const SKILL_FILE = path.join(INSTALL_ROOT, 'skills', 'council', 'SKILL.md');
 
 const str = (v) => (typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim());
@@ -109,13 +111,17 @@ export function seatNames(entries, taken = []) {
   });
 }
 
+// What a seat takes from its pool entry: the entry and how it runs (CLI, model, effort, family, environment, a custom
+// command, its time limit).
+const entrySeat = (e) => ({ entry: e.name, cli: e.cli, model: e.model ?? null, effort: e.effort ?? null, family: familyOf(e), env: e.env ?? null, cmd: e.cli === 'custom' ? e.cmd : null, timeoutSec: e.timeoutSec ?? null });
+
 // A seat resolved from its pool entry: { name, entry, cli, model, effort, family, env, cmd, timeoutSec, lens, blocking }.
 // Names come from seatNames.
 export function seatMembers(stage, entries) {
   const lenses = seatLenses(stage, entries);
   const names = seatNames(entries.map((e) => e.name));
   return entries.map((e, i) => {
-    return { name: names[i], entry: e.name, cli: e.cli, model: e.model ?? null, effort: e.effort ?? null, family: familyOf(e), env: e.env ?? null, cmd: e.cli === 'custom' ? e.cmd : null, timeoutSec: e.timeoutSec ?? null, lens: lenses[i], blocking: true };
+    return { name: names[i], ...entrySeat(e), lens: lenses[i], blocking: true };
   });
 }
 
@@ -123,28 +129,66 @@ export function seatMembers(stage, entries) {
 // <stateDir>/council/seats/<stage>--<subject>.json, { members: [{ name, entry, lens, blocking }] }. Each seat runs on its
 // pool entry; a kept pick that names an entry the pool no longer has is not used.
 export const seatsFile = (config, stage, subject) => path.join(config.root, setting(config, 'stateDir'), 'council', 'seats', `${stage}--${String(subject).replace(/[^\w.-]/g, '_')}.json`);
+const poolSeat = (config, m) => {
+  const e = poolOf(config).find((x) => x?.name === m.entry);
+  return e && { name: m.name ?? e.name, ...entrySeat(e), lens: m.lens, blocking: m.blocking !== false, ...(m.exploration ? { exploration: true } : {}) };
+};
+// The kept seats, the clean-code seat among them when its entry is still in the pool (councilFor seats it otherwise).
 export function savedSeats(config, stage, subject) {
   if (!subject || !config?.root) return null;
   const doc = readJson(seatsFile(config, stage, subject), null);
   if (!Array.isArray(doc?.members) || !doc.members.length) return null;
-  const seat = (m) => {
-    const e = poolOf(config).find((x) => x?.name === m.entry);
-    return e && { name: m.name ?? e.name, entry: e.name, cli: e.cli, model: e.model ?? null, effort: e.effort ?? null, family: familyOf(e), env: e.env ?? null, cmd: e.cli === 'custom' ? e.cmd : null, timeoutSec: e.timeoutSec ?? null, lens: m.lens, blocking: m.blocking !== false, ...(m.exploration ? { exploration: true } : {}) };
-  };
-  // One seat kept: the stage's own verifier on the entry the orchestrator picked (still in the pool; else its agent's
-  // own, and none for the PR check's critic panel, whose critics then run on their own), with its non-blocking shadow
-  // member when one was seated (selection.mjs shadowEntry) and its entry is still in the pool.
-  const shadow = doc.members.find((m) => m.shadow);
-  if (doc.members.length === 1 || shadow) {
-    const picked = doc.members.find((m) => !m.shadow)?.entry;
+  const seat = (m) => poolSeat(config, m);
+  const kept = doc.members.find((m) => m.fixed);
+  const fixed = kept && seat(kept);
+  const counted = doc.members.filter((m) => !m.fixed);
+  const withFixed = (members) => (fixed ? [...members, cleanCodeSeat(fixed, counted.map((m) => m.name))] : members);
+  if (!counted.length) return null;
+  // One counted seat kept: the stage's own verifier on the entry the orchestrator picked (still in the pool; else its
+  // agent's own, and none for the PR check's critic panel, whose critics then run on their own), with its non-blocking
+  // shadow member when one was seated (selection.mjs shadowEntry) and its entry is still in the pool.
+  const shadow = counted.find((m) => m.shadow);
+  if (counted.length === 1 || shadow) {
+    const picked = counted.find((m) => !m.shadow)?.entry;
     const own = picked && seat({ entry: picked, lens: SOLE_LENS });
     const sole = own ? { ...soleMember(config, stage), ...own, name: 'verifier', lens: SOLE_LENS, blocking: true, sole: true } : soleMember(config, stage);
-    const s = shadow && seat(shadow);
-    return s ? [sole, { ...s, lens: SOLE_LENS, blocking: false, shadow: true }] : [sole];
+    const sh = shadow && seat(shadow);
+    return withFixed(sh ? [sole, { ...sh, lens: SOLE_LENS, blocking: false, shadow: true }] : [sole]);
   }
-  const members = doc.members.map(seat);
-  return members.every(Boolean) ? members : null;
+  const members = counted.map(seat);
+  return members.every(Boolean) ? withFixed(members) : null;
 }
+
+// The clean-code seat's entry when the orchestrator has not picked it: the first entry of `ranked` (the pool, or the
+// pool ranked for the clean-code lens) of a family no counted seat sits on, else the first no counted seat runs on,
+// else the first. `counted`: the counted seats ({ entry, family? }; a seat without a family has its pool entry's).
+// Null with an empty pool.
+export function cleanCodeEntry(pool, counted, ranked = pool) {
+  const byName = new Map(pool.map((e) => [e.name, e]));
+  const families = new Set(counted.map((m) => m.family ?? (byName.has(m.entry) ? familyOf(byName.get(m.entry)) : null)).filter(Boolean));
+  const entries = new Set(counted.map((m) => m.entry).filter(Boolean));
+  return ranked.find((e) => !families.has(familyOf(e))) ?? ranked.find((e) => !entries.has(e.name)) ?? ranked[0] ?? null;
+}
+
+// The clean-code seat (GEN-16) on `base` (a pool seat, a kept seat, an orchestrator's pick or the stage's own verifier),
+// beside counted seats named `countedNames`: blocking, lens clean-code, `fixed`, named `clean-code` unless a counted
+// seat took the name. Every place that seats it builds it here.
+export function cleanCodeSeat(base, countedNames) {
+  const [name] = seatNames([CLEAN_CODE_SEAT], countedNames);
+  return { ...base, name, lens: CLEAN_CODE_LENS, blocking: true, fixed: true, sole: undefined };
+}
+
+// The default clean-code seat beside the counted seats: on cleanCodeEntry's pool entry, or with no pool entry at all on
+// the stage's own verifier's.
+export function cleanCodeMember(config, stage, counted) {
+  const e = cleanCodeEntry(poolOf(config), counted);
+  return cleanCodeSeat(e ? poolSeat(config, { entry: e.name }) : soleMember(config, stage), counted.map((m) => m.name));
+}
+export const isCleanCodeSeat = (m) => Boolean(m?.fixed) && m.lens === CLEAN_CODE_LENS;
+// An upheld clean-code breach is blocking on every path to a verdict (GEN-16 AC12): whatever a debate, a judge, an
+// adjudication or a later severity rule made of it, a finding marked `cleanCode` that still stands is blocking.
+export const holdCleanCodeBlocking = (findings = []) => findings.map((f) => (f?.cleanCode && f.severity !== 'blocking' && !f.notUpheld && !f.protected ? { ...f, severity: 'blocking' } : f));
+const countedOf = (members) => members.filter((m) => !m.fixed);
 
 // The council a stage seats: every verifier stage is a council. Its round limit and pass score are the stage section's
 // (`<section>.maxCouncilRounds`, `<section>.councilPassScore`; COUNCIL_STAGES names the section), for any council size.
@@ -157,12 +201,15 @@ export function councilFor(config, stage, { subject = null } = {}) {
   if (!section) return null;
   const count = memberCount(config, stage);
   const kept = savedSeats(config, stage, subject);
-  const seated = kept ?? (count > 1 ? seatMembers(stage, poolSeats(poolOf(config), count)) : []);
+  const seated = kept ? countedOf(kept) : count > 1 ? seatMembers(stage, poolSeats(poolOf(config), count)) : [];
   const sole = seated.length < 2;
   // A kept single seat is the stage's own verifier on the entry the orchestrator picked (savedSeats).
-  const members = sole ? (seated.length === 1 ? seated : [soleMember(config, stage)]) : seated;
-  // One deciding member (alone, or beside a shadow): no discussion, no quorum, and a round fails when it cannot run.
-  const alone = members.filter((m) => m.blocking).length < 2;
+  const counted = sole ? (seated.length === 1 ? seated : [soleMember(config, stage)]) : seated;
+  // The clean-code seat sits beside the counted seats whatever their number: the kept one, else the default (GEN-16).
+  const members = [...counted, kept?.find(isCleanCodeSeat) ?? cleanCodeMember(config, stage, counted)];
+  // One deciding counted member (alone, or beside a shadow): no discussion, no quorum, and a round fails when it cannot
+  // run. The clean-code seat beside it adds a second opinion on clean code only.
+  const alone = counted.filter((m) => m.blocking).length < 2;
   const shadow = members.find((m) => m.shadow)?.name ?? null;
   const own = { councilIntercom: setting(config, `${section}.councilIntercom`) };
   return {
@@ -177,6 +224,8 @@ export function councilFor(config, stage, { subject = null } = {}) {
     // The shadow seat's member name (a non-blocking member beside a council of one), else null.
     shadow,
     members,
+    // The full clean-code rules, with the repository's examples, for the clean-code seat's task (memberTask).
+    cleanCodeRules: cleanCodeSection(config, 'full'),
   };
 }
 
@@ -212,28 +261,49 @@ export function soleSkillText(skill) {
     .join('\n\n');
 }
 
+// Who a member is on its council and when the council passes, as its task says it, and the council rules it reads (the
+// sole member's skill text when it reviews through every lens).
+function memberRole({ council, member, round, skill }) {
+  const everyLens = member.lens === SOLE_LENS;
+  const cleanCode = isCleanCodeSeat(member);
+  // The counted seats decide who is the council's only member; the clean-code seat sits beside them (GEN-16).
+  const counted = countedOf(council.members);
+  const fixedSeat = council.members.find(isCleanCodeSeat);
+  const sole = !cleanCode && counted.length === 1;
+  const seat = council.members.map((m) => `${m.name} (${m.lens}${m.blocking ? '' : ', non-blocking'})`).join(', ');
+  const who = memberWho({ council, member, counted, fixedSeat, seat, sole, everyLens, cleanCode });
+  const youAnd = fixedSeat && !cleanCode ? `you and ${fixedSeat.name} score` : 'you score';
+  const pass = sole || (everyLens && member.blocking)
+    ? `Council round ${round} of at most ${council.maxCouncilRounds}. The council passes when ${youAnd} ${council.councilPassScore}/10 or more and no blocking finding stands.`
+    : `Council round ${round} of at most ${council.maxCouncilRounds}. The council passes when every blocking member scores ${council.councilPassScore}/10 or more and no blocking finding stands.${member.blocking ? '' : ' You are non-blocking: your findings are feedback and your score is not recorded.'}`;
+  const rules = !cleanCode && (sole || everyLens) ? soleSkillText(skill) : skill;
+  return { who, pass, rules, cleanCode };
+}
+
+// The member's sentence on who it is: the clean-code seat, the only counted member, the deciding or shadow member of a
+// sole seat, or one of several lenses.
+function memberWho({ council, member, counted, fixedSeat, seat, sole, everyLens, cleanCode }) {
+  const every = 'the change through every lens (correctness, acceptance, security, test value, a simpler design)';
+  const other = counted.find((m) => m.name !== member.name)?.name;
+  const beside = fixedSeat && !cleanCode ? ` The clean-code member, ${fixedSeat.name}, reviews it apart from you for clean code only (a fixed seat); its findings and its score count like yours.` : '';
+  return cleanCode
+    ? `You are **${member.name}**, the council's clean-code member: a fixed seat beside the ${counted.length} counted member(s) (${seat}). Your lens is **clean-code**: ${COUNCIL_LENSES[CLEAN_CODE_LENS]} Review the change only through it.`
+    : sole
+      ? `You are the council's only counted member: you review ${every}.${beside}`
+      : everyLens && member.blocking
+        ? `You are the council's only deciding counted member: you review ${every}. A non-blocking member, ${other}, reviews it apart from you; its findings are feedback only.${beside}`
+        : everyLens
+          ? `You are the council's non-blocking shadow member: you review ${every}, apart from its deciding member, ${other}.`
+          : `You are one of ${council.members.length} council members who review this change independently: ${seat}. You are **${member.name}**; your lens is **${member.lens}**: ${COUNCIL_LENSES[member.lens]} Look through it first; report what you find outside it only when it is blocking.`;
+}
+
 // What a member's task adds to the stage's own task: who it is, its lens, the council's output fields, the disputes it
 // rules on and the skill. The stage's own instructions and AGENT_RESULT contract stay as they are; the lens adds to them.
 // A sole member (a council of one) gets the same rules without the parts that need other members: no seat list, no lens
 // to look through first (it reviews everything), no non-blocking members, no discussion and no orchestrator sections.
 // Beside a shadow seat, the sole member and the shadow both review everything; each is told the other works apart.
 export function memberTask(task, { council, member, round, disputes = '', earlier = '', skill = skillText() }) {
-  const everyLens = member.lens === SOLE_LENS;
-  const sole = council.members.length === 1;
-  const seat = council.members.map((m) => `${m.name} (${m.lens}${m.blocking ? '' : ', non-blocking'})`).join(', ');
-  const every = 'the change through every lens (correctness, acceptance, security, test value, a simpler design)';
-  const other = council.members.find((m) => m.name !== member.name)?.name;
-  const who = sole
-    ? `You are the council's only member: you review ${every}.`
-    : everyLens && member.blocking
-      ? `You are the council's only deciding member: you review ${every}. A non-blocking member, ${other}, reviews it apart from you; its findings are feedback only.`
-      : everyLens
-        ? `You are the council's non-blocking shadow member: you review ${every}, apart from its deciding member, ${other}.`
-        : `You are one of ${council.members.length} council members who review this change independently: ${seat}. You are **${member.name}**; your lens is **${member.lens}**: ${COUNCIL_LENSES[member.lens]} Look through it first; report what you find outside it only when it is blocking.`;
-  const pass = sole || (everyLens && member.blocking)
-    ? `Council round ${round} of at most ${council.maxCouncilRounds}. The council passes when you score ${council.councilPassScore}/10 or more and no blocking finding stands.`
-    : `Council round ${round} of at most ${council.maxCouncilRounds}. The council passes when every blocking member scores ${council.councilPassScore}/10 or more and no blocking finding stands.${member.blocking ? '' : ' You are non-blocking: your findings are feedback and your score is not recorded.'}`;
-  const rules = sole || everyLens ? soleSkillText(skill) : skill;
+  const { who, pass, rules, cleanCode } = memberRole({ council, member, round, skill });
   return [
     task,
     '',
@@ -245,6 +315,7 @@ export function memberTask(task, { council, member, round, disputes = '', earlie
     // Rule 3 binds the change as much as the review (dogfood C14: a fix added a 9999 per-item quantity limit no line of
     // the ticket asked for, and nothing in the review was charged with noticing).
     'Whatever your lens, check the change itself for scope: behaviour the ticket does not ask for (a new limit, error, default, message, field or side effect; an existing behaviour changed or removed) is a blocking finding with `lens` "acceptance" and `kind` "scope", unless a line of the ticket or the subtask, or a finding the council upheld in an earlier round (listed below when there is one), requires it; name that behaviour, the file and line, and say that no ticket line asks for it. Code already on the base branch that the change does not touch is not the change.',
+    ...(cleanCode ? ['', cleanCodeDuty(council.stage)] : []),
     ...(earlier ? ['', earlier] : []),
     '',
     'Keep the instructions and the `AGENT_RESULT` contract above exactly as they are. The council adds these fields to the same JSON object:',
@@ -257,6 +328,21 @@ export function memberTask(task, { council, member, round, disputes = '', earlie
     '- `followUps`: `[{"title": "...", "reason": "..."}]` for real problems outside the ticket; they are not findings.',
     ...(disputes ? ['', '### Implementer disputes of findings you raised', '', 'The implementer did not act on these and says why. Rule on each in `disputes: [{"finding": "<id>", "decision": "accepted" | "reasserted", "evidence": "<why>"}]`; re-raise a finding (same id) only with new evidence that the ticket requires it.', '', disputes] : []),
     ...(rules ? ['', '### The council skill (the rules every member follows)', '', rules.replace(/^#{1,2} /gm, (h) => `#${h}`)] : []),
+    // The PR check's clean-code critic (pr-check-clean-code) carries the rules in its own definition.
+    ...(cleanCode && council.cleanCodeRules && council.stage !== 'prCheck' ? ['', council.cleanCodeRules.replace(/^## /m, '### ')] : []),
+  ].join('\n');
+}
+
+// What the clean-code seat must do, on every stage: the duties pr-check-clean-code includes too (agents/shared). The
+// test plan stage reviews cases, not code.
+export function cleanCodeDuty(stage) {
+  return [
+    '### The clean-code seat: a strict arbiter',
+    '',
+    stage === 'testPlan'
+      ? '- On the test plan you review the cases: a case that repeats another, or two cases that would catch the same bug (a redundant case), breaks `CC-14`.'
+      : sharedSection('shared/clean-code-search.md'),
+    sharedSection('shared/clean-code-arbiter.md'),
   ].join('\n');
 }
 
@@ -277,8 +363,10 @@ export function normalizeFinding(f, member) {
   const { file, line } = whereOf(f ?? {});
   return {
     ...f,
-    lens: str(f?.lens) || member.lens,
-    severity: Object.hasOwn(SEVERITY_RANK, f?.severity) ? f.severity : 'blocking',
+    // The clean-code seat judges through its lens only: its findings are clean-code findings whatever they say.
+    lens: isCleanCodeSeat(member) ? CLEAN_CODE_LENS : str(f?.lens) || member.lens,
+    // The clean-code seat has no minor finding: an upheld breach of any rule blocks (GEN-16).
+    severity: isCleanCodeSeat(member) ? 'blocking' : Object.hasOwn(SEVERITY_RANK, f?.severity) ? f.severity : 'blocking',
     action: ACTIONS.includes(f?.action) ? f.action : 'fix',
     text: str(f?.issue) || str(f?.title) || str(f?.detail),
     evidence: str(f?.evidence),
@@ -348,7 +436,20 @@ export function treeFingerprint(cwd, exclude = []) {
 // background and its result goes to `onLate` (the caller hands it on as feedback; its score is never recorded).
 // `readOnly` (a checkout and the folders to ignore) fails the round when any member changed the working tree: every
 // CLI's read-only mode is enforced by the CLI, and this catches what got past it (a custom command).
-export async function runCouncil({ council, run: runMember, parse, taskFor, retries = 0, onLate = null, readOnly = null, round = 1, waitAll = Boolean(council?.intercom?.enabled && round === 1), log = defaultLog }) {
+// What a council's members may not change in the checkout they review (runCouncil `readOnly`): everything but the
+// pipeline's own records, state and the paths outside the implementation, and `extra`: folders a member writes as its
+// own output (a UI member's screenshots).
+export const councilReadOnly = (config, cwd = config.root, extra = []) => ({ cwd, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? []), ...extra] });
+
+// The clean-code seat's searches (graphify and language-server calls) in the checkout it reviews (`cwd`, else the
+// read-only checkout) since `from`, for its result; nothing for another member.
+function seatSearches(m, { cwd, readOnly, from }) {
+  const where = cwd ?? readOnly?.cwd;
+  return isCleanCodeSeat(m) && where ? { searches: searchCalls(where, { member: m.name, from }).length } : {};
+}
+
+// `cwd`: the checkout the members search (the clean-code seat's graphify and language-server searches are counted there).
+export async function runCouncil({ council, run: runMember, parse, taskFor, retries = 0, onLate = null, readOnly = null, round = 1, waitAll = Boolean(council?.intercom?.enabled && round === 1), log = defaultLog, cwd }) {
   const before = readOnly ? treeFingerprint(readOnly.cwd, readOnly.exclude) : null;
   const attempt = async (m) => {
     const t0 = Date.now();
@@ -373,7 +474,8 @@ export async function runCouncil({ council, run: runMember, parse, taskFor, retr
         // The member's result as written, for the intercom room's seed (only when a discussion can follow).
         const raw = council.intercom?.enabled ? { rawResult: extractResult(res?.output ?? '') } : {};
         const filled = await fillResolves(parsed.findings ?? [], { member: m, run: runMember, stage: council.stage, log });
-        return { ...base, attempts: Math.max(tries, 1), status: 'ok', ...parsed, ...raw, findings: filled.findings.map((f) => normalizeFinding(f, m)), ...(filled.reasked ? { resolvesReasked: filled.reasked } : {}), res, seconds: Math.round((Date.now() - t0) / 1000) };
+        const searches = seatSearches(m, { cwd, readOnly, from: t0 });
+        return { ...base, attempts: Math.max(tries, 1), status: 'ok', ...parsed, ...raw, ...searches, findings: filled.findings.map((f) => normalizeFinding(f, m)), ...(filled.reasked ? { resolvesReasked: filled.reasked } : {}), res, seconds: Math.round((Date.now() - t0) / 1000) };
       }
       log(`council ${council.stage}: ${m.name} returned no parsable result (attempt ${i + 1})`);
     }
@@ -586,6 +688,88 @@ export function hasEvidence(f, root = null) {
 // cluster, blockQuorum or a severity; it stays as a note with its `disposition`, and still explains its member's low score.
 // The earlier disposition wins (a vote, then a later withdrawal: the vote). Revised scores replace round-1 scores. A
 // discussion with a read-only violation fails the council.
+// Why the clean-code seat's items of a finding do not make a clean-code finding (null: they do, or none is the seat's):
+// no rule id (`rule`, or a `CC-<n>` in the text), or a duplication without two places in `copies`: CC-1 and CC-2, and on
+// the test plan a redundant case (CC-14, which names both cases). Two places are two different file:line after the path
+// is made canonical (`./a.mjs:1` and `a.mjs:1` are one place; an absolute path under `root` is read from it).
+const DUPLICATION = new Set(['CC-1', 'CC-2']);
+const duplicationRules = (stage) => (stage === 'testPlan' ? new Set([...DUPLICATION, 'CC-14']) : DUPLICATION);
+function copyPlace(copy, root) {
+  const m = /^(.*\S):(\d+)(?:-\d+)?$/.exec(str(copy).trim());
+  if (!m) return null;
+  const file = m[1].replace(/\\/g, '/');
+  const rel = root && path.isAbsolute(file) ? path.relative(root, file).split(path.sep).join('/') : file;
+  return `${path.posix.normalize(rel).replace(/^\.\//, '')}:${Number(m[2])}`;
+}
+// One raiser's item of a merged finding, as the records keep it (its lens, and a clean-code item's rule and copies).
+const raiserEvidence = (f) => ({ member: f.member, lens: f.lens ?? null, evidence: f.evidence, text: f.text, action: f.action, severity: f.severity, file: f.file ?? null, line: f.line ?? null, ...(str(f.kind) ? { kind: str(f.kind) } : {}), ...(ruleIdOf(f) && f.lens === CLEAN_CODE_LENS ? { rule: ruleIdOf(f) } : {}), ...(Array.isArray(f.copies) ? { copies: f.copies } : {}) });
+export function cleanCodeEvidenceProblem(items, { stage = null, root = null } = {}) {
+  if (!items.length) return null;
+  const rule = items.map(ruleIdOf).find(Boolean);
+  if (!rule) return 'it cites no clean-code rule id (CC-<n> or SCOPE)';
+  const places = new Set(items.flatMap((f) => (Array.isArray(f.copies) ? f.copies : [])).map((c) => copyPlace(c, root)).filter(Boolean));
+  if (duplicationRules(stage).has(rule) && places.size < 2) return `a duplication (${rule}) that does not name both copies with file and line, at two different places`;
+  return null;
+}
+
+// A member's record in the merged result: who it is, how it ran and what it gave.
+const memberRecord = (r) => ({
+  name: r.member.name,
+  cli: r.member.cli,
+  model: r.member.model ?? null,
+  effort: r.member.effort ?? null,
+  lens: r.member.lens,
+  login: memberLogin(r.member),
+  blocking: r.member.blocking,
+  status: r.status,
+  // A non-blocking member's score is never recorded.
+  score: r.status === 'ok' && r.member.blocking ? r.score ?? null : null,
+  verdict: r.status === 'ok' ? r.verdict ?? null : null,
+  findings: r.status === 'ok' ? r.findings.length : 0,
+  seconds: r.seconds ?? null,
+  // Executions of this member in this sitting (a retry after an unparsable answer is a second execution, not a second
+  // sitting; council C10, Sol 3).
+  attempts: r.attempts ?? 1,
+  ...(r.reason ? { reason: String(r.reason).slice(0, 300) } : {}),
+  // The clean-code seat, and the graphify and language-server searches it made (its trace).
+  ...(r.member.fixed ? { fixed: true } : {}),
+  ...(Number.isInteger(r.searches) ? { searches: r.searches } : {}),
+});
+
+// The clean-code seat's item before clustering (GEN-16): blocking with the seat's lens, whoever built it (runCouncil's
+// normalisation, a seeded or resumed result). One that breaks the evidence rule (its rule id; for a duplication both
+// copies) comes back as a question of its own, never part of (or a drag on) another member's finding; else null.
+function seatItemQuestion(f, cleanCodeNames, where) {
+  if (!cleanCodeNames.has(f.member)) return null;
+  Object.assign(f, { severity: 'blocking', lens: CLEAN_CODE_LENS });
+  const unproven = cleanCodeEvidenceProblem([f], where);
+  return unproven ? { ...f, severity: 'minor', members: [f.member], upheldBy: [], notUpheld: `the clean-code evidence rule: ${unproven}; it is a question, not a blocking finding`, cleanCodeQuestion: true, memberEvidence: [raiserEvidence(f)] } : null;
+}
+
+// A member's item that does not cluster: one the council discussion disposed of (`fate`), and a clean-code seat's item
+// that is a question (seatItemQuestion). Each goes to its list; true when it went.
+function setAside(f, { fate, disposed, cleanCodeNames, cleanCodeQuestions, where }) {
+  if (fate.has(f.intercomId)) return Boolean(disposed.push(f));
+  const question = seatItemQuestion(f, cleanCodeNames, where);
+  if (question) cleanCodeQuestions.push(question);
+  return Boolean(question);
+}
+
+// blockQuorum counts the configured (counted) seats: the clean-code seat neither adds to the number needed nor backs
+// another lens's finding toward it.
+const countedThreshold = (council, okBlocking, cleanCodeNames) => needed(council.blockQuorum, Math.max(1, okBlocking.filter((r) => !cleanCodeNames.has(r.member.name)).length));
+
+// Whether a cluster's blocking backers reach the threshold. The clean-code seat's findings stand outside blockQuorum:
+// no clean-code breach is outvoted (GEN-16).
+const backedEnough = (backing, { threshold, cleanCodeNames, cleanCode }) => backing.filter((name) => !cleanCodeNames.has(name)).length >= threshold || Boolean(cleanCode && backing.includes(cleanCode.member));
+
+// A clean-code seat's item keeps its rule and copies on the merged finding whoever leads the cluster (the debate, the
+// judge and the records read them), and marks it: an upheld clean-code breach is blocking on every path.
+const cleanCodeMarks = (item) => (item ? { cleanCode: true, rule: ruleIdOf(item), ...(Array.isArray(item.copies) ? { copies: item.copies } : {}) } : {});
+
+// A merged item the round's questions list: no evidence, or a clean-code item without its rule or copies.
+const isQuestion = (f) => f.noEvidence || f.cleanCodeQuestion;
+
 export function mergeCouncil(council, results, { protect = null, feedback = [], violation = null, changed = null, earlier = null, root = null, adjudications = null, intercom = null } = {}) {
   const ic = intercom?.violation ? null : intercom;
   const fate = new Map(); // intercomId -> disposition { kind, why, question? }
@@ -600,25 +784,7 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
   const okBlocking = ok.filter((r) => r.member.blocking);
   const unavailable = results.filter((r) => r.status === 'unavailable');
   const failed = results.filter((r) => r.status === 'failed' && r.member.blocking);
-  const members = results.map((r) => ({
-    name: r.member.name,
-    cli: r.member.cli,
-    model: r.member.model ?? null,
-    effort: r.member.effort ?? null,
-    lens: r.member.lens,
-    login: memberLogin(r.member),
-    blocking: r.member.blocking,
-    status: r.status,
-    // A non-blocking member's score is never recorded.
-    score: r.status === 'ok' && r.member.blocking ? r.score ?? null : null,
-    verdict: r.status === 'ok' ? r.verdict ?? null : null,
-    findings: r.status === 'ok' ? r.findings.length : 0,
-    seconds: r.seconds ?? null,
-    // Executions of this member in this sitting (a retry after an unparsable answer is a second execution, not a second
-    // sitting; council C10, Sol 3).
-    attempts: r.attempts ?? 1,
-    ...(r.reason ? { reason: String(r.reason).slice(0, 300) } : {}),
-  }));
+  const members = results.map(memberRecord);
   let error = violation || intercom?.violation || null;
   if (!error && unavailable.some((r) => r.member.blocking) && council.onUnavailable === 'fail') {
     error = `council member(s) unavailable: ${unavailable.filter((r) => r.member.blocking).map((r) => `${r.member.name} (${r.member.cli}): ${r.reason}`).join('; ')} (council.onUnavailable is fail; no other model is substituted)`;
@@ -636,19 +802,18 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
   const disposed = [];
   const blockingFirst = [...ok.filter((r) => r.member.blocking), ...ok.filter((r) => !r.member.blocking)];
   const blockingNames0 = new Set(ok.filter((r) => r.member.blocking).map((r) => r.member.name));
+  const cleanCodeNames = new Set(ok.filter((r) => isCleanCodeSeat(r.member)).map((r) => r.member.name));
+  const cleanCodeQuestions = [];
   const sameAsBlocking = (y, f) => (blockingNames0.has(y.member) && !blockingNames0.has(f.member) ? Boolean(str(y.id) && str(y.id) === str(f.id)) || similarText(y.text, f.text) : sameDefect(y, f));
   for (const r of blockingFirst) {
     for (const f of r.findings) {
-      if (fate.has(f.intercomId)) {
-        disposed.push(f);
-        continue;
-      }
+      if (setAside(f, { fate, disposed, cleanCodeNames, cleanCodeQuestions, where: { stage: council.stage, root } })) continue;
       const c = clusters.find((x) => x.items.some((y) => sameAsBlocking(y, f)) && !x.items.some((y) => y.member === f.member));
       if (c) c.items.push(f);
       else clusters.push({ items: [f] });
     }
   }
-  const threshold = needed(council.blockQuorum, okBlocking.length);
+  const threshold = countedThreshold(council, okBlocking, cleanCodeNames);
   const blockingNames = new Set(okBlocking.map((r) => r.member.name));
   const merged = clusters.map((c) => {
     // The deciding (blocking) members' items alone decide the finding: its id, its evidence, whether it has any (rule 4)
@@ -662,7 +827,8 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     const backing = [...new Set(c.items.filter((f) => blockingNames.has(f.member) && f.severity !== 'minor').map((f) => f.member))];
     const worst = c.items.filter((f) => blockingNames.has(f.member)).map((f) => f.severity).sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b])[0] ?? 'minor';
     const actions = [...new Set(basis.map((f) => f.action))];
-    const upheld = worst !== 'minor' && backing.length >= threshold;
+    const cleanCode = c.items.find((f) => cleanCodeNames.has(f.member));
+    const upheld = worst !== 'minor' && backedEnough(backing, { threshold, cleanCodeNames, cleanCode });
     const out = {
       ...first,
       id: basis.map((f) => str(f.id)).find(Boolean) || undefined,
@@ -670,7 +836,8 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
       members: raisers,
       upheldBy: upheld ? backing : [],
       evidence: basis.map((f) => (f.evidence ? `${f.member}: ${f.evidence}` : '')).filter(Boolean).join('\n') || first.evidence,
-      memberEvidence: c.items.map((f) => ({ member: f.member, evidence: f.evidence, text: f.text, action: f.action, severity: f.severity, file: f.file ?? null, line: f.line ?? null, ...(str(f.kind) ? { kind: str(f.kind) } : {}) })),
+      memberEvidence: c.items.map(raiserEvidence),
+      ...cleanCodeMarks(cleanCode),
     };
     if (!upheld && worst !== 'minor') out.notUpheld = `raised by ${backing.join(', ')}; council.blockQuorum "${council.blockQuorum}" needs ${threshold} blocking member(s)`;
     // Raised by non-blocking members only (the shadow seat): feedback, in every stage. It never enters a verdict, a
@@ -748,6 +915,7 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     }
     return out;
   });
+  merged.push(...cleanCodeQuestions);
   // The discussion's dispositions, each its own note for the record: never a fix, never promoted downstream.
   for (const f of disposed) {
     const d = fate.get(f.intercomId);
@@ -840,7 +1008,7 @@ export function mergeCouncil(council, results, { protect = null, feedback = [], 
     contradictions,
     // Contradictions with an earlier round's upheld finding, settled by the harness (never an owner question).
     // Findings rule 4 turned into questions (no evidence): asked, recorded, never fixed.
-    questions: merged.filter((f) => f.noEvidence).map((f) => ({ id: f.id ?? null, members: f.members, text: f.text, file: f.file ?? null })),
+    questions: merged.filter(isQuestion).map((f) => ({ id: f.id ?? null, members: f.members, text: f.text, file: f.file ?? null })),
     earlierRound: merged.filter((f) => f.sanctionedBy).map((f) => ({ id: f.id ?? null, subject: f.text, file: f.file ?? null, line: f.line ?? null, earlier: f.sanctionedBy, acceptedBy: f.adjudication?.acceptedBy ?? [], resolution: 'every blocking member accepted on adjudication that the earlier finding\'s fix requires it; this objection is a note' })),
     // Scope objections on lines declared for an earlier upheld finding, not yet adjudicated: they stand until adjudicate() asks.
     adjudicate: merged.filter((f) => f.adjudicate && f.severity !== 'minor').map((f) => ({ ...f.adjudicate, objection: { id: f.id ?? null, text: str(f.text), fix: fixOf(f), file: f.file, line: f.line ?? null, members: f.members, evidence: str(f.evidence) } })),
@@ -1209,7 +1377,7 @@ export function sealPendingFixes({ cwd, stateDir, root, before, log = defaultLog
 const remedyCovers = (u, rel) => {
   if (u.file && relPath(u.file) === rel) return true;
   const said = `${u.fix ?? ''} ${u.text ?? ''}`;
-  return said.includes(rel) || new RegExp(`(^|[^\\w.-])${path.basename(rel).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w-])`).test(said);
+  return said.includes(rel) || new RegExp(`(^|[^\\w.-])${escapeRe(path.basename(rel))}($|[^\\w-])`).test(said);
 };
 
 // One round's view of a story's council memory: { upheld (earlier rounds of this sitting, then earlier rulings of the
@@ -1388,6 +1556,17 @@ export function testProtection(f, { keys = [], cases = [] } = {}) {
 
 // One council round to council-rounds.jsonl and the decision log.
 // `stories`: every ticket a shared check covers (a PR check of --stories A,B); its council sat on each of them.
+// The stages whose work a writing agent produced (the test plan's is the planner's), and the writer rule set in force.
+export const WRITER_STAGES = ['pairVerify', 'pairUiVerify', 'architectureReview', 'testAutomation', 'prCheck'];
+function writerRulesOf(config, stage) {
+  if (!WRITER_STAGES.includes(stage)) return {};
+  try {
+    return { writerRules: writerRuleIds(config) };
+  } catch {
+    return {};
+  }
+}
+
 export function recordCouncilRound(config, { stage, story, step = null, check = null, stories = null, round, council, merged, selfRecorded = [] }) {
   const rec = {
     ts: nowIso(),
@@ -1404,6 +1583,9 @@ export function recordCouncilRound(config, { stage, story, step = null, check = 
     pass: Boolean(merged.pass),
     ...(merged.error ? { error: String(merged.error).slice(0, 500) } : {}),
     score: merged.score ?? null,
+    // The clean-code rules the writers carried when this work was written (the retro's writer-rule ledger compares
+    // the rounds with and without each rule).
+    ...writerRulesOf(config, stage),
     // Each member with its pool entry, model and family (misses count against them; the scorecard keys rows by model).
     members: (merged.members ?? []).map((m) => {
       const seat = (council.members ?? []).find((x) => x.name === m.name) ?? {};
@@ -1506,22 +1688,9 @@ export const councilRecords = (config, keys) => readMetricsLocal(config, COUNCIL
 
 const CSTART = '<!-- council-review:start -->';
 const CEND = '<!-- council-review:end -->';
-// The PR body with the "Council review" section replaced (regenerated from the latest records), or added before the
-// model and harness line at the end (a trailing "Generated with" / robot line), before the demo video block, or at the end.
-export function withCouncilReview(body, section) {
-  let text = String(body ?? '').replace(/\r\n/g, '\n');
-  const a = text.indexOf(CSTART);
-  const b = text.indexOf(CEND);
-  if (a >= 0 && b > a) text = `${text.slice(0, a).trimEnd()}\n\n${text.slice(b + CEND.length).trimStart()}`.trimEnd() + '\n';
-  if (!section) return text;
-  const block = `${CSTART}\n${section}\n${CEND}`;
-  const lines = text.trimEnd().split('\n');
-  const last = lines.length - 1;
-  if (/^(🤖|Generated with|Model:|Harness:)/i.test(lines[last] ?? '')) return `${lines.slice(0, last).join('\n').trimEnd()}\n\n${block}\n\n${lines[last]}\n`;
-  const video = text.indexOf('<!-- pr-demo-video:start -->');
-  if (video >= 0) return `${text.slice(0, video).trimEnd()}\n\n${block}\n\n${text.slice(video)}`;
-  return `${text.trimEnd()}\n\n${block}\n`;
-}
+// The PR body with the "Council review" section replaced (regenerated from the latest records), or added where
+// withMarkedSection puts it.
+export const withCouncilReview = (body, section) => withMarkedSection(body, section, [CSTART, CEND]);
 
 // ---------------------------------------------------------------------------------------------
 // Late results of non-blocking members

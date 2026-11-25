@@ -102,6 +102,7 @@ Generated from `scripts/factory/lib/interview.mjs`. "When it applies" questions 
 | Observability | `metrics.target` | The store's path, URL or command? | text | when it applies |
 | Observability | `metrics.token` | The environment variable that holds the store's token (blank: none)? | text | when it applies |
 | Static analysis | `analysis.enabled` | Run the open-source static analysis (secrets, dependencies, security patterns) in the fix loop and CI? | bool | always |
+| Static analysis | `project.configSources` | Where do the application's configuration defaults live (globs: options classes, appsettings*.json, config modules, .env.example, settings modules)? The repeated-values check compares fallbacks with them | list | always |
 | Static analysis | `analysis.licenceReview` | Licence review mode: default (items pending legal review stay on) or strict (they are off)? | `default`, `strict` | when it applies |
 | Commercial scanner | `scanner.id` | Does the client have a commercial scanner to integrate? | `none`, `semgrep`, `codeql`, `snyk-code`, `snyk-open-source`, `sonarqube`, `checkmarx`, `veracode` | always |
 | Commercial scanner | `scanner.mode` | How does it run: local (its CLI in the fix loop and CI) or server (it scans in the client's CI or SaaS; the harness waits for the result of each head)? | `local`, `server` | when it applies |

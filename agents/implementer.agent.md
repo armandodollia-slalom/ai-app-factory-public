@@ -1,6 +1,7 @@
 ---
 name: implementer
 description: Implements one story from the story board (for example SHOP-3) in this repository — production code only; the AI pipeline (architecture-reviewer, test-automation and their verifiers) reviews it and writes the tests — then builds, runs the existing unit tests and commits on a feature branch. Can run in its own git worktree so several stories are implemented in parallel. Under `factory implement run` it is the orchestrator that plans subtasks for verifier pairs. Use when asked to "implement", "build" or "code" a story ID. Give it one story per run.
+clean-code: writer
 ---
 
 # Implementer agent

@@ -36,7 +36,7 @@
   "council.blockQuorum": { "does": "How many blocking members must object to a finding for it to block (no effect on a council of one).", "type": "enum", "values": ["any","majority","all"] },
   "council.onUnavailable": { "does": "What a round does when a member cannot run: fail the round, or report it and go on without the member (a council of one always fails).", "type": "enum", "values": ["fail","report"] },
   "council.lateGraceSec": { "does": "How long the PR check waits, after its last round, for a non-blocking member's late result.", "type": "integer", "min": 0, "unit": "seconds" },
-  "council.members": { "does": "How many members a council seats, from `models.pool`; 1 seats the stage's own verifier alone. Each stage section's `councilMembers` overrides it.", "type": "integer", "min": 1, "max": 10 },
+  "council.members": { "does": "How many counted members a council seats, from `models.pool`; 1 seats the stage's own verifier. The clean-code seat always sits beside them and is never counted (1 sits 2 members). Each stage section's `councilMembers` overrides it.", "type": "integer", "min": 1, "max": 10 },
   "council.explorationSeat.enabled": { "does": "With two or more seats, reserves one seat for the eligible pool entry with the fewest seats in the stage (by the scorecard), so models it knows little about are still tried; the family rule still applies.", "type": "boolean" },
   "council.shadowSeat.enabled": { "does": "With one seat, adds a second, non-blocking member from another model family: its findings are feedback, its score never decides and the stage does not wait for it; beside the PR check's critic panel it is one more critic. It doubles the verifier runs of a one-seat council.", "type": "boolean" },
   "council.scorecard.minSeats": { "does": "The seats a model needs in a lens and stage before its scorecard row has numbers; a row with fewer is unknown, neither good nor bad for selection.", "type": "integer", "min": 1 },
@@ -71,6 +71,7 @@
   "experiment.testTimeoutSec": { "does": "How long one pooled e2e spec of an experiment may run.", "type": "integer", "min": 1, "unit": "seconds" },
   "project.name": { "does": "Names machine-wide state (stack project, language server sockets), so two repositories on one machine never collide.", "type": "string", "defaultText": "the main checkout's folder name" },
   "project.languages": { "does": "The language packs (`packs/<id>/`) in use.", "type": "list", "items": "pack id" },
+  "project.configSources": { "does": "Where the application's configuration defaults live (options classes, `appsettings*.json`, config modules, `.env.example`, settings modules): the sources the repeated-values check compares fallbacks with. `factory init` drafts it from the language packs' candidates and asks when it finds none.", "type": "list", "items": "glob", "readBy": "packs/security/analysis/repeated-values.mjs" },
   "project.toolPaths": { "does": "Folders added to `PATH` for every command and agent the pipeline starts.", "type": "list", "items": "folder (`~` allowed)" },
   "project.services": { "does": "The buildable units: their paths, unit tests and dependencies; drives subtask planning, unit tests, stack rebuilds and the review gate's systems.", "type": "list", "items": "object", "open": true },
   "project.services[].name": { "does": "A service's name.", "type": "string", "readBy": "scripts/factory/factory.mjs" },
@@ -136,6 +137,9 @@
   "policy": { "does": "New services for the architecture policy, declared in app.json only ([architecture policy](architecture-policy.md)); never merged into the settings.", "type": "object", "open": true, "readBy": "scripts/pipeline/lib/config.mjs" },
   "recovery.maxRetries": { "does": "How many times a background run that died (test writing, PR check, review) is restarted.", "type": "integer", "min": 0, "readBy": "scripts/pipeline/lib/recovery.mjs" },
   "recovery.retryDelaySec": { "does": "How long to wait before the first restart of a dead background run; the wait doubles each time.", "type": "integer", "min": 0, "unit": "seconds", "readBy": "scripts/pipeline/lib/recovery.mjs" },
+  "analysis.duplication.minTokens": { "does": "The smallest clone `jscpd` reports, in tokens: shorter repeats are not duplication.", "type": "integer", "min": 10, "max": 1000, "unit": "tokens", "readBy": "scripts/pipeline/lib/analysis/config.mjs" },
+  "analysis.complexity.maxCyclomatic": { "does": "The cyclomatic complexity a function the change adds or edits may have before `lizard` reports it.", "type": "integer", "min": 1, "max": 100, "readBy": "scripts/pipeline/lib/analysis/config.mjs" },
+  "analysis.complexity.maxFunctionLines": { "does": "The length a function the change adds or edits may have before `lizard` reports it.", "type": "integer", "min": 5, "max": 2000, "unit": "lines", "readBy": "scripts/pipeline/lib/analysis/config.mjs" },
   "analysis.maxFixRounds": { "does": "How many times static analysis findings are handed back for fixing within one round of verification (and at ticket level).", "type": "integer", "min": 0, "unit": "rounds", "readBy": "scripts/pipeline/lib/analysis/config.mjs" },
   "retro.enabled": { "does": "Runs the retro that reviews the agents' recorded decisions and proposes fixes.", "type": "boolean" },
   "project.frontendPaths": { "does": "Which files count as user interface: screen checks, design review and demo videos apply only to changes here.", "type": "list", "items": "glob", "readBy": "scripts/pr-video/pr-video.mjs" },
@@ -148,5 +152,7 @@
   "retro.lessons.maxRules": { "does": "The most rules a lessons file keeps.", "type": "integer", "min": 1 },
   "retro.lessons.retireAfterStories": { "does": "A rule is retired when its category has not recurred for this many tickets.", "type": "integer", "min": 1, "readBy": "scripts/retro/lib/lessons.mjs" },
   "retro.lessons.revertMinRounds": { "does": "A rule is reverted when, after this many verifier rounds, its category's denial rate did not drop.", "type": "integer", "min": 1, "unit": "rounds", "readBy": "scripts/retro/lib/lessons.mjs" },
-  "retro.lessons.examplesPerCategory": { "does": "Examples per category in the digest the retro agent reads.", "type": "integer", "min": 0 }
+  "retro.lessons.examplesPerCategory": { "does": "Examples per category in the digest the retro agent reads.", "type": "integer", "min": 0 },
+  "retro.writerRules.minSamples": { "does": "The first-round council sittings on writers' work a window needs before the retro adds or removes a writer clean-code rule; with fewer it changes nothing and says the evidence is insufficient (the same minimum as `council.scorecard.minSeats`).", "type": "integer", "min": 1, "unit": "sittings", "readBy": "scripts/pipeline/lib/writer-rules.mjs" },
+  "retro.writerRules.maxChangesPerRetro": { "does": "The most writer clean-code rules one retro adds or removes, the largest net value first, so each change's effect can be measured before the next; the rest are listed as deferred.", "type": "integer", "min": 1, "unit": "rules", "readBy": "scripts/pipeline/lib/writer-rules.mjs" }
 }

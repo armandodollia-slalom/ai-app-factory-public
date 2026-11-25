@@ -7,6 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { download, videoLinks } from './github.mjs';
 import { log, run } from '../../pipeline/lib/util.mjs';
+import { loadChromium } from '../../implement/lib/mockups.mjs';
 import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 const isUrl = (s) => /^https?:\/\//i.test(s);
@@ -103,21 +104,9 @@ function ffmpegFrames(file, outDir, options) {
   return { duration, frames };
 }
 
-async function loadChromium() {
-  for (const name of ['@playwright/test', 'playwright', 'playwright-core']) {
-    try {
-      const mod = await import(name);
-      const chromium = mod.chromium ?? mod.default?.chromium;
-      if (chromium) return chromium;
-    } catch {
-      // try the next package
-    }
-  }
-  throw new Error('neither ffmpeg nor Playwright is available to read videos (run `npm ci` and `npx playwright install chromium`, or install ffmpeg)');
-}
 
 async function browserFrames(file, outDir, options) {
-  const chromium = await loadChromium();
+  const chromium = await loadChromium('neither ffmpeg nor Playwright is available to read videos (run `npm ci` and `npx playwright install chromium`, or install ffmpeg)');
   const player = path.join(outDir, 'player.html');
   fs.writeFileSync(player, `<!doctype html><body style="margin:0;background:#000"><video id="v" muted preload="auto" src="${pathToFileURL(file).href}" style="width:100%;display:block"></video></body>`);
   const browser = await chromium.launch();

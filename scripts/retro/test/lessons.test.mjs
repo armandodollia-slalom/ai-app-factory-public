@@ -141,3 +141,33 @@ test('the lessons PR opens finished through the shared delivery; a red lessons b
   assert.ok(!red.order.some((o) => o[0] === 'open'), 'no PR');
   assert.equal(red.out.status, 'not-delivered');
 });
+
+// Council r1 (opus F9): a retro with nothing else due still runs the writer-rule step: its log row (here: too little
+// evidence) and its section in the result.
+test('F9: a quiet retro logs the writer-rule row and reports its section', async (t) => {
+  const { spawnSync } = await import('node:child_process');
+  const INSTALL = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'retro-quiet-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: root, encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(root, 'package.json'), '{}\n');
+  const env = { ...process.env, PIPELINE_ROOT: '', FACTORY_METRICS_SHARD: '0', FACTORY_METRICS_SPOOL: '0' };
+  delete env.PIPELINE_CHILD;
+  assert.equal(spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'init', '--tools', 'claude'], { cwd: root, encoding: 'utf8', env }).status, 0);
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  const retro = () => spawnSync(process.execPath, [path.join(INSTALL, 'scripts/retro/retro.mjs'), 'run', '--no-push'], { cwd: root, encoding: 'utf8', env });
+  // The first retro writes the scorecard on its branch; merged, as its PR would be, the next one has nothing else due.
+  const first = retro();
+  const { branch } = JSON.parse(first.stdout.slice(first.stdout.indexOf('{')));
+  git('merge', '-q', branch);
+  fs.rmSync(path.join(root, '.factory/metrics/writer-rules.jsonl'), { force: true });
+  const r = retro();
+  assert.equal(r.status, 0, r.stderr);
+  const result = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
+  assert.equal(result.status, 'nothing-to-do');
+  assert.match(result.writerRules, /### Writer clean-code rules[\s\S]*evidence is insufficient/);
+  const rows = fs.readFileSync(path.join(root, '.factory/metrics/writer-rules.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((x) => x.event), ['writer-rules.insufficient']);
+});

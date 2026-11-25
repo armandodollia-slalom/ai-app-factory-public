@@ -34,6 +34,7 @@
     "pr-check-flow": "opus",
     "pr-check-design": "opus",
     "pr-check-style": "sonnet",
+    "pr-check-clean-code": "sonnet",
     "pr-check-video": "opus",
     "pr-check-defender": "opus",
     "pr-check-judge": "opus",

@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readJson, writeJson, nowIso } from '../../pipeline/lib/util.mjs';
+import { escapeRe, nowIso, readJson, writeJson } from '../../pipeline/lib/util.mjs';
 import { buildAssetsCommit, exec, pushAssetsBranch } from './assets.mjs';
 import { storyKind } from './board.mjs';
 import { classifyLegacy, folderFingerprint, legacyRoot } from './legacy.mjs';
@@ -162,6 +162,14 @@ function renderAll(config, legacy, commit, numbers) {
   return rendered;
 }
 
+// The board's issue numbers by key, and the legacy tickets in the order a migration applies them: epics first, then
+// spikes, then stories, so parents and blockers have numbers for links.
+function migrationOrder(config, legacy, opts) {
+  const index = issueIndex(config, opts);
+  const order = (t) => ({ epic: 0, spike: 1 })[t.type] ?? 2;
+  return { numbers: new Map([...index.entries()].map(([k, i]) => [k, i.number])), tickets: [...legacy.tickets].sort((a, b) => order(a) - order(b)) };
+}
+
 export function applyMigration(config, { gh = defaultGh, run = exec, log = () => {}, push = true } = {}) {
   const root = legacyRoot(config);
   if (!root) throw new Error(`nothing to migrate: ${config.tickets.legacyDir ?? 'tickets.legacyDir'} does not exist`);
@@ -196,10 +204,7 @@ export function applyMigration(config, { gh = defaultGh, run = exec, log = () =>
   }
 
   // 3. Issues: epics first, then spikes, then stories, so parents and blockers have numbers for links.
-  const index = issueIndex(config, { gh });
-  const numbers = new Map([...index.entries()].map(([k, i]) => [k, i.number]));
-  const order = (t) => ({ epic: 0, spike: 1 })[t.type] ?? 2;
-  const tickets = [...legacy.tickets].sort((a, b) => order(a) - order(b));
+  const { numbers, tickets } = migrationOrder(config, legacy, { gh });
   const done = { created: [], updated: [], unchanged: [], linked: 0 };
   for (let pass = 0; pass < 2; pass++) {
     if (pass === 1 && !done.created.length) break;
@@ -248,10 +253,7 @@ export function applyMigration(config, { gh = defaultGh, run = exec, log = () =>
 // named in the manifest. Idempotent like the GitHub path: existing tickets (found by key) are updated
 // only when their text or title changed, and attachments are uploaded once.
 function applyToTracker(config, tr, legacy, root, { log }) {
-  const index = issueIndex(config);
-  const numbers = new Map([...index.entries()].map(([k, i]) => [k, i.number]));
-  const order = (t) => ({ epic: 0, spike: 1 })[t.type] ?? 2;
-  const tickets = [...legacy.tickets].sort((a, b) => order(a) - order(b));
+  const { numbers, tickets } = migrationOrder(config, legacy);
   const done = { created: [], updated: [], unchanged: [], linked: 0 };
   for (const t of tickets) {
     const files = t.assets.map((a) => ({ path: a.path, name: a.name, kind: a.kind, sha256: a.sha256, size: a.size, attachmentName: `${t.key}--${a.path.split('/').slice(2).join('--')}`, source: a.source }));
@@ -453,4 +455,3 @@ export function referenceEdits(config, dir, report = null) {
 function run_(config, args) {
   return exec('git', args, { cwd: config.root }).stdout.split('\n').filter(Boolean);
 }
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

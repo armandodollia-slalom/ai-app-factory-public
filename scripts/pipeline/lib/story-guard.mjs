@@ -10,6 +10,7 @@ import path from 'node:path';
 import { INSTALL_ROOT } from './config.mjs';
 import { activeStoryFile } from './stories.mjs';
 import { setting } from './settings.mjs';
+import { escapeRe } from './util.mjs';
 
 const TICKET_KEY = /^([A-Z][A-Z0-9]*-\d+|(?:epic|spike)-[\w-]+)$/;
 
@@ -71,7 +72,7 @@ export function touchedPaths(payload, folders) {
   if (Array.isArray(input.edits)) for (const e of input.edits) if (typeof e?.file_path === 'string') raw.push(e.file_path);
   const command = typeof input.command === 'string' ? input.command : Array.isArray(input.command) ? input.command.join(' ') : null;
   if (command) {
-    const names = folders.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const names = folders.map((f) => escapeRe(f)).join('|');
     for (const m of command.matchAll(new RegExp(`[^\\s'"\`;|&<>()]*(?:${names})[^\\s'"\`;|&<>()]*`, 'g'))) raw.push(m[0]);
   }
   return raw.map((p) => path.resolve(cwd, staticPrefix(p.replace(/^~(?=\/)/, process.env.HOME ?? '~'))));

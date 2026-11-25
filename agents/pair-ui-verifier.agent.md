@@ -44,13 +44,7 @@ When the harness could not render the mockups, read the `.dc.html` sources (the 
 4. Changed signatures have every caller updated (references, above).
 5. **Scope and diff hygiene.** Nothing beyond the subtask: existing pages, components or styles the subtask does not need must look and lay out as before, at desktop width and at phone width (375 px); a visible change to them is a finding (`major` when users see a regression, else `minor`). Report whitespace-only or formatting edits to otherwise unchanged lines, and idioms of the file replaced by others, as `minor`.
 
-## Judging, and the implementer's disputes
-
-- Judge against the subtask's acceptance criteria and `owns`, the story's mockup (UI) and correctness and security. Nothing else blocks.
-- Style, naming or preference findings that touch none of those are nits: give them `severity: "minor"` (minor never blocks).
-- Never ask for work beyond the ticket: features, refactors or fixes outside the acceptance criteria and `owns` are not findings. Mention a real problem there as `minor`; the implementer files it as a follow-up.
-- From round 2 the task may list **Disputes from the implementer**: findings it did not act on because it calls them a nit or out of scope, each with its reason. Rule on every one in `disputes`: `accepted` when the dispute is right (drop the finding), or `reasserted` when the acceptance criteria, the mockup or correctness/security really require it, raising the finding again with the same `id` and that evidence in `evidence`. A disputed finding raised again without evidence does not block. A finding you re-assert twice can no longer be disputed.
-- Keep a finding's `id` whenever you raise it again.
+<!-- include: shared/pair-verifier-judging.md -->
 
 ## Verdict
 

@@ -12,7 +12,6 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { redactText, writeText } from '../../pipeline/lib/redact.mjs';
 import { runAgent as defaultRunAgent } from '../../pipeline/lib/agents.mjs';
 import { log as defaultLog } from '../../pipeline/lib/util.mjs';
@@ -22,14 +21,13 @@ import { renderVideo } from './render.mjs';
 import { appendJsonl } from '../../pipeline/lib/util.mjs';
 import { trackerFor } from '../../board/lib/trackers/index.mjs';
 import { pruneRunLocal, removeBaseCheckout } from '../../factory/lib/prune.mjs';
-import { metricsFile } from '../../pipeline/lib/state.mjs';
+import { RUN_CONDITIONS_FILE, metricsFile } from '../../pipeline/lib/state.mjs';
 import { apiEvidenceSettings, apiTestOfCase, backendBugs, cardValuesIn, cleanExchange, commentNote, evidenceSection, issueNumberOf, reproductionComment, REPRO_MARKER, scanHits, verifyApiBefore, writeProse } from './api-evidence.mjs';
 import { baseCheckout, bugPairSettings, testOfCase, uiBugs, verifyBefore } from './bugpair.mjs';
 import { automaticScript, caseIdOf, headlineCases, planCases, recordedEvents, scriptSettings, scriptVideos, ticketFor } from './script.mjs';
 import { resolveTools } from './tools.mjs';
-import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
+import { INSTALL_ROOT, defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 
-const INSTALL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const REDACT_MODULE = path.join(INSTALL_ROOT, 'scripts/pipeline/lib/redact.mjs');
 const readJsonFile = (f) => {
   try {
@@ -39,10 +37,6 @@ const readJsonFile = (f) => {
   }
 };
 export const LOCAL_FOOTER = 'Recorded, narrated and rendered on the machine that ran the pipeline (`factory pr-video local`), then checked for secrets before publishing';
-
-// The command that runs the specs in demo mode; `{specs}` is replaced by the spec paths.
-// Demo pacing makes a spec several times slower than at test speed: its own timeout is lifted (--timeout).
-export const DEFAULT_RECORD_CMD = defaultSettings().prVideo.recordCmd;
 
 // The tickets' titles by key, from the ticket cache (`<state>/board/<KEY>/story.md`, first line "# KEY: title"), for the
 // opening line of each video. Missing cache: the line names the key only.
@@ -238,7 +232,7 @@ function backendEvidence({ root, config, key, backend, before, afterManifest, se
     }
     writeText(path.join(renderDir, `${i.key}.api-evidence.json`), `${JSON.stringify({ key: i.key, case: i.caseId, base: i.ev.base, pairs: i.ev.pairs, prose: i.prose, comment: i.comment }, null, 2)}\n`);
     try {
-      appendJsonl(metricsFile({ root, metricsDir: '.factory/metrics', ...config }, 'run-conditions.jsonl'), [{ ts: new Date().toISOString(), story: key, kind: 'api-reproduction', ticket: i.key, case: i.caseId, base: i.ev.base, commentPosted: Boolean(i.comment.posted), ...(i.comment.posted ? {} : { commentWhy: i.comment.why }), ...(i.comment.reduced ? { commentReduced: true, commentDropped: i.comment.reduced.dropped ?? [] } : {}), pairs: i.ev.pairs.map((p) => ({ request: `${p.before.method} ${p.before.path}`, before: p.before.status, after: p.after.status })) }]);
+      appendJsonl(metricsFile({ root, metricsDir: '.factory/metrics', ...config }, RUN_CONDITIONS_FILE), [{ ts: new Date().toISOString(), story: key, kind: 'api-reproduction', ticket: i.key, case: i.caseId, base: i.ev.base, commentPosted: Boolean(i.comment.posted), ...(i.comment.posted ? {} : { commentWhy: i.comment.why }), ...(i.comment.reduced ? { commentReduced: true, commentDropped: i.comment.reduced.dropped ?? [] } : {}), pairs: i.ev.pairs.map((p) => ({ request: `${p.before.method} ${p.before.path}`, before: p.before.status, after: p.after.status })) }]);
     } catch {
       // never stops the evidence
     }
@@ -289,7 +283,7 @@ export async function produceLocal({ root, config, base, key, headSha, host, dep
     const record = (files, grep = null, stackRoot = null) => sh(`${settings.recordCmd.replace('{specs}', files.map((s) => JSON.stringify(s)).join(' '))}${grep ? ` --retries 0 --grep ${JSON.stringify(grep)}` : ''}`, { ...demoEnv(tools, env, { tickets: ticketTitles(root, stateDir), timeoutSec: settings.testTimeoutSec }), ...(stackRoot ? { TESTSTACK_ROOT: stackRoot } : {}) });
     const timing = (side, seconds, extra = {}) => {
       try {
-        appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: new Date().toISOString(), story: key, kind: 'demo-recording', side, seconds: Math.round(seconds), ...extra }]);
+        appendJsonl(metricsFile(config, RUN_CONDITIONS_FILE), [{ ts: new Date().toISOString(), story: key, kind: 'demo-recording', side, seconds: Math.round(seconds), ...extra }]);
       } catch {
         // a record that cannot be written never stops the video
       }

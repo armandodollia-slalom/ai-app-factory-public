@@ -125,6 +125,10 @@
       "retireAfterStories": 10,
       "revertMinRounds": 6,
       "examplesPerCategory": 5
+    },
+    "writerRules": {
+      "minSamples": 10,
+      "maxChangesPerRetro": 2
     }
   },
   "metrics": {
@@ -140,7 +144,14 @@
     "maxConcurrent": 2,
     "coverageTimeoutSec": 1800,
     "licenceReview": "default",
-    "maxFixRounds": 2
+    "maxFixRounds": 2,
+    "duplication": {
+      "minTokens": 50
+    },
+    "complexity": {
+      "maxCyclomatic": 15,
+      "maxFunctionLines": 100
+    }
   },
   "agentOverlayDir": ".factory/agents",
   "hooks": {
@@ -150,6 +161,7 @@
   },
   "project": {
     "languages": [],
+    "configSources": [],
     "toolPaths": [],
     "services": [],
     "frontendPaths": [],

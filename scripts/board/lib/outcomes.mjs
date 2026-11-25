@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { git, revExists } from '../../pipeline/lib/git.mjs';
 import { metricsFile, readMetricsLocal } from '../../pipeline/lib/state.mjs';
-import { appendJsonl, nowIso, readJson, readJsonl } from '../../pipeline/lib/util.mjs';
+import { appendJsonl, nowIso, readJson } from '../../pipeline/lib/util.mjs';
 import { OUTCOMES_FILE, bugStoriesFor, humanCommitStats, lateOutcomeRecord } from '../../implement/lib/decisions.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 import { setting } from '../../pipeline/lib/settings.mjs';

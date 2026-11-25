@@ -8,6 +8,7 @@
 // Security on a private repository. A pull request is analysed at its merge ref, so the analysis commit is not the
 // head: the head binding is the CodeQL check on the head (checkName, required).
 import { ciClient, secret } from '../../ci/rest.mjs';
+import { API } from '../../bot.mjs';
 
 export const CAPABILITIES = { serverSide: true, prAnalysis: true, triageStates: true, sarif: true, shaBound: false };
 const DISMISSED = { 'false positive': 'false-positive', "won't fix": 'accepted', 'used in tests': 'accepted' };
@@ -15,7 +16,7 @@ const DISMISSED = { 'false positive': 'false-positive', "won't fix": 'accepted',
 export function createGithubCodeScanning(s, deps = {}) {
   const env = deps.env ?? process.env;
   const token = secret(s.token, 'analysis.commercial.token', env) ?? env.GITHUB_TOKEN ?? env.GH_TOKEN ?? null;
-  const api = ciClient({ baseUrl: String(s.url ?? 'https://api.github.com').replace(/\/+$/, ''), token, product: 'GitHub code scanning', send: deps.send });
+  const api = ciClient({ baseUrl: String(s.url ?? API).replace(/\/+$/, ''), token, product: 'GitHub code scanning', send: deps.send });
   const tool = s.toolName ?? 'CodeQL';
   const repo = () => {
     if (!s.repo) throw new Error('the repository is unknown (host.repo)');

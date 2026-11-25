@@ -12,6 +12,11 @@ import { detectHost, fileUrl, gitRemote, hostFor, hostSettings, HostAuthError, U
 import { retryDelayMs } from '../lib/hosts/http.mjs';
 import { botEnv, openPullRequest, prPublisher, pushWithToken, resetBot } from '../lib/bot.mjs';
 import { fakeAzure, fakeGitlab } from './hosts-fakes.mjs';
+import { createBitbucketHost } from '../lib/hosts/bitbucket.mjs';
+import { defaultSettings } from '../lib/settings.mjs';
+
+// The merge method a host's merge() uses when its caller names none: the setting's default (council r3, F14).
+const METHOD = defaultSettings().implement.autoMerge.method;
 
 const noSleep = async () => {};
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -131,6 +136,8 @@ test('github: every method maps onto the gh command it used before, normalised',
   assert.deepEqual(JSON.parse(f.calls.at(-1).input), { state: 'success', context: 'review-quorum', description: 'ok' });
   await host.pr.merge(5, { method: 'squash', auto: true });
   assert.deepEqual(f.calls.filter((c) => c.args[1] === 'merge').at(-1).args, ['pr', 'merge', '5', '-R', 'acme/shop', '--auto', '--squash']);
+  await host.pr.merge(5, { auto: true });
+  assert.equal(f.calls.filter((c) => c.args[1] === 'merge').at(-1).args.at(-1), `--${METHOD}`, 'no method: the setting\'s default');
   assert.equal(await host.pr.cancelAutoMerge(5), true);
   assert.equal(await host.repo.defaultBranch(), 'main');
   assert.equal(await host.repo.file('README.md', 'main'), '# shop\n');
@@ -221,6 +228,8 @@ test('gitlab: every method against a self-managed server under /gitlab', async (
   assert.deepEqual(gl.state.statuses.at(-1), { sha: mr.sha, state: 'failed', name: 'review-quorum', description: 'needs 1 approval' });
   await host.pr.merge(n, { method: 'squash', auto: true });
   assert.deepEqual(gl.state.merges.at(-1), { iid: n, squash: true, should_remove_source_branch: false, merge_when_pipeline_succeeds: true, auto_merge: true, by: 'alice' });
+  await host.pr.merge(n, { auto: true });
+  assert.equal(gl.state.merges.at(-1).squash, METHOD === 'squash', 'no method: the setting\'s default');
   assert.equal(await host.pr.cancelAutoMerge(n), true);
   assert.equal(mr.autoMerge, false);
   const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hosts-')), 'demo.webm');
@@ -299,6 +308,13 @@ test('azure-devops: every method against an Azure DevOps Server under /tfs', asy
   assert.deepEqual([pr.autoCompleteSetBy, pr.completionOptions], [{ id: 'u-alice' }, { mergeStrategy: 'squash', deleteSourceBranch: true }]);
   assert.equal(await host.pr.cancelAutoMerge(n), true);
   assert.equal(pr.autoCompleteSetBy, null);
+  await host.pr.merge(n, { auto: true });
+  assert.equal(pr.completionOptions.mergeStrategy, { squash: 'squash', merge: 'noFastForward', rebase: 'rebase' }[METHOD], 'no method: the setting\'s default');
+  await host.pr.cancelAutoMerge(n);
+  // Council r4 (test-value follow-up): a method Azure DevOps has no strategy for gets the setting default's.
+  await host.pr.merge(n, { method: 'octopus', auto: true });
+  assert.equal(pr.completionOptions.mergeStrategy, { squash: 'squash', merge: 'noFastForward', rebase: 'rebase' }[METHOD], 'an unknown method: the setting default\'s strategy');
+  await host.pr.cancelAutoMerge(n);
   await host.pr.merge(n, { method: 'merge', auto: false });
   assert.equal((await host.pr.get(n)).state, 'merged');
   const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hosts-')), 'demo.webm');
@@ -469,4 +485,19 @@ test('review-gate enforce through the review gate module: a code host or, as bef
   const fakeHost = { repo: { enforceReviewGate: async (o) => (calls.push(o), { action: 'unchanged', summary: 's', manual: [] }) } };
   assert.equal((await enforce(fakeHost, { codeOwners: true })).action, 'unchanged');
   assert.deepEqual(calls, [{ codeOwners: true }]);
+});
+
+// Council r3 (F14): Bitbucket's merge with no method, or one Bitbucket has no strategy for, asks for the strategy of the
+// implement.autoMerge.method setting's default.
+test('bitbucket: merge() with no method, or an unknown one, uses the setting\'s default strategy', async () => {
+  const bodies = [];
+  const fetch = async (url, init) => {
+    if (init?.method === 'POST' && String(url).endsWith('/merge')) bodies.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ state: 'MERGED', updated_on: 't' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const host = createBitbucketHost({ repo: 'ws/shop' }, { fetch, token: 'tok-x', env: {} });
+  await host.pr.merge(7);
+  await host.pr.merge(8, { method: 'octopus' });
+  const strategy = { squash: 'squash', merge: 'merge_commit', rebase: 'fast_forward' }[METHOD];
+  assert.deepEqual(bodies.map((b) => b.merge_strategy), [strategy, strategy]);
 });

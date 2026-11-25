@@ -7,6 +7,7 @@ import { addWorktree, git, revExists } from '../../pipeline/lib/git.mjs';
 import { gateStaged } from '../../pipeline/lib/analysis/commit-gate.mjs';
 import { repoSettings } from '../../pipeline/lib/config.mjs';
 import { setting } from '../../pipeline/lib/settings.mjs';
+import { escapeRe } from '../../pipeline/lib/util.mjs';
 
 export const commitEnv = { ...process.env, PIPELINE_DISABLE: '1' };
 export const mustGit = (cwd, args) => git(cwd, args, { allowFail: false, env: commitEnv });
@@ -129,7 +130,7 @@ export function listSubtaskWorktrees(root, prefix, key = null) {
     if (line.startsWith('worktree ')) current = { path: line.slice(9) };
     else if (line.startsWith('branch refs/heads/') && current) {
       current.branch = line.slice(18);
-      const m = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([a-z][a-z0-9]*-\\d+)--([a-z0-9-]+)$`).exec(current.branch);
+      const m = new RegExp(`^${escapeRe(prefix)}([a-z][a-z0-9]*-\\d+)--([a-z0-9-]+)$`).exec(current.branch);
       if (m && (!key || m[1] === key.toLowerCase())) out.push({ ...current, key: m[1].toUpperCase(), id: m[2] });
     }
   }

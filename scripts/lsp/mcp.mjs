@@ -32,11 +32,13 @@ try {
 
 const callLog = path.join(stateDir(worktree), 'calls.jsonl');
 const agent = process.env.PIPELINE_AGENT_NAME ?? null;
+// A council member's seat (the clean-code seat's searches are its trace, GEN-16).
+const member = process.env.PIPELINE_COUNCIL_MEMBER ?? null;
 
 function logCall(msg) {
   const args = msg.params?.arguments ?? {};
   const symbol = args.query ?? args.name ?? args.new_name ?? (args.line ? `${args.line}:${args.column ?? ''}` : null);
-  const entry = { ts: new Date().toISOString(), agent, tool: msg.params?.name ?? null, file: args.file_path ?? null, symbol };
+  const entry = { ts: new Date().toISOString(), agent, member, tool: msg.params?.name ?? null, file: args.file_path ?? null, symbol };
   try {
     appendText(callLog, `${JSON.stringify(entry)}\n`);
   } catch {

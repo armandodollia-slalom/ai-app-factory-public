@@ -7,8 +7,14 @@
 // - decision: plan-written | approved | denied | changes-requested | product-bug
 // - reason:   the agent's own summary; items: per case, finding, gap or bug, each with its own `reason`
 import { runTags } from './run-tags.mjs';
-import { metricsFile, readMetrics } from './state.mjs';
-import { appendJsonl, nowIso, readJsonl } from './util.mjs';
+
+// The implement stage's plan and verifier stages, as decision records and token-usage rows name them.
+export const PLAN_STAGE = 'implement-plan';
+export const VERIFY_STAGE = 'implement-verify';
+// The retro's stage (the lessons run): its token-usage rows and its background run's log.
+export const LESSONS_STAGE = 'lessons';
+import { metricsFile } from './state.mjs';
+import { appendJsonl, nowIso } from './util.mjs';
 
 export const DECISIONS_FILE = 'decisions.jsonl';
 export const REASON_MAX = 1000;
@@ -41,8 +47,6 @@ export function logDecision(config, fields) {
   appendJsonl(metricsFile(config, DECISIONS_FILE), record);
   return record;
 }
-
-export const loadDecisions = (config) => readMetrics(config, DECISIONS_FILE);
 
 // Product bugs reported by test-automation, as objects. Older string bugs ("TC-X-01: expected …, got …")
 // still work: the leading case id is parsed out and the rest becomes the reason.

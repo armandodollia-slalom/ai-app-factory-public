@@ -8,8 +8,44 @@ their results deterministically, the same way for one member as for several. The
 [`council` skill](../../skills/council/SKILL.md), which is injected into every member's prompt. Adjudication
 (below) is proven by fixture tests only ([proof](../../README.md#what-has-been-proven)).
 
-By default (`council.members` 1) every stage seats **one member**: its own verifier, on its own agent's pool entry
-(`models.agents.<agent>`, [models.md](models.md)). Seating more changes who reviews and nothing else.
+By default (`council.members` 1) every stage seats **one counted member**: its own verifier, on its own agent's pool
+entry (`models.agents.<agent>`, [models.md](models.md)), beside the [clean-code seat](#the-clean-code-seat). Seating
+more changes who reviews and nothing else.
+
+## The clean-code seat
+
+Every council has one more member than its count: the clean-code reviewer, a fixed seat on the `clean-code` lens. It
+sits in addition to the seats `council.members` and `<stage>.councilMembers` count (a setting of 1 sits 2 members, 3
+sits 4), on every verifier stage: the pair code and UI verifiers, the architecture review, the test plan, the test
+automation and the PR check. No setting removes it: there is no switch, the counts never include it, and a settings
+file that tries (a key naming it, a list that excludes its lens, a count of 0) is refused at load saying the seat is
+fixed.
+
+- **What it reviews:** the change against the [`clean-code`](../../skills/clean-code/SKILL.md) rules, whose full text
+  (with the repository's language examples) is in its task. On the test plan it reviews the plan for repeated cases and
+  redundant ones (two cases that would catch the same bug, `CC-14`). It searches the codebase itself with graphify and
+  the language-server tools (the harness records the searches, tagged with its seat, and counts them in the round
+  record's `searches`) and checks the orchestrator's guidance was followed: a writer that redefined what the guidance
+  said to reuse is a blocking finding.
+- **A strict arbiter:** it cannot mark a finding minor (the harness makes every one blocking), and its findings stand
+  outside `council.blockQuorum`. Each cites its rule in `rule`; a duplication (`CC-1`, `CC-2`) names both places in
+  `copies`. A finding without its rule id, or a duplication without both places, is a question: recorded, never a fix.
+  Its score counts against the stage's pass score like any blocking member's. Tool reports on clean code (the
+  [repeated-values check](analysis.md#repeated-values), duplication, complexity) reach it as evidence it upholds as its
+  own finding or dismisses with a reason; they never block by themselves.
+- **Its entry:** the stage's orchestrator picks it with the other seats, favouring a family no counted seat has; the
+  harness rejects a pick without it, or with it on a family already seated while another family has no seat, once with
+  the reason, and seats it itself when the second pick still lacks a good one (keeping that pick's counted seats when
+  they keep the rules). The exploration and shadow seats apply to the counted seats only. With one counted seat that
+  member still reviews every lens; the clean-code seat adds a second opinion on clean code only, and the council still
+  holds no discussion.
+- **In the PR check** it is a sixth critic (`pr-check-clean-code`) in the panel, on its own seat's entry, and sits
+  whatever `--lenses` narrows; the defender answers its findings and the judge rules on them like any critic's. With a
+  council of several, it is that council's member on the clean-code lens.
+- **Records:** it appears in `council.selection` (`cleanCodeSeat`, `cleanCodeChooser`), in `council-rounds.jsonl` and
+  `council-findings.jsonl` (lens `clean-code`) and in the usage rows like any member, so the
+  [scorecard](retro.md#council-scorecard) has its own rows by stage: upheld rate and cost per upheld finding. It roughly
+  doubles review cost at the default of one counted seat.
 
 ## Round limit and pass score
 
@@ -139,7 +175,7 @@ pool, the pick, the lenses, the reasons, the scorecard version seen, which seat 
 | `architectureReview` | correctness, security, rewrite, acceptance, test-value | `architecture-reviewer` ([review.md](review.md)); the policy pack still runs first |
 | `testPlan` | test-value, acceptance, correctness | `test-plan-verifier` ([feature-verification.md](feature-verification.md)) |
 | `testAutomation` | test-value, correctness, acceptance, rewrite | `test-automation-verifier` |
-| `prCheck` | acceptance, correctness, security, rewrite, test-value | the critic closest to the lens: acceptance → `pr-check-acceptance`, correctness and security → `pr-check-flow`, test-value and rewrite → `pr-check-style`. The defender, the judge and the fixer stay, and so do the stage's own critics no member covers: acceptance (unless a member has that lens), flow (the list of behaviour changes outside the ticket, unless a member's lens is correctness or security), design on a frontend PR (unless a member's lens is ui) and video when there are recordings ([pr-check.md](pr-check.md)) |
+| `prCheck` | acceptance, correctness, security, rewrite, test-value | the critic closest to the lens: acceptance → `pr-check-acceptance`, correctness and security → `pr-check-flow`, test-value and rewrite → `pr-check-style`, clean-code (the fixed seat) → `pr-check-clean-code`. The defender, the judge and the fixer stay, and so do the stage's own critics no member covers: acceptance (unless a member has that lens), flow (the list of behaviour changes outside the ticket, unless a member's lens is correctness or security), design on a frontend PR (unless a member's lens is ui) and video when there are recordings ([pr-check.md](pr-check.md)) |
 
 The `ui` lens goes only to an entry whose CLI can drive a browser: a Codex entry's sandbox cannot start one, so the lens
 moves to another seat, and with no such seat nobody takes it. A Codex member still sits for `pairUiVerify` with another

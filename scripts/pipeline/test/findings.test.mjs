@@ -200,3 +200,21 @@ test('a shared PR check\'s council counts for every ticket it covered: a later m
   recordMisses(config, { story: 'SHOP-2', source: 'bug-ticket', lowWeight: true });
   assert.deepEqual(rows(config, 'miss').map((r) => [r.story, r.stage, r.seat]), [['SHOP-2', 'prCheck', 'opus'], ['SHOP-2', 'prCheck', 'sol']]);
 });
+
+// Council r1 (TV-2): the writer-rule ledger reads real records. A writer stage's round record names the rule set the
+// writer carried (writerRules), and the clean-code seat's finding record names the rule it cites; without either, every
+// carried rule would show no breach and be removed on probation.
+test('TV-2: a writer stage\'s round record carries writerRules, and the clean-code finding record its rule', async (t) => {
+  const config = setup(t);
+  const { writerRuleIds } = await import('../lib/clean-code.mjs');
+  const [opus] = COUNCIL.members;
+  const cc = { name: 'clean-code', entry: 'sonnet', lens: 'clean-code', blocking: true, fixed: true, cli: 'claude' };
+  const council = { ...COUNCIL, stage: 'pairVerify', members: [opus, cc] };
+  const breach = { severity: 'blocking', action: 'fix', rule: 'CC-2', copies: ['src/a.cs:3', 'src/b.cs:9'], issue: 'the total is computed in two places', file: 'src/a.cs', line: 3, evidence: 'src/a.cs:3 and src/b.cs:9' };
+  const merged = mergeCouncil(council, [ok(opus, 10), ok(cc, 6, [breach])]);
+  recordCouncilRound(config, { stage: 'pairVerify', story: 'SHOP-1', step: 'api', round: 1, council, merged });
+  const round = readJsonl(path.join(config.root, '.factory/metrics', COUNCIL_FILE)).at(-1);
+  assert.deepEqual(round.writerRules, writerRuleIds(config));
+  assert.ok(round.writerRules.includes('SCOPE'));
+  assert.deepEqual(rows(config, 'finding').map((r) => [r.seat, r.lens, r.rule]), [['clean-code', 'clean-code', 'CC-2']]);
+});

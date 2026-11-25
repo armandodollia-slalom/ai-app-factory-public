@@ -54,7 +54,8 @@ before(() => {
     fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
   }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
-  fs.cpSync(path.join(source, 'skills', 'council'), path.join(repo, 'skills', 'council'), { recursive: true });
+  // The clean-code skill the writers' and orchestrators' prompts are built from (it includes the council skill's lists).
+  for (const skill of ['clean-code', 'council']) fs.cpSync(path.join(source, 'skills', skill), path.join(repo, 'skills', skill), { recursive: true });
   write('.gitignore', '.factory/state/\n.factory/metrics/\n');
   // The members are the pool; the PR check council of DEMO-1 is the pick kept for the ticket (with its lenses and a
   // non-blocking member), as the stage's orchestrator would have made it.
@@ -95,6 +96,7 @@ test('a PR check council: members critique beside the acceptance critic, a non-b
     'pr-check-defender': [{ result: { responses: [{ id: 'OPUS-1-1', position: 'concede', argument: 'true' }] } }],
     'pr-check-judge': [{ result: { score: 5, lensScores: { opus: 5 }, summary: 'AC 2 unmet', rulings: [{ id: 'OPUS-1-1', ruling: 'upheld', severity: 'blocking', reason: 'conceded', fix: 'reject expired coupons' }] } }, { result: { score: 10, lensScores: {}, summary: 'fixed', rulings: [] } }],
     'pr-check-fixer': [{ delayMs: 3500, writeFiles: { 'src/Basket/Coupons.cs': '// coupons, expiry checked\n' }, deleteFiles: [OTHER_TEST], result: { fixed: ['OPUS-1-1'], notFixed: [], summary: 'checks expiry' } }],
+    'pr-check-clean-code': [{ search: ['lsp_workspace_symbols'], result: { score: 10, summary: 'clean', findings: [] } }],
   }));
   for (const suffix of ['.calls.json', '.prompts.log']) fs.rmSync(scriptFile + suffix, { force: true });
   const env = { ...process.env, FACTORY_METRICS_SHARD: '0', FACTORY_METRICS_SPOOL: '0', PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main', TESTSTACK_STATE_HOME: leaseHome };
@@ -117,9 +119,11 @@ test('a PR check council: members critique beside the acceptance critic, a non-b
   // The non-blocking member was not waited for in round 1; its late review reached round 2 as feedback.
   const rounds = fs.readFileSync(path.join(repo, '.factory/metrics/council-rounds.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(rounds.map((x) => [x.round, x.pass, x.members.map((m) => `${m.name}:${m.status}:${m.score ?? '-'}`).join(' ')]), [
-    [1, false, 'slow:late:- opus:ok:5 sol:ok:6'],
-    [2, true, 'slow:late:- opus:ok:10 sol:ok:9'],
+    [1, false, 'slow:late:- opus:ok:5 sol:ok:6 clean-code:ok:10'],
+    [2, true, 'slow:late:- opus:ok:10 sol:ok:9 clean-code:ok:10'],
   ]);
+  // Council r1 (opus F8): the council's clean-code seat carries the searches its critic made, each round.
+  assert.deepEqual(rounds.map((x) => x.members.filter((m) => m.fixed).map((m) => [m.name, m.searches])), [[['clean-code', 1]], [['clean-code', 1]]]);
   // Council r3 (sol-11): feedback never reaches the debate or the judge, where a ruling could uphold or raise it; it is
   // a follow-up of round 2.
   const section = (name) => prompts.split('\n=== ').find((p) => p.startsWith(name)) ?? '';
@@ -152,8 +156,10 @@ test('a PR check council does not block, in a later round, the fix of a finding 
     'pr-check-flow@opus': [{ result: { score: 5, summary: 'crash', findings: [crash] } }, { result: { score: 6, summary: 'scope', findings: [scope] } }, { result: { answers: [{ key: 'I1', answer: 'yes', evidence: 'src/Basket/Coupons.cs:3: the agreed fix is this 400' }] } }],
     'pr-check-flow@sol': [clean(), { result: { score: 6, summary: 'scope', findings: [{ ...scope, title: 'A 400 response no ticket line names' }] } }, { result: { answers: [{ key: 'I1', answer: 'yes', evidence: 'src/Basket/Coupons.cs:3: the agreed fix is this 400' }] } }],
     'pr-check-style@slow': [clean()],
+    // The clean-code seat is a blocking member too: it finds nothing, and accepts the objection on adjudication.
+    'pr-check-clean-code': [clean(), clean(), { result: { answers: [{ key: 'I1', answer: 'yes', evidence: 'src/Basket/Coupons.cs:3: the agreed fix is this 400' }] } }],
     'pr-check-defender': [{ result: { responses: [{ id: 'OPUS-1-1', position: 'concede', argument: 'true' }] } }, { result: { responses: [{ id: 'OPUS-2-1', position: 'rebut', argument: 'round 1 required it' }] } }],
-    'pr-check-judge': [{ result: { score: 5, lensScores: { opus: 5 }, summary: 'crash', rulings: [{ id: 'OPUS-1-1', ruling: 'upheld', severity: 'blocking', reason: 'conceded', fix: 'answer 400 for a malformed code' }] } }, { result: { score: 6, lensScores: { opus: 6, sol: 10, slow: 10, acceptance: 10 }, summary: 'scope', rulings: [{ id: 'OPUS-2-1', ruling: 'upheld', severity: 'blocking', reason: 'no ticket line', fix: 'remove the 400 branch' }] } }],
+    'pr-check-judge': [{ result: { score: 5, lensScores: { opus: 5 }, summary: 'crash', rulings: [{ id: 'OPUS-1-1', ruling: 'upheld', severity: 'blocking', reason: 'conceded', fix: 'answer 400 for a malformed code' }] } }, { result: { score: 6, lensScores: { opus: 6, sol: 10, slow: 10, 'clean-code': 10, acceptance: 10 }, summary: 'scope', rulings: [{ id: 'OPUS-2-1', ruling: 'upheld', severity: 'blocking', reason: 'no ticket line', fix: 'remove the 400 branch' }] } }],
     // The fixer declares the lines it wrote for OPUS-1-1 (council.mjs fixDeclarationText): the settlement's provenance.
     'pr-check-fixer': [{ writeFiles: { 'src/Basket/Coupons.cs': '// coupons, expiry checked\nif (!Coupon.TryParse(code, out var c))\n    return Results.BadRequest("malformed coupon code");\n', '.factory/state/council/fixes/prCheck--DEMO-1.json': JSON.stringify({ fixes: [{ id: 'OPUS-1-1', hunks: [{ file: 'src/Basket/Coupons.cs', start: 2, end: 3 }] }] }) }, result: { fixed: ['OPUS-1-1'], notFixed: [], summary: 'answers 400' } }],
   }));

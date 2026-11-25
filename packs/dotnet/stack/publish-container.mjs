@@ -22,8 +22,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import { setting } from '../../../scripts/pipeline/lib/settings.mjs';
+import { isMain } from '../../../scripts/pipeline/lib/util.mjs';
 
 export function platform(env = process.env, arch = os.arch()) {
   const configured = env.TESTSTACK_PLATFORM;
@@ -76,15 +76,8 @@ function main(argv) {
   return 0;
 }
 
-const isMain = (() => {
-  try {
-    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(process.argv[1]);
-  } catch {
-    return false;
-  }
-})();
 
-if (isMain) {
+if (isMain(import.meta.url)) {
   try {
     process.exitCode = main(process.argv.slice(2));
   } catch (error) {

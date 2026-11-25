@@ -1,7 +1,8 @@
 import { DECISIONS_FILE } from '../../pipeline/lib/decisions.mjs';
+import { OUTCOMES_FILE, PR_CHECKS_FILE } from '../../implement/lib/decisions.mjs';
+import { REVIEWS_FILE } from '../../review/lib/review.mjs';
 import { readMetrics } from '../../pipeline/lib/state.mjs';
-import { readJsonl } from '../../pipeline/lib/util.mjs';
-import { PRODUCER, VERIFIER, metricsFile } from './verify.mjs';
+import { PRODUCER, VERIFIER } from './verify.mjs';
 
 export function loadMetrics(config) {
   return {
@@ -9,10 +10,10 @@ export function loadMetrics(config) {
     denials: readMetrics(config, 'verifier-denials.jsonl'),
     prechecks: readMetrics(config, 'precheck-failures.jsonl'),
     calibration: readMetrics(config, 'calibration.jsonl'),
-    reviews: readMetrics(config, 'arch-reviews.jsonl'),
-    prChecks: readMetrics(config, 'pr-checks.jsonl'),
+    reviews: readMetrics(config, REVIEWS_FILE),
+    prChecks: readMetrics(config, PR_CHECKS_FILE),
     decisions: readMetrics(config, DECISIONS_FILE),
-    outcomes: readMetrics(config, 'decision-outcomes.jsonl'),
+    outcomes: readMetrics(config, OUTCOMES_FILE),
     implementRuns: readMetrics(config, 'implement-runs.jsonl'),
     escalations: readMetrics(config, 'escalations.jsonl'),
   };

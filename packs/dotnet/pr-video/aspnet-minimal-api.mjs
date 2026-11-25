@@ -59,7 +59,7 @@ export function parseEndpoints(source) {
   const lines = source.split('\n');
   const calls = [...source.matchAll(MAP_CALL)].map((m) => ({ m, line: lineOf(source, m.index) }));
   const endpoints = new Map();
-  calls.forEach(({ m, line }, i) => {
+  calls.forEach(({ m, line }) => {
     const [, receiver, verb, route, handler] = m;
     const group = groups.get(receiver) ?? { prefix: '', versions: [] };
     const method = verb.toUpperCase();

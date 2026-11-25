@@ -12,9 +12,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeText } from '../pipeline/lib/redact.mjs';
+import { INSTALL_ROOT } from '../pipeline/lib/settings.mjs';
 import { SPINE_END, SPINE_START, mermaidSpine, nodeTable } from './lib/spine.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const ROOT = INSTALL_ROOT;
 export const PATHS = {
   html: path.join(ROOT, 'docs/pipeline-explorer.html'),
   data: path.join(ROOT, 'docs/pipeline-flow.json'),

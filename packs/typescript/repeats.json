@@ -1,0 +1,15 @@
+{
+  "$comment": "Patterns of the repeated-values check (GEN-18, scripts/pipeline/lib/analysis/repeats.mjs) for TypeScript and JavaScript. `defaults` read a configuration source (config modules, `.env.example`; JSON files are read as JSON); `constants` read every source file (UPPER_SNAKE names); `fallbacks` are matched on changed lines. {literal} is a number or a quoted string. Named groups: key/value, name/value, expr/value. `comments` matches a whole-line comment, whose literals are prose and are not checked.",
+  "extensions": [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
+  "comments": "^\\s*(?://|/\\*|\\*)",
+  "defaults": [
+    "^\\s*(?<key>[A-Za-z_$][\\w$]*)\\s*:\\s*(?<value>{literal})\\s*,?\\s*$",
+    "^(?<key>[A-Z][A-Z0-9_]*)=(?<value>{literal}|[^\\s#]+)\\s*$"
+  ],
+  "constants": [
+    "^\\s*(?:export\\s+)?const\\s+(?<name>[A-Z][A-Z0-9_]*)\\s*(?::\\s*[\\w<>\\[\\] |]+)?\\s*=\\s*(?<value>{literal})\\s*;?\\s*$"
+  ],
+  "fallbacks": [
+    "(?<expr>[\\w$.\\[\\]'\"]+)\\s*(?:\\?\\?|\\|\\|)\\s*(?<value>{literal})"
+  ]
+}

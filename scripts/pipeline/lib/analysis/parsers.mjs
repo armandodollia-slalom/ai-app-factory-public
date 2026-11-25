@@ -124,6 +124,13 @@ export function parseEslintStylish(text) {
   return out;
 }
 
+// One finding a line: `file(line,col): level rule: message` (MSBuild, dotnet format) and `file:line[:col]: [level]
+// [rule] message` (most linters). Groups: file, line, level, rule, message.
+const LINE_FORMATS = [
+  /^\s*([^\s:()]+\.[\w]+)\((\d+),\d+(?:,\d+,\d+)?\)\s*:?\s*(error|warning|info)?\s*([A-Za-z]+\d+|[\w./-]+)?\s*:?\s*(.*)$/,
+  /^([^\s:]+\.[\w]+):(\d+)(?::\d+)?(?=[:\s]|$)[:\s]*(?:(error|warning|info|note)\b[:\s]*)?(?:\[?([A-Za-z]+[\w/-]*\d+|[a-z]+(?:-[a-z]+)+)\]?[:\s]+)?(.*)$/,
+];
+
 // Anything that prints `path:12[:5]: [level] [rule] message` or `path(12,5) ...` (gcc-style tools, ruff, markdownlint,
 // `dotnet format --verify-no-changes`), and ESLint's stylish output: the formats the changed-lines lint understands.
 export function parseLines(text) {
@@ -131,12 +138,7 @@ export function parseLines(text) {
   let header = null;
   for (const raw of strip(text).split('\n')) {
     const line = raw.replace(/\r$/, '');
-    let m = /^\s*([^\s:()]+\.[\w]+)\((\d+),\d+(?:,\d+,\d+)?\)\s*:?\s*(error|warning|info)?\s*([A-Za-z]+\d+|[\w./-]+)?\s*:?\s*(.*)$/.exec(line);
-    if (m) {
-      out.push({ rule: m[4] ?? 'lint', level: level(m[3] ?? 'error'), file: m[1], line: Number(m[2]), message: m[5]?.trim() || line.trim(), snippet: null, key: null });
-      continue;
-    }
-    m = /^([^\s:]+\.[\w]+):(\d+)(?::\d+)?(?=[:\s]|$)[:\s]*(?:(error|warning|info|note)\b[:\s]*)?(?:\[?([A-Za-z]+[\w/-]*\d+|[a-z]+(?:-[a-z]+)+)\]?[:\s]+)?(.*)$/.exec(line);
+    let m = LINE_FORMATS.map((re) => re.exec(line)).find(Boolean);
     if (m) {
       out.push({ rule: m[4] ?? 'lint', level: level(m[3] ?? 'error'), file: m[1], line: Number(m[2]), message: m[5]?.trim() || line.trim(), snippet: null, key: null });
       continue;

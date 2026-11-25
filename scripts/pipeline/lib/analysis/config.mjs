@@ -22,7 +22,9 @@ import path from 'node:path';
 import { INSTALL_ROOT } from '../config.mjs';
 import { licenceRows } from './licences.mjs';
 import { SEVERITIES, VENDOR_SEVERITIES } from './commercial.mjs';
-import { defaultSettings } from '../settings.mjs';
+import { defaultSettings, setting } from '../settings.mjs';
+import { CLEAN_CODE_LENS } from '../clean-code.mjs';
+import { PLACEHOLDER_MARKER } from '../redact.mjs';
 
 export const SLOTS = ['pair', 'story', 'prCheck', 'featureVerification', 'ci'];
 export const SCOPES = ['changed-lines', 'changed-files', 'repo'];
@@ -31,18 +33,28 @@ export const SCOPES = ['changed-lines', 'changed-files', 'repo'];
 export const BASELINES = ['lines', 'merge-base', 'fingerprint', 'native'];
 export const BUILTIN_PARSERS = ['sarif', 'msbuild', 'eslint-json', 'eslint', 'lines', 'gcc', 'gitleaks-json', 'actionlint-json', 'osv-json'];
 export const LEVELS = ['error', 'warning', 'note'];
-export const LENSES = ['correctness', 'acceptance', 'security', 'test-value', 'rewrite', 'ui'];
+// `clean-code`: the tool's findings are evidence for the clean-code reviewer (report.cleanCode), never harness findings.
+export const LENSES = ['correctness', 'acceptance', 'security', 'test-value', 'rewrite', 'ui', CLEAN_CODE_LENS];
 export const PRECHECK_TOOL = 'precheck';
 // The section's defaults are in scripts/pipeline/config.json (`analysis`), merged only when a repository turns it on.
 const ANALYSIS_DEFAULTS = defaultSettings().analysis;
 export const FIX_BOUNCES_DEFAULT = ANALYSIS_DEFAULTS.maxFixRounds;
 // Per-item defaults of the lists (a pack's CI job, a licensed scanner): an item that names no timeout gets these.
 export const CI_JOB_TIMEOUT_SEC = 1800;
+// An analysis tool's time limit when its definition names none.
+export const TOOL_TIMEOUT_SEC = 600;
 export const COMMERCIAL_TIMEOUT_SEC = 3600;
 export const PLATFORMS = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'win32-x64', 'win32-arm64'];
 
 const TOOL_KEYS = ['run', 'worktreeRun', 'exclude', 'fix', 'parse', 'output', 'scope', 'baseline', 'block', 'lens', 'timeoutSec', 'extensions', 'env', 'protect', 'version', 'install', 'sample', 'description', 'okExit', 'enabled', 'when', 'onChange', 'rules', 'prepare', 'freshness', 'offline', 'needsRules', 'licence', 'data', 'rulesArg', 'validateRule', 'ruleFilter', 'licenceReview', 'errorPattern', 'missingPattern', 'forbid', 'severity', 'commercial', 'submitOnly', '$comment'];
-export const SECTION_KEYS = ['$comment', 'tools', 'stages', 'maxFixRounds', 'suppressions', 'protect', 'coverage', 'coverageTimeoutSec', 'ci', 'maxConcurrent', 'acceptLicence', 'licenceReview', 'vars', 'secrets', 'commercial'];
+export const SECTION_KEYS = ['$comment', 'tools', 'stages', 'maxFixRounds', 'suppressions', 'protect', 'coverage', 'coverageTimeoutSec', 'ci', 'maxConcurrent', 'acceptLicence', 'licenceReview', 'vars', 'secrets', 'commercial', 'duplication', 'complexity'];
+// The limits of the clean-code tools (GEN-17), as placeholders their commands use: {minTokens} (jscpd),
+// {maxCyclomatic} and {maxFunctionLines} (lizard).
+const limitVars = (config) => ({
+  minTokens: String(setting(config, 'analysis.duplication.minTokens')),
+  maxCyclomatic: String(setting(config, 'analysis.complexity.maxCyclomatic')),
+  maxFunctionLines: String(setting(config, 'analysis.complexity.maxFunctionLines')),
+});
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isCmd = (v) => (typeof v === 'string' && v.trim()) || (Array.isArray(v) && v.length && v.every((a) => typeof a === 'string'));
 
@@ -136,10 +148,10 @@ export function resolveAnalysis(config, { installRoot = INSTALL_ROOT } = {}) {
   }
   // Known non-secrets a person declared (analysis.secrets.allow: the seeded demo users' password in every e2e spec, for
   // example): the secret scanner keeps its default rules and ignores exactly these values. Governance, never an agent's.
-  // The factory's own placeholder marker is always on the list: a test value that contains it (FAKE_SECRET_MARKER) is never
+  // The factory's own placeholder marker is always on the list: a test value that contains it (PLACEHOLDER_MARKER) is never
   // flagged, here or in CI, so the test-writing agents have a fake token, key or password the scanner accepts.
   const declaredAllow = secretsAllow(a.secrets);
-  const allow = { stopwords: [...new Set([FAKE_SECRET_MARKER, ...(declaredAllow?.stopwords ?? [])])], regexes: declaredAllow?.regexes ?? [] };
+  const allow = { stopwords: [...new Set([PLACEHOLDER_MARKER, ...(declaredAllow?.stopwords ?? [])])], regexes: declaredAllow?.regexes ?? [] };
   if (tools.has('betterleaks')) {
     const t = tools.get('betterleaks');
     tools.set('betterleaks', { ...t, env: { ...(t.env ?? {}), BETTERLEAKS_CONFIG_TOML: betterleaksAllowToml(allow) } });
@@ -158,7 +170,7 @@ export function resolveAnalysis(config, { installRoot = INSTALL_ROOT } = {}) {
     protect: [...new Set([...packs.protect, ...(a.protect ?? []), ...[...tools.values()].flatMap((t) => t.protect)])],
     coverage: a.coverage === undefined ? packs.coverage : a.coverage,
     ci: { jobs: a.ci?.enabled === false ? [] : jobs.map(normalizeJob).map((j) => ({ ...j, tools: j.tools.filter((id) => tools.has(id)) })).filter((j) => j.tools.length) },
-    vars: { ...resolveVars(config, { ...packs.vars, ...(a.vars ?? {}) }), ...Object.assign({}, ...scanners.map((e) => e.vars)) },
+    vars: { ...limitVars(config), ...resolveVars(config, { ...packs.vars, ...(a.vars ?? {}) }), ...Object.assign({}, ...scanners.map((e) => e.vars)) },
     commercial: scanners.filter((e) => tools.has(e.scanner) || blocked[e.scanner]).map((e) => ({ ...e, tool: tools.get(e.scanner) ?? null, blocked: blocked[e.scanner] ?? null })),
     varSpecs: { ...packs.vars, ...(a.vars ?? {}) },
     maxConcurrent: Number.isInteger(a.maxConcurrent) ? a.maxConcurrent : ANALYSIS_DEFAULTS.maxConcurrent,
@@ -167,7 +179,6 @@ export function resolveAnalysis(config, { installRoot = INSTALL_ROOT } = {}) {
 
 // The marker of a fake secret in test data: a value containing it is on the secret scanner's allow-list in every
 // repository (the agents' instructions name it, beside analysis.secrets.allow).
-export const FAKE_SECRET_MARKER = 'factoryfake';
 
 const secretsAllow = (secrets) => {
   const allow = secrets?.allow;
@@ -266,7 +277,7 @@ export function normalizeTool(id, raw, installRoot = INSTALL_ROOT) {
     needsRules: Boolean(raw.needsRules),
     block: { levels: raw.block?.levels ?? [], rules: raw.block?.rules ?? [] },
     lens: raw.lens ?? 'correctness',
-    timeoutSec: raw.timeoutSec ?? 600,
+    timeoutSec: raw.timeoutSec ?? TOOL_TIMEOUT_SEC,
     extensions: raw.extensions ?? null,
     exclude: raw.exclude ?? [],
     env: raw.env ?? {},

@@ -137,7 +137,3 @@ export function returnTask({ key, findings, n, max, round = null }) {
     ...lines,
   ].join('\n');
 }
-
-// The PR check on a story that came back: the same findings must not come back unchanged. Two returns for the same ids
-// in a row mean the stack cannot resolve them.
-export const sameAsLast = (findings, last) => Boolean(last?.length) && findings.length > 0 && findings.every((f) => last.includes(f.id));

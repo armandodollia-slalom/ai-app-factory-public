@@ -60,7 +60,7 @@ test('pool config is checked when the settings load: an agent naming no entry fa
   assert.throws(() => loadConfig('review', dir), /\.factory\/config\.json: models\.agents\.architecture-reviewer is "gpt-9", which is not in models\.pool \(entries: opus, sol, tests, rewrite\)/);
   fs.writeFileSync(path.join(dir, '.factory/config.json'), JSON.stringify(POOLED));
   const config = loadConfig('review', dir);
-  assert.equal(councilFor(config, 'architectureReview').members.length, 3);
+  assert.equal(councilFor(config, 'architectureReview').members.length, 4, 'three counted seats and the clean-code seat');
 });
 
 // GEN-8: every verifier stage is a council with its own round limit and pass score, whatever its size.
@@ -69,10 +69,10 @@ test('rounds and pass score: each stage\'s own (<section>.maxCouncilRounds, .cou
   assert.deepEqual([councilRounds(config, 'architectureReview'), councilFor(config, 'architectureReview').councilPassScore], [4, 9.5]);
   assert.deepEqual(['pairVerify', 'pairUiVerify', 'architectureReview', 'testPlan', 'testAutomation', 'prCheck'].map((s) => [councilRounds({}, s), councilFor({}, s).councilPassScore]), [[3, 9.5], [3, 9.5], [5, 9.5], [5, 9], [5, 9], [3, 9.5]], 'the defaults');
   const sole = councilFor({}, 'architectureReview');
-  assert.deepEqual([sole.sole, sole.members.length, sole.members[0].lens, sole.members[0].blocking, sole.intercom.enabled, sole.onUnavailable], [true, 1, 'all', true, false, 'fail'], 'no members: a council of one');
+  assert.deepEqual([sole.sole, sole.members.length, sole.members[0].lens, sole.members[0].blocking, sole.intercom.enabled, sole.onUnavailable], [true, 2, 'all', true, false, 'fail'], 'no members: a council of one, beside the clean-code seat');
   // Three seats from the pool: one entry per family first (opus, sol), then the next in pool order; every one blocks.
   const c = councilFor(config, 'architectureReview');
-  assert.deepEqual(c.members.map((m) => [m.name, m.family, m.lens, m.blocking]), [['opus', 'Anthropic', 'correctness', true], ['sol', 'OpenAI', 'security', true], ['tests', 'Anthropic', 'rewrite', true]]);
+  assert.deepEqual(c.members.map((m) => [m.name, m.family, m.lens, m.blocking]), [['opus', 'Anthropic', 'correctness', true], ['sol', 'OpenAI', 'security', true], ['tests', 'Anthropic', 'rewrite', true], ['clean-code', 'Anthropic', 'clean-code', true]]);
 });
 
 test('effort maps to each CLI\'s own option; a custom member runs its own command', () => {
@@ -337,13 +337,15 @@ test('factory council review: three members on claude, codex and copilot run in 
     opus: [{ verdict: 'CHANGES_REQUESTED', score: 6, findings: [finding] }],
     sol: [{ verdict: 'CHANGES_REQUESTED', score: 5, findings: [{ ...finding, line: 2, issue: 'any user lists any order', evidence: 'no owner filter' }] }],
     tests: [{ verdict: 'APPROVED', score: 9, findings: [] }],
+    'clean-code': [{ verdict: 'APPROVED', score: 10, findings: [] }],
   }));
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_CLI_SCRIPT: script, FACTORY_METRICS_SPOOL: '0', FACTORY_METRICS_SHARD: '0' };
   for (const k of ['PIPELINE_AGENT_CMD', 'PIPELINE_AGENT_CLI', 'PIPELINE_CHILD', 'PIPELINE_ROOT', 'PIPELINE_MODEL_OVERRIDE']) delete env[k];
   const r = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'review', '--stage', 'architectureReview', '--base', 'main', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
   assert.equal(r.status, 1, `not passed: ${r.stderr}`);
   const out = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
-  assert.deepEqual(out.members.map((m) => [m.name, m.cli, m.status, m.score]), [['opus', 'claude', 'ok', 6], ['sol', 'codex', 'ok', 5], ['tests', 'copilot', 'ok', 9]]);
+  // The clean-code seat sits too: every family is seated, so it takes the first entry of the pool.
+  assert.deepEqual(out.members.map((m) => [m.name, m.cli, m.status, m.score]), [['opus', 'claude', 'ok', 6], ['sol', 'codex', 'ok', 5], ['tests', 'copilot', 'ok', 9], ['clean-code', 'claude', 'ok', 10]]);
   assert.equal(out.findings.length, 1, JSON.stringify(out.findings.map((f) => [f.file, f.line, f.members, f.text])));
   assert.deepEqual(out.findings[0].members, ['opus', 'sol']);
   const calls = fs.readFileSync(`${script}.calls.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -362,13 +364,13 @@ test('factory council review: three members on claude, codex and copilot run in 
   assert.equal(by.claude.agent, 'architecture-reviewer');
   const recorded = fs.readFileSync(path.join(dir, '.factory/metrics/council-rounds.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(recorded.at(-1).stage, 'architectureReview');
-  assert.deepEqual(recorded.at(-1).members.map((m) => [m.name, m.login]), [['opus', 'default'], ['sol', 'CODEX_HOME=~/.codex-second'], ['tests', 'default']], 'which login each member used, as configured');
+  assert.deepEqual(recorded.at(-1).members.map((m) => [m.name, m.login]), [['opus', 'default'], ['sol', 'CODEX_HOME=~/.codex-second'], ['tests', 'default'], ['clean-code', 'default']], 'which login each member used, as configured');
   assert.equal(recorded.at(-1).pass, false);
 
   // `factory council check` validates the same configuration.
   const check = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'check'], { cwd: dir, env, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
-  assert.match(check.stdout, /Council configuration: OK\nPool: opus \(claude, claude-opus-5-5, Anthropic\); sol \(codex, gpt-6\.1-sol, OpenAI\); tests \(copilot, claude-sonnet-5\.5, Anthropic\)\n[\s\S]*- architectureReview \(3 seats\): opus \(opus, Anthropic, correctness\), sol \(sol, OpenAI, security\), tests \(tests, Anthropic, rewrite\) \(5 round\(s\), pass 9\/10, blockQuorum any, onUnavailable fail\)/);
+  assert.match(check.stdout, /Council configuration: OK\nPool: opus \(claude, claude-opus-5-5, Anthropic\); sol \(codex, gpt-6\.1-sol, OpenAI\); tests \(copilot, claude-sonnet-5\.5, Anthropic\)\n[\s\S]*- architectureReview \(3 seats\): opus \(opus, Anthropic, correctness\), sol \(sol, OpenAI, security\), tests \(tests, Anthropic, rewrite\), the clean-code seat clean-code \(opus, Anthropic\) \(5 round\(s\), pass 9\/10, blockQuorum any, onUnavailable fail\)/);
 });
 
 test('factory council review: a member whose CLI is unavailable fails the round under fail and is reported under report', { skip: skipOnWindows }, () => {
@@ -377,7 +379,7 @@ test('factory council review: a member whose CLI is unavailable fails the round 
     const council = { onUnavailable, members: [{ name: 'opus', cli: 'claude', model: 'opus', lens: 'correctness' }, { name: 'sol', cli: 'codex', model: 'sol', lens: 'correctness' }], stages: { architectureReview: {} } };
     const dir = councilRepo(council);
     const script = path.join(dir, '..', `${path.basename(dir)}-script.json`);
-    fs.writeFileSync(script, JSON.stringify({ opus: [{ verdict: 'APPROVED', score: 10, findings: [] }], sol: [{ exit: 1, text: 'Claude AI usage limit reached|1700000000', stderr: 'usage limit reached' }] }));
+    fs.writeFileSync(script, JSON.stringify({ opus: [{ verdict: 'APPROVED', score: 10, findings: [] }], sol: [{ exit: 1, text: 'Claude AI usage limit reached|1700000000', stderr: 'usage limit reached' }], 'clean-code': [{ verdict: 'APPROVED', score: 10, findings: [] }] }));
     const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_CLI_SCRIPT: script, FACTORY_METRICS_SPOOL: '0', FACTORY_METRICS_SHARD: '0' };
     for (const k of ['PIPELINE_AGENT_CMD', 'PIPELINE_AGENT_CLI', 'PIPELINE_CHILD', 'PIPELINE_ROOT', 'PIPELINE_OUTAGE_FILE']) delete env[k];
     const r = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'review', '--base', 'main', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
@@ -391,7 +393,7 @@ test('factory council review: a member whose CLI is unavailable fails the round 
       assert.equal(out.unavailable[0].name, 'sol');
     }
     const calls = fs.readFileSync(`${script}.calls.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    assert.deepEqual(calls.map((c) => c.cli).sort(), ['claude', 'codex'], 'nothing else was started in its place');
+    assert.deepEqual(calls.map((c) => c.cli).sort(), ['claude', 'claude', 'codex'], 'nothing else was started in its place (the clean-code seat is the second claude run)');
   }
 });
 
@@ -477,8 +479,8 @@ test('prompt versions: without a council the acting agents\' definitions carry n
   for (const name of ['implementer', 'pair-implementer', 'pr-check-fixer', 'test-automation']) {
     const def = agentDefinition(plain, name);
     assert.doesNotMatch(def.body, /Council findings|DELETE TEST|council/i, `${name}'s definition has no council text`);
-    // The version is the hash of the shipped definition alone (no addendum or lessons here), exactly as before councils.
-    assert.equal(def.version, sha(`${fs.readFileSync(path.join(INSTALL, 'agents', `${name}.agent.md`), 'utf8')}\n`, 8));
+    // The version is the hash of the shipped definition and its clean-code section (no addendum or lessons here).
+    assert.equal(def.version, sha(`${fs.readFileSync(path.join(INSTALL, 'agents', `${name}.agent.md`), 'utf8')}\n\n${def.cleanCodeText}`, 8));
     assert.equal(agentDefinition(withCouncil, name).version, def.version, 'the council adds to the task, never to the definition');
   }
   assert.match(councilActionsText(), /^### Council findings: deleting tests and rewrites[\s\S]*DELETE TEST[\s\S]*REWRITE[\s\S]*or your `owns`/);
@@ -676,12 +678,12 @@ test('factory council review: a member with no time limit of its own is stopped 
   const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
   fs.writeFileSync(file, JSON.stringify({ ...settings, architectureReview: { ...settings.architectureReview, timeoutSec: 2 } }, null, 2));
   const script = path.join(dir, '..', `${path.basename(dir)}-script.json`);
-  fs.writeFileSync(script, JSON.stringify({ opus: [{ verdict: 'APPROVED', score: 10, findings: [] }], sol: [{ delayMs: 15000, verdict: 'APPROVED', score: 10, findings: [] }] }));
+  fs.writeFileSync(script, JSON.stringify({ opus: [{ verdict: 'APPROVED', score: 10, findings: [] }], sol: [{ delayMs: 15000, verdict: 'APPROVED', score: 10, findings: [] }], 'clean-code': [{ verdict: 'APPROVED', score: 10, findings: [] }] }));
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, FAKE_CLI_SCRIPT: script, FACTORY_METRICS_SPOOL: '0', FACTORY_METRICS_SHARD: '0', PIPELINE_CEILING_FACTOR: '1' };
   for (const k of ['PIPELINE_AGENT_CMD', 'PIPELINE_AGENT_CLI', 'PIPELINE_CHILD', 'PIPELINE_ROOT', 'PIPELINE_MODEL_OVERRIDE']) delete env[k];
   const r = spawnSync(process.execPath, [path.join(INSTALL, 'bin/factory.mjs'), 'council', 'review', '--stage', 'architectureReview', '--base', 'main', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
   const out = JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
-  assert.deepEqual(out.members.map((m) => [m.name, m.status === 'ok']), [['opus', true], ['sol', false]], r.stderr.slice(-1500));
+  assert.deepEqual(out.members.map((m) => [m.name, m.status === 'ok']), [['opus', true], ['sol', false], ['clean-code', true]], r.stderr.slice(-1500));
 });
 
 // Council r5 (sol-31): every stage the documented by-hand examples name runs on default settings (the docs named a
@@ -707,7 +709,8 @@ test('every documented `factory council review --stage` example runs on default 
   git('commit', '-qam', 'change');
   const script = path.join(dir, '..', `${path.basename(dir)}-byhand.json`);
   const ok = { result: { verdict: 'APPROVED', score: 10, summary: 'ok', coverage: [], findings: [] } };
-  fs.writeFileSync(script, JSON.stringify({ 'architecture-reviewer': [ok], 'pr-check-acceptance': [ok], 'pair-verifier': [ok], 'test-plan-verifier': [ok], 'test-automation-verifier': [ok] }));
+  // Each stage's own verifier sits twice: as the counted member and as the clean-code seat (the PR check's is its own critic).
+  fs.writeFileSync(script, JSON.stringify({ 'architecture-reviewer': [ok, ok], 'pr-check-acceptance': [ok], 'pr-check-clean-code': [ok], 'pair-verifier': [ok, ok], 'test-plan-verifier': [ok, ok], 'test-automation-verifier': [ok, ok] }));
   const env = { ...process.env, PIPELINE_AGENT_CMD: `"${process.execPath}" "${path.join(here, 'fixtures', 'fake-agent.mjs')}"`, PIPELINE_FAKE_SCRIPT: script, FACTORY_METRICS_SPOOL: '0', FACTORY_METRICS_SHARD: '0' };
   for (const k of ['PIPELINE_AGENT_CLI', 'PIPELINE_CHILD', 'PIPELINE_ROOT', 'PIPELINE_MODEL_OVERRIDE']) delete env[k];
   try {

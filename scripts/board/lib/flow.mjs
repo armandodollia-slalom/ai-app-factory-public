@@ -105,7 +105,6 @@ export function owner(config = null) {
   }
   return ownerMemo;
 }
-export const resetOwner = () => (ownerMemo = null);
 
 // The ticket's comments: [{ id, author, body, createdAt, url }].
 export const issueComments = (config, number) => trackerFor(config).tickets.comments(number);

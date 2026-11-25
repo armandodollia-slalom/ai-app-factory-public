@@ -1,0 +1,4 @@
+{
+  "$comment": "The clean-code rules a writing agent carries before the retro has tuned them for a repository (GEN-15). The retro keeps the repository's own set in <lessonsDir>/clean-code-writers.json; this file is only the starting set. SCOPE is fixed: it is never removed.",
+  "rules": ["SCOPE", "CC-1", "CC-2"]
+}

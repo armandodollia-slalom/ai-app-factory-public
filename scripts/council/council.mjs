@@ -10,13 +10,14 @@ import { runAgentAsync } from '../pipeline/lib/agents.mjs';
 import { parseArgs, runMain } from '../pipeline/lib/cli.mjs';
 import { loadConfig } from '../pipeline/lib/config.mjs';
 import { familyOf, poolOf } from '../pipeline/lib/pool.mjs';
-import { COUNCIL_STAGES, stageTimeoutSec, councilDoctorRows, councilFor, memberCount, memberRunEnv, councilReviewSection, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, runCouncil, testProtection } from '../pipeline/lib/council.mjs';
-import { resolveIntercom } from '../pipeline/lib/council-config.mjs';
+import { councilReadOnly, COUNCIL_STAGES, stageTimeoutSec, councilDoctorRows, councilFor, memberCount, memberRunEnv, councilReviewSection, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, runCouncil, testProtection } from '../pipeline/lib/council.mjs';
+import { SOLE_LENS, resolveIntercom } from '../pipeline/lib/council-config.mjs';
 import { applyRulings, checkoutState, intercomStateDir, runIntercomDiscussion } from '../pipeline/lib/intercom.mjs';
 import { intercomDoctor } from '../pipeline/lib/intercom-server.mjs';
 import { git } from '../pipeline/lib/git.mjs';
 import { resolveStory, activeStory } from '../pipeline/lib/stories.mjs';
 import { extractResult, setLogTag, sha } from '../pipeline/lib/util.mjs';
+import { COUNCIL_CRITIC, LENSES as PR_LENSES } from '../pr-check/lib/loop.mjs';
 
 setLogTag('council');
 
@@ -33,9 +34,9 @@ Stages: ${Object.keys(COUNCIL_STAGES).join(', ')} (pairUiVerify needs a leased a
 
 // The stage folder whose config.json the stage's settings come from.
 export const STAGE_CONFIG = { pairVerify: 'implement', pairUiVerify: 'implement', architectureReview: 'review', testPlan: 'feature-verification', testAutomation: 'feature-verification', prCheck: 'pr-check' };
-// For a PR check council, the critic agent each lens runs (scripts/pr-check/lib/loop.mjs COUNCIL_CRITIC).
-// A one-seat council's sole member reviews every lens (`all`): by hand it runs the acceptance critic, the stage's core lens.
-const PR_CRITIC = { all: 'pr-check-acceptance', acceptance: 'pr-check-acceptance', correctness: 'pr-check-flow', security: 'pr-check-flow', 'test-value': 'pr-check-style', rewrite: 'pr-check-style', ui: 'pr-check-design' };
+// For a PR check council, the critic agent each lens runs (the PR check's own map, COUNCIL_CRITIC). A one-seat council's
+// sole member reviews every lens (`all`): by hand it runs the acceptance critic, the stage's core lens.
+const prCritic = (lens) => (lens === SOLE_LENS ? PR_LENSES.acceptance : PR_LENSES[COUNCIL_CRITIC[lens]])?.agent;
 const ORDER = ['architectureReview', 'pairVerify', 'prCheck', 'testAutomation', 'testPlan'];
 
 const fence = (text, lang = '') => `\`\`\`\`${lang}\n${String(text).trimEnd()}\n\`\`\`\``;
@@ -83,7 +84,7 @@ async function review(flags) {
   if (COUNCIL_STAGES[stage].ui) throw new Error('the pairUiVerify council drives the app on a leased test stack slot; it runs only inside `factory implement run`');
   const config = loadConfig(STAGE_CONFIG[stage]);
   const council = councilFor(config, stage);
-  const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
+  const readOnly = councilReadOnly(config);
   if (flags.rulings) return reviewRulings(config, council, stage, readOnly, flags);
   const base = flags.base || config.baseRef;
   const mergeBase = git(config.root, ['merge-base', base, 'HEAD']).stdout.trim();
@@ -94,7 +95,7 @@ async function review(flags) {
   const storyText = story?.file && fs.existsSync(path.join(config.root, story.file)) ? fs.readFileSync(path.join(config.root, story.file), 'utf8') : null;
   const task = reviewTask({ branch, base, story, storyText, diff, stage });
   const subject = story?.key ?? `branch:${branch}`;
-  const agentOf = (m) => (stage === 'prCheck' ? PR_CRITIC[m.lens] : COUNCIL_STAGES[stage].agent);
+  const agentOf = (m) => (stage === 'prCheck' ? prCritic(m.lens) : COUNCIL_STAGES[stage].agent);
   const runMember = (m, t, o) => runAgentAsync(config, { name: agentOf(m), task: t, mode: 'read', entry: m.entry, timeoutSec: m.timeoutSec ?? stageTimeoutSec(config, stage), noSubagents: true, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: `council-${stage}`, story: subject, round: 1, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } });
   const out = await runCouncil({
     council,
@@ -162,7 +163,7 @@ async function check(flags) {
   const stages = Object.keys(COUNCIL_STAGES).map((stage) => {
     const sc = loadConfig(STAGE_CONFIG[stage]);
     const s = councilFor(sc, stage);
-    return { stage, seats: memberCount(sc, stage), maxCouncilRounds: s.maxCouncilRounds, councilPassScore: s.councilPassScore, blockQuorum: s.blockQuorum, onUnavailable: s.onUnavailable, ...(s.intercom.enabled ? { intercom: s.intercom } : {}), members: s.sole ? [`its own verifier${s.members[0].entry ? ` (${s.members[0].entry})` : ''}`] : s.members.map((m) => `${m.name} (${m.entry}, ${m.family}, ${m.lens})`) };
+    return { stage, seats: memberCount(sc, stage), maxCouncilRounds: s.maxCouncilRounds, councilPassScore: s.councilPassScore, blockQuorum: s.blockQuorum, onUnavailable: s.onUnavailable, ...(s.intercom.enabled ? { intercom: s.intercom } : {}), members: [...(s.sole ? [`its own verifier${s.members[0].entry ? ` (${s.members[0].entry})` : ''}`] : s.members.filter((m) => !m.fixed).map((m) => `${m.name} (${m.entry}, ${m.family}, ${m.lens})`)), ...s.members.filter((m) => m.fixed).map((m) => `the clean-code seat ${m.name} (${m.entry}, ${m.family})`)] };
   });
   if (flags.json) console.log(JSON.stringify({ ok: true, pool, stages }, null, 2));
   else {

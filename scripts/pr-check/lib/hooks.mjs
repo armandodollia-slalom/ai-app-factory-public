@@ -12,6 +12,7 @@ import { clearEscalation, escalate, lockFile, loadState, logFile, updateState } 
 import { listStories, resolveStory } from '../../pipeline/lib/stories.mjs';
 import { bootId, lockHolder, log, nowIso, selfProcess, sleep } from '../../pipeline/lib/util.mjs';
 import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
+import { isCodeAgentStop } from '../../pipeline/lib/cli.mjs';
 
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'pr-check.mjs');
 const block = (reason) => ({ decision: 'block', reason });
@@ -20,12 +21,6 @@ const settings = (config) => ({ ...defaultSettings().prCheck.hook, ...config.prC
 
 export const hookSkipped = (config) => process.env.PR_CHECK_SKIP === '1' || !settings(config).enabled;
 
-// Main-session stops always count; subagent stops only for the agents that write the code (hooks.codeAgents, shared with
-// the architecture review).
-export function isCodeAgentStop(config, payload) {
-  if (payload.hook_event_name !== 'SubagentStop' || !payload.agent_type) return true;
-  return setting(config, 'hooks.codeAgents').includes(payload.agent_type);
-}
 
 const formatFindings = (findings) => findings.map((f, i) => `${i + 1}. [${f.severity}] ${f.id} (${f.lens}) ${f.title}`).join('\n');
 

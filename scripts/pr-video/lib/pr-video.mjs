@@ -6,11 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { matchesAnyPath } from '../../implement/lib/project.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
-import { log, run } from '../../pipeline/lib/util.mjs';
+import { VIDEO_SECTION_END as SECTION_END, VIDEO_SECTION_START as SECTION_START, log, run } from '../../pipeline/lib/util.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 
-export const SECTION_START = '<!-- pr-demo-video:start -->';
-export const SECTION_END = '<!-- pr-demo-video:end -->';
 const GIF_MAX_BYTES = 9 * 1024 * 1024;
 const GIF_ATTEMPTS = [
   { fps: 6, width: 720 },
@@ -53,15 +51,18 @@ export function removeSection(body, { start: startMarker = SECTION_START, end: e
   return `${text.slice(0, start).trimEnd()}\n${text.slice(end + endMarker.length).replace(/^\n+/, '\n')}`.trim() + '\n';
 }
 
-// Tests from artifacts/e2e-videos/manifest.json that kept a video, last attempt of each test only.
-export function recordedTests(manifest) {
+// The tests of artifacts/e2e-videos/manifest.json, the last attempt of each.
+export function latestAttempts(manifest) {
   const latest = new Map();
   for (const t of manifest?.tests ?? []) {
     const key = [t.project, t.file, ...t.titlePath].join('\u0000');
     if (!latest.has(key) || latest.get(key).retry <= t.retry) latest.set(key, t);
   }
-  return [...latest.values()].filter((t) => t.videos.length);
+  return [...latest.values()];
 }
+
+// Tests from the manifest that kept a video, last attempt of each test only.
+export const recordedTests = (manifest) => latestAttempts(manifest).filter((t) => t.videos.length);
 
 const blobUrl = (repo, branch, file) => `https://github.com/${repo}/blob/${branch}/${file.split('/').map(encodeURIComponent).join('/')}`;
 

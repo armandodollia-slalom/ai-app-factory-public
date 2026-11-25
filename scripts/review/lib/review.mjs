@@ -4,10 +4,12 @@ import { addRequired } from '../../feature-verification/lib/required.mjs';
 import { evidenceText, readReport } from '../../pipeline/lib/analysis/report.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
-import { decide, orchestratorRun, producerRun } from '../../pipeline/lib/orchestrator.mjs';
+import { IMPLEMENTER, runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
+import { decide, guide, orchestratorRun, producerRun } from '../../pipeline/lib/orchestrator.mjs';
+import { guidanceText, reviewerGuidance } from '../../pipeline/lib/clean-code.mjs';
+import { isCodeAgentStop } from '../../pipeline/lib/cli.mjs';
 import { selectCouncil, ticketShape } from '../../pipeline/lib/selection.mjs';
-import { changedSince, contestedText, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, councilActionsText, councilFor, memberRunEnv, guardProtectedTests, protectedTestFinding, runDetachedMember, takeLate, councilRounds, disputesFor, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
+import { councilReadOnly, changedSince, contestedText, councilMemory, fixDeclarationText, fixesFile, memoryFile, nameFindings, councilActionsText, councilFor, memberRunEnv, guardProtectedTests, protectedTestFinding, runDetachedMember, takeLate, councilRounds, disputesFor, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { ownerQuestionsText, runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { decisionsBlock, readDecisions } from '../../pipeline/lib/human-decisions.mjs';
@@ -42,7 +44,7 @@ function logReviewDecision(config, story, round, { agent, agentVer, verdict, sum
     round,
     agent,
     agentVer,
-    subject: 'implementer',
+    subject: IMPLEMENTER,
     decision: verdict === 'APPROVED' ? 'approved' : 'changes-requested',
     reason: summary || null,
     ...extra,
@@ -118,6 +120,7 @@ function reviewTask(config, story, round, derived = [], disputes = null) {
     ...derivedClassesBlock(derived),
     ...analysisBlock(config),
     ...disputesBlock(disputes ?? readReviewDisputes(config, story.key)),
+    ...reviewerGuidance(loadState(config, story.key).review.guidance),
   ].join('\n');
 }
 
@@ -165,7 +168,7 @@ export async function councilArchitectureReview(config, story, round, { derivedC
   const feedback = takeLate(lateDir, round, council.members, parse);
   // What earlier rounds upheld, with their agreed fixes: the members read it, and the merge settles a later objection to such a fix.
   const memory = councilMemory({ file: memoryFile(config.root, config.stateDir, { stage: 'architectureReview', story: story.key }), cwd: config.root, round, fixes: fixesFile(config.root, config.stateDir, { stage: 'architectureReview', story: story.key }) });
-  const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
+  const readOnly = councilReadOnly(config);
   const out = await runCouncil({
     council,
     round,
@@ -195,7 +198,7 @@ export async function councilArchitectureReview(config, story, round, { derivedC
     story: story.key,
     round,
     retries: config.agent.resultParseRetries,
-    readOnly: { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+    readOnly,
   });
   // Named before they are recorded: the finding records and the outcome the next round writes from the memory ledger
   // carry the same id (council-findings.jsonl; the scorecard joins them on it).
@@ -430,12 +433,6 @@ export async function reviewRound(config, story, round) {
   return { ...llm, findings: [...llm.findings, ...policy.findings], summary: `${llm.summary}${note}` };
 }
 
-// Only code agents are reviewed: the main session (Stop) or a subagent whose type is listed in
-// hooks.codeAgents (SubagentStop). Pipeline child agents never reach here (PIPELINE_CHILD).
-export function isCodeAgentStop(config, payload = {}) {
-  if (payload.hook_event_name !== 'SubagentStop' || !payload.agent_type) return true;
-  return setting(config, 'hooks.codeAgents').includes(payload.agent_type);
-}
 
 const formatFindings = (findings) =>
   findings
@@ -468,6 +465,43 @@ export function resumeReview(config, story, { force = false } = {}) {
   if (interrupted) return `${story.key}: architecture review round ${interrupted.round} was interrupted; it runs again when the code agent finishes its turn.`;
   if (review.lastVerdict === 'CRASHED') return `${story.key}: the architecture review crashed ${review.recoveries} times; run \`node scripts/review/review.mjs resume ${story.key} --force\` to try again.`;
   return null;
+}
+
+// The council requested changes: the stage's orchestrator decides, once per ticket, whether it fixes the findings
+// itself or returns them to the implement stage (the code agent, as before), with its guidance for whoever writes the
+// fix. Fixing itself, it runs as itself in the worktree with the code agent's instructions; the review then sits again
+// at once, by the same council (never by the orchestrator).
+async function requestChanges(config, story, review, result, { round, hash, payload }) {
+  const lessons = result.lessons ? `\n\nYou have been denied for these rules before. Lessons from your review history (follow them for the rest of this story):\n\n${result.lessons}` : '';
+  const declare = fixDeclarationText(fixesFile(config.root, config.stateDir, { stage: 'architectureReview', story: story.key }), result.findings);
+  const actions = `\n\n${councilActionsText()}${declare ? `\n\n${declare}` : ''}`;
+  // route: handOffTestGaps (in the review round: test-only findings went to feature verification)
+  const findingsText = `Architecture review round ${round}/${reviewMaxRounds(config)} for ${story.key} requested changes. ${result.summary}\n\n${formatFindings(result.findings)}${lessons}${actions}`;
+  const closing = '\n\nMake these corrections, then finish your turn; the review runs again automatically.';
+  const recorded = (reason, more = {}) => updateState(config, story.key, (s) => Object.assign(s.review, { ...more, rounds: round, lastHash: hash, lastVerdict: 'CHANGES_REQUESTED', lastReason: reason, unchangedBlocks: 0 }));
+  // Recorded before the orchestrator is asked, so a stop killed while it decides re-blocks on the findings as before.
+  recorded(`${findingsText}${closing}`);
+  // Who fixes is decided once per ticket; where this round's fix goes and what it reuses is asked for every handoff (a
+  // later round's findings name other code). The fix goes to a writer: the code agent, or the orchestrator as one.
+  const ask = {
+    section: 'architectureReview',
+    stage: 'architecture review',
+    story: story.key,
+    work: 'fixing the findings the architecture review council upheld',
+    context: findingsText,
+    run: (o) => runAgent(config, { ...o, cwd: config.root, timeoutSec: config.architectureReview.timeoutSec }),
+    cwd: config.root,
+  };
+  const led = review.orchestrator ?? await decide(config, { ...ask, delegateTo: 'the implement stage (the code agent that wrote the change), as a blocked stop with the findings', guidance: true });
+  const current = review.orchestrator ? await guide(config, ask) : led;
+  const guidance = guidanceText(current.guidance);
+  const reason = `${findingsText}${guidance ? `\n\n${guidance}` : ''}${closing}`;
+  // The council that reviews this fix checks it against the guidance its writer had (reviewTask).
+  recorded(reason, { orchestrator: led, guidance: current.guidance ?? [] });
+  if (led.decision !== 'self') return block(reason);
+  log(`${story.key}: the architecture review's orchestrator fixes round ${round}'s findings itself`);
+  runAgent(config, { mode: 'implement', cwd: config.root, timeoutSec: config.architectureReview.timeoutSec, usage: { stage: 'review', story: story.key, round, step: 'orchestrator-fix' }, ...producerRun(config, { agent: IMPLEMENTER, selfDo: led, task: reason }) });
+  return hookStop(config, story, payload);
 }
 
 // Stop hook: review the implementation once the agent has declared the work done. Changes requested
@@ -544,31 +578,7 @@ export async function hookStop(config, story, payload = {}) {
     // not-an-agent: a notice that a person decides
     return notice(`Review: ${story.key} needs a person: ${formatFindings(result.findings.filter((f) => f.needsPerson))}\nSee .factory/state/escalations/${story.key}-review.md.`);
   }
-  if (result.verdict === 'CHANGES_REQUESTED') {
-    const lessons = result.lessons ? `\n\nYou have been denied for these rules before. Lessons from your review history (follow them for the rest of this story):\n\n${result.lessons}` : '';
-    const declare = fixDeclarationText(fixesFile(config.root, config.stateDir, { stage: 'architectureReview', story: story.key }), result.findings);
-    const actions = `\n\n${councilActionsText()}${declare ? `\n\n${declare}` : ''}`;
-    // route: handOffTestGaps (in the review round: test-only findings went to feature verification)
-    const reason = `Architecture review round ${round}/${reviewMaxRounds(config)} for ${story.key} requested changes. ${result.summary}\n\n${formatFindings(result.findings)}${lessons}${actions}\n\nMake these corrections, then finish your turn; the review runs again automatically.`;
-    updateState(config, story.key, (s) => Object.assign(s.review, { rounds: round, lastHash: hash, lastVerdict: 'CHANGES_REQUESTED', lastReason: reason, unchangedBlocks: 0 }));
-    // The stage's orchestrator decides, once per ticket, whether it fixes the findings itself or returns them to the
-    // implement stage (the code agent, as before). Fixing itself, it runs as itself in the worktree with the code
-    // agent's instructions; the review then sits again at once, by the same council (never by the orchestrator).
-    const led = review.orchestrator ?? await decide(config, {
-      section: 'architectureReview',
-      stage: 'architecture review',
-      story: story.key,
-      work: 'fixing the findings the architecture review council upheld',
-      delegateTo: 'the implement stage (the code agent that wrote the change), as a blocked stop with the findings',
-      context: reason,
-      run: (o) => runAgent(config, { ...o, cwd: config.root, timeoutSec: config.architectureReview.timeoutSec }),
-    });
-    updateState(config, story.key, (s) => (s.review.orchestrator = led));
-    if (led.decision !== 'self') return block(reason);
-    log(`${story.key}: the architecture review's orchestrator fixes round ${round}'s findings itself`);
-    runAgent(config, { mode: 'implement', cwd: config.root, timeoutSec: config.architectureReview.timeoutSec, usage: { stage: 'review', story: story.key, round, step: 'orchestrator-fix' }, ...producerRun(config, { agent: 'implementer', selfDo: led, task: reason }) });
-    return hookStop(config, story, payload);
-  }
+  if (result.verdict === 'CHANGES_REQUESTED') return requestChanges(config, story, review, result, { round, hash, payload });
   updateState(config, story.key, (s) => Object.assign(s.review, { rounds: 0, lastHash: hash, lastVerdict: 'APPROVED', lastReason: result.summary, approvedHash: hash, unchangedBlocks: 0, policyReviewId: null }));
   clearEscalation(config, story, 'review');
   // route: handOffTestGaps (notes; test gaps handed off already)

@@ -4,6 +4,7 @@
 // The harness writes a "Changed by the PR check" section, drops the Follow-ups it resolved, and posts the same
 // note on each ticket's issue.
 import { sameProblem } from '../../implement/lib/follow-ups.mjs';
+import { VIDEO_SECTION_START, escapeRe } from '../../pipeline/lib/util.mjs';
 
 const START = '<!-- pr-check-fixes:start -->';
 const END = '<!-- pr-check-fixes:end -->';
@@ -55,7 +56,7 @@ export function withFixNote(body, note, fixed = []) {
   text = kept.join('\n').replace(/## Follow-ups \(not in this PR\)\n+(?=##|<!--|$)/, '');
   if (!note) return text;
   const block = `${START}\n${note}\n${END}`;
-  const video = text.indexOf('<!-- pr-demo-video:start -->');
+  const video = text.indexOf(VIDEO_SECTION_START);
   return video >= 0 ? `${text.slice(0, video).trimEnd()}\n\n${block}\n\n${text.slice(video)}` : `${text.trimEnd()}\n\n${block}\n`;
 }
 
@@ -76,7 +77,7 @@ export function withNotesUpdate(story, fixes, commits = []) {
   let text = String(story).replace(/\r\n/g, '\n');
   // Bullets the fix made untrue are replaced with the fixer's corrected text.
   for (const r of fixes.replacements ?? []) {
-    const re = new RegExp(`^\\* \\*\\*${r.field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\*\\*.*$`, 'im');
+    const re = new RegExp(`^\\* \\*\\*${escapeRe(r.field)}:\\*\\*.*$`, 'im');
     if (re.test(text)) text = text.replace(re, `* **${r.field}:** ${r.text}`);
   }
   const a = text.indexOf(NSTART);

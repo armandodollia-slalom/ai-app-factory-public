@@ -84,14 +84,6 @@ export const safeKey = (key) => String(key).replace(/[^A-Za-z0-9-]+/g, '-').repl
 // Factory story keys look like `SHOP-3`; epics and spikes `epic-<slug>` / `spike-<slug>`.
 export const STORY_KEY = /^([A-Z][A-Z0-9]*-\d+):/;
 
-// A label change: an array replaces the labels, { add, remove } edits them.
-export function applyLabelChange(current, change) {
-  if (change == null) return current;
-  if (Array.isArray(change)) return [...new Set(change)];
-  const remove = new Set(change.remove ?? []);
-  return [...new Set([...(current ?? []).filter((l) => !remove.has(l)), ...(change.add ?? [])])];
-}
-
 // Hidden markers (`<!-- name:... -->`) the factory puts in comments and bodies. Trackers that cannot
 // store HTML comments keep them elsewhere (an entity property, a delimited block) and put them back.
 export const MARKER_LINE = /<!--[\s\S]*?-->/g;

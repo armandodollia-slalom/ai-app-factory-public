@@ -5,11 +5,11 @@
 //   2. open gated PRs evaluated again: a PR waiting for its checks auto-merges once they pass;
 //   3. closed gated PRs recorded for the retro (pr-review.mjs), and reverts of their merges.
 // Everything is informational: a GitHub error is logged and the rest of the sync goes on.
-import { appendJsonl, nowIso, readJsonl, run } from '../../pipeline/lib/util.mjs';
+import { appendJsonl, nowIso, run } from '../../pipeline/lib/util.mjs';
 import { recordMisses } from '../../pipeline/lib/findings.mjs';
 import { metricsFile, readMetricsLocal } from '../../pipeline/lib/state.mjs';
 import { extractDecisions, upsertDecisions } from '../../board/lib/escalation.mjs';
-import { OUTCOMES_FILE } from '../../implement/lib/decisions.mjs';
+import { OUTCOMES_FILE, PR_CHECKS_FILE } from '../../implement/lib/decisions.mjs';
 import { addTicketLabel, setTicketBody, setTriageFields, ticketAssignees, ticketBody } from './fields.mjs';
 import { confidence, ticketSignals } from './confidence.mjs';
 import { ciFlaky } from '../../implement/lib/ci-wait.mjs';
@@ -114,7 +114,7 @@ export function rebuildAssessment(config, gh, pr, state, { log = () => {}, cwd =
   }
   // Owner questions are live too (council C6): the latest PR check of each ticket that this checkout records decides
   // them; with no record here, the questions kept in the issue's triage stand.
-  const checks = safe(() => readMetricsLocal(config, 'pr-checks.jsonl'), []);
+  const checks = safe(() => readMetricsLocal(config, PR_CHECKS_FILE), []);
   for (const t of tickets) {
     const mine = checks.filter((r) => r.story === t.key || (Array.isArray(r.stories) && r.stories.includes(t.key))).sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
     // With the ticket's PR check records here, every PR check signal and the whole confidence (score, criteria, reasons,

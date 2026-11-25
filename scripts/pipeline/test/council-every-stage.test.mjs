@@ -42,12 +42,13 @@ const leftOutLines = [
   ...skillLines(/^5\. \*\*Work alone[\s\S]*?(?=\n\n|\n\d+\. |\n## )/m.exec(SKILL)[0]),
 ].filter((l) => !skillLines(SKILL.split(/^(?=## )/m).filter((sec) => !/^## (Before the council sits|Seating|Lenses|Discussion|Merging results|Pull request|Council review|By hand)|^# Council\n/.test(sec)).join('\n').replace(/^5\. \*\*Work alone[\s\S]*?(?=\n\n|\n\d+\. |\n## )/m, '')).includes(l));
 
-test('no council settings: every verifier stage seats one member, whose task holds the kept rules and none of the parts that need other members', () => {
+test('no council settings: every verifier stage seats one counted member, whose task holds the kept rules and none of the parts that need other members', () => {
   for (const stage of Object.keys(COUNCIL_STAGES)) {
     const c = councilFor({}, stage);
-    assert.deepEqual([c.sole, c.members.length, c.members[0].lens, c.members[0].blocking], [true, 1, 'all', true], stage);
+    // The clean-code seat sits beside it (GEN-16).
+    assert.deepEqual([c.sole, c.members.length, c.members[0].lens, c.members[0].blocking, c.members[1].lens, c.members[1].fixed], [true, 2, 'all', true, 'clean-code', true], stage);
     const t = memberTask('STAGE TASK', { council: c, member: c.members[0], round: 1 });
-    assert.match(t, /You are the council's only member: you review the change through every lens/, stage);
+    assert.match(t, /You are the council's only counted member: you review the change through every lens/, stage);
     for (const re of KEPT) assert.match(t, re, `${stage} keeps ${re}`);
     for (const re of LEFT_OUT) assert.doesNotMatch(t, re, `${stage} leaves out ${re}`);
     // Council r2 (A14): none of the left-out text, line by line (rule 5 ran on past its first line).
@@ -62,10 +63,10 @@ test('three members: each member\'s task is the full member task, with the seat 
   for (const stage of Object.keys(COUNCIL_STAGES)) {
     const c = councilFor(THREE, stage);
     assert.equal(c.sole, false);
-    assert.deepEqual(c.members.map((m) => m.name), ['opus', 'sol', 'tests']);
-    for (const m of c.members) {
+    assert.deepEqual(c.members.map((m) => m.name), ['opus', 'sol', 'tests', 'clean-code']);
+    for (const m of c.members.filter((x) => !x.fixed)) {
       const t = memberTask('STAGE TASK', { council: c, member: m, round: 1, skill });
-      assert.match(t, new RegExp(`You are one of 3 council members who review this change independently: opus \\(${c.members[0].lens}\\), sol \\(${c.members[1].lens}\\), tests \\(${c.members[2].lens}\\)\\.`));
+      assert.match(t, new RegExp(`You are one of 4 council members who review this change independently: opus \\(${c.members[0].lens}\\), sol \\(${c.members[1].lens}\\), tests \\(${c.members[2].lens}\\), clean-code \\(clean-code\\)\\.`));
       assert.match(t, new RegExp(`You are \\*\\*${m.name}\\*\\*; your lens is \\*\\*${m.lens}\\*\\*`));
       assert.ok(t.includes(demoted(skill)), `${stage}/${m.name}: the whole skill`);
       assert.match(t, /one decimal place is allowed/);
@@ -88,7 +89,7 @@ test('architectureReview.maxCouncilRounds 5 with three members: a review not pas
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src/a.cs'), '// a\n');
   const config = { ...loadConfig('review', dir), baseRef: 'main' };
-  assert.equal(councilFor(config, 'architectureReview').members.length, 3);
+  assert.equal(councilFor(config, 'architectureReview').members.length, 4, 'three counted seats and the clean-code seat');
   assert.equal(reviewMaxRounds(config), 5);
   const stateFile = path.join(dir, '.factory/state/stories/DEMO-1.json');
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
@@ -119,11 +120,13 @@ test('PR check with the defaults: 9.5 and no blocking finding passes and 9.4 doe
     councilOutcome(config, ctx, 1, lenses, { merged, failedLenses: [] }, scored);
     return prCheckPassed(config, scored);
   };
-  assert.equal(outcome([9.5, 10, 9.5]), true);
-  assert.equal(outcome([9.5, 9.4, 10]), false);
+  // The fourth member is the clean-code seat, which counts like the others.
+  assert.equal(outcome([9.5, 10, 9.5, 10]), true);
+  assert.equal(outcome([9.5, 9.4, 10, 10]), false);
+  assert.equal(outcome([10, 10, 10, 9.4]), false);
   // The merge on the members' own scores uses the same value.
   const merged = (scores) => mergeCouncil(council, council.members.map((m, i) => ({ member: m, status: 'ok', score: scores[i], verdict: 'APPROVED', summary: '', findings: [] }))).pass;
-  assert.deepEqual([merged([9.5, 9.5, 9.5]), merged([9.5, 9.4, 9.5])], [true, false]);
+  assert.deepEqual([merged([9.5, 9.5, 9.5, 9.5]), merged([9.5, 9.4, 9.5, 9.5])], [true, false]);
 });
 
 // Council r1 (sol-01, sol-02): no path passes below the configured score, with a failed critic, or with no score.

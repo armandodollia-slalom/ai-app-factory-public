@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
-import { agentDefinition } from './agents.mjs';
+import { SKILL_DIRS, agentDefinition } from './agents.mjs';
 import { addendumText } from './util.mjs';
 import { APP_FILE, APP_KEYS, GOVERNANCE_SECTIONS, INSTALL_ROOT, OVERLAY_FILE } from './config.mjs';
 import { manifestPaths, PROTECTED_DEFAULT, WRITERS_DEFAULT } from './factory-guard.mjs';
@@ -273,7 +273,7 @@ function agentFacingFiles(root) {
     }
   };
   walk('.cursor/rules', (f) => /\.(md|mdc)$/.test(f));
-  for (const dir of ['.claude/skills', '.github/skills', '.agents/skills']) walk(dir, (f) => /\.md$/.test(f));
+  for (const dir of Object.values(SKILL_DIRS)) walk(dir, (f) => /\.md$/.test(f));
   walk('e2e', (f) => /\.(ts|js|mjs|cjs)$/.test(f));
   // Notes in the test tree (tests/README.md and the like) are read by the agents that write tests.
   for (const dir of ['tests', 'test']) walk(dir, (f) => /\.md$/i.test(f));

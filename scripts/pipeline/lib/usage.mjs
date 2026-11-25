@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LESSONS_STAGE, VERIFY_STAGE } from './decisions.mjs';
 import { runTags } from './run-tags.mjs';
 import { metricsFile, readMetricsLocal, readTrackedStream } from './state.mjs';
 import { activeStory, epicOf } from './stories.mjs';
@@ -26,14 +27,14 @@ export const PRICING_FILE = 'scripts/pipeline/pricing.json';
 export const STAGE_OF_AGENT = {
   implementer: 'implement',
   'pair-implementer': 'implement-pair',
-  'pair-verifier': 'implement-verify',
+  'pair-verifier': VERIFY_STAGE,
   'pair-ui-verifier': 'implement-ui-verify',
   'architecture-reviewer': 'review',
   'test-planner': 'plan',
   'test-plan-verifier': 'plan-verify',
   'test-automation': 'automation',
   'test-automation-verifier': 'automation-verify',
-  'retro': 'lessons',
+  'retro': LESSONS_STAGE,
 };
 
 const int = (n) => (Number.isFinite(Number(n)) ? Math.max(0, Math.round(Number(n))) : 0);

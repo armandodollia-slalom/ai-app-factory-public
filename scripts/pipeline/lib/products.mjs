@@ -13,12 +13,15 @@
 //   ci.provider  config `ci.provider`, else the host's own CI system.
 // No module here imports an adapter, so the generator can load it without them.
 import { spawnSync } from 'node:child_process';
+import { defaultSettings } from './settings.mjs';
 
 // `custom` is the escape hatch of each kind: a command the repository declares (providers/custom.mjs).
 export const HOST_TYPES = ['github', 'gitlab', 'azure-devops', 'bitbucket', 'custom'];
 export const TRACKER_TYPES = ['github', 'jira', 'azure-boards', 'gitlab', 'linear', 'custom'];
 export const CI_PROVIDERS = ['github-actions', 'gitlab-ci', 'azure-pipelines', 'jenkins', 'circleci', 'bitbucket-pipelines', 'custom'];
 export const DEFAULT_URLS = { github: 'https://github.com', gitlab: 'https://gitlab.com', 'azure-devops': 'https://dev.azure.com', bitbucket: 'https://bitbucket.org' };
+// The merge method a host's merge() uses when its caller names none: the implement.autoMerge.method setting's default.
+export const defaultMergeMethod = () => defaultSettings().implement.autoMerge.method;
 // The CI system each host ships with, and the tracker it has (Bitbucket's issue tracker is not a factory tracker: Jira
 // is the usual pair, and the interview asks).
 export const CI_FOR_HOST = { github: 'github-actions', gitlab: 'gitlab-ci', 'azure-devops': 'azure-pipelines', bitbucket: 'bitbucket-pipelines', custom: 'custom' };

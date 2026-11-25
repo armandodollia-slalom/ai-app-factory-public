@@ -39,6 +39,7 @@
     "bin",
     "obj"
   ],
+  "configSources": ["**/appsettings*.json", "**/*Options.cs", "**/*Settings.cs"],
   "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers).",
   "hostHints": {
     "content": "Aspire\\.AppHost\\.Sdk"

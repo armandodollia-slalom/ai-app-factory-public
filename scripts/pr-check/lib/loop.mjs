@@ -9,15 +9,15 @@ import { wantsSlot, withAgentSlot } from '../../feature-verification/lib/slots.m
 import { stampKeptCases } from './pr-notes.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runAgentAsync } from '../../pipeline/lib/agents.mjs';
-import { decide, orchestratorRun, producerRun } from '../../pipeline/lib/orchestrator.mjs';
+import { PR_CHECK_FIXER, runAgentAsync } from '../../pipeline/lib/agents.mjs';
+import { decide, guide, orchestratorRun, producerRun } from '../../pipeline/lib/orchestrator.mjs';
 import { selectCouncil, ticketShape } from '../../pipeline/lib/selection.mjs';
 import { CRITIC_LENS, recordMisses, recordPrCheckRound, seatFacts } from '../../pipeline/lib/findings.mjs';
 import { entryFor } from '../../pipeline/lib/pool.mjs';
-import { changedSince, sameDefect, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, memberRunEnv, guardProtectedTests, lateBox, memberScore, memberTask, mergeCouncil, normalizeFinding as normalizeCouncilFinding, adjudicate, planCases, recordCouncilRound, rewriteText, testProtection, unavailableReason } from '../../pipeline/lib/council.mjs';
+import { councilReadOnly, changedSince, cleanCodeEvidenceProblem, holdCleanCodeBlocking, isCleanCodeSeat, sameDefect, contestedText, councilActionsText, councilFor, councilMemory, fixDeclarationText, fixesFile, memoryFile, memberRunEnv, guardProtectedTests, lateBox, memberScore, memberTask, mergeCouncil, normalizeFinding as normalizeCouncilFinding, adjudicate, planCases, recordCouncilRound, rewriteText, testProtection, unavailableReason } from '../../pipeline/lib/council.mjs';
 import { runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { escalate, metricsFile } from '../../pipeline/lib/state.mjs';
-import { appendJsonl, extractResult, log, nowIso, sha, writeJson } from '../../pipeline/lib/util.mjs';
+import { appendJsonl, escapeRe, extractResult, log, nowIso, sha, writeJson } from '../../pipeline/lib/util.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
 import { commitFixes, prDiff } from './context.mjs';
 import { formattingOnlyHunks } from '../../implement/lib/gitops.mjs';
@@ -29,14 +29,18 @@ export const LENSES = {
   design: { agent: 'pr-check-design', code: 'UI', title: 'UI design vs mockup' },
   style: { agent: 'pr-check-style', code: 'STY', title: 'Code style and guidelines' },
   video: { agent: 'pr-check-video', code: 'VID', title: 'Video evidence' },
+  // The clean-code seat (GEN-16): a sixth critic that always sits, on the entry picked for that seat.
+  [CLEAN_CODE_LENS]: { agent: 'pr-check-clean-code', code: 'CLN', title: 'Clean code' },
 };
 import { SEVERITIES, severityAtLeast } from '../../pipeline/lib/severity.mjs';
 import { INFRA_PATTERNS, diffStatus, infraSideEffects } from './infra-changes.mjs';
 import { setting } from '../../pipeline/lib/settings.mjs';
+import { CLEAN_CODE_LENS, guidanceText, reviewerGuidance, ruleIdOf } from '../../pipeline/lib/clean-code.mjs';
+import { PR_CHECKS_FILE } from '../../implement/lib/decisions.mjs';
+import { searchCalls } from '../../pipeline/lib/search-calls.mjs';
 
 export { severityAtLeast };
 const CAP = { blocking: 6, major: 8, minor: 9 };
-export const CHECKS_FILE = 'pr-checks.jsonl';
 
 const rel = (ctx, p) => path.relative(ctx.workRoot, p).replace(/\\/g, '/');
 const json = (value) => JSON.stringify(value, null, 2);
@@ -44,7 +48,7 @@ const json = (value) => JSON.stringify(value, null, 2);
 // A council of several (prCheck.councilMembers) replaces the critics: each member is a critic of its own, named after the member,
 // running the PR check agent closest to its lens. The acceptance critic still runs when no member has the acceptance
 // lens: the ticket is the contract, and its coverage table is what proves every line met.
-export const COUNCIL_CRITIC = { acceptance: 'acceptance', correctness: 'flow', security: 'flow', 'test-value': 'style', rewrite: 'style', ui: 'design' };
+export const COUNCIL_CRITIC = { acceptance: 'acceptance', correctness: 'flow', security: 'flow', 'test-value': 'style', rewrite: 'style', ui: 'design', [CLEAN_CODE_LENS]: CLEAN_CODE_LENS };
 export function councilLenses(council) {
   if (!council) return null;
   const out = {};
@@ -89,8 +93,9 @@ export function activeLenses(ctx) {
     const lenses = [...own, ...extra.map((l) => freeKey(l, own))];
     return ctx.only?.length ? lenses.filter((l) => ctx.only.includes(l) || own.includes(l)) : lenses;
   }
-  const lenses = ['acceptance', 'flow', ...(ctx.isFrontend ? ['design'] : []), 'style', ...(hasVideo ? ['video'] : [])];
-  return ctx.only?.length ? lenses.filter((l) => ctx.only.includes(l)) : lenses;
+  const lenses = ['acceptance', 'flow', ...(ctx.isFrontend ? ['design'] : []), 'style', CLEAN_CODE_LENS, ...(hasVideo ? ['video'] : [])];
+  // The clean-code seat sits whatever --lenses narrows (no setting removes it).
+  return ctx.only?.length ? lenses.filter((l) => ctx.only.includes(l) || l === CLEAN_CODE_LENS) : lenses;
 }
 
 // Council C4: the critics read a story's Implementation Notes ("the story records this as a decision") as
@@ -203,6 +208,8 @@ export function scoreRound({ lenses, findings, rulings = [], judgeLensScores = {
   for (const [i, f] of upheld.entries()) if (f.severity === 'minor' && describesUserError([f.title, f.detail, f.reason].join(' '))) upheld[i] = { ...f, severity: 'major', raisedBy: 'harness' };
   // An upheld finding that says access is weaker than required is blocking (council C4).
   for (const [i, f] of upheld.entries()) if (f.severity !== 'blocking' && describesWeakerAuthz([f.title, f.detail, f.reason, f.requirement].join(' '))) upheld[i] = { ...f, severity: 'blocking', raisedBy: 'harness' };
+  // An upheld clean-code finding is blocking whatever the judge ruled its severity (GEN-16 AC12): before the lens caps.
+  upheld.splice(0, upheld.length, ...holdCleanCodeBlocking(upheld));
   const known = new Set(findings.map((f) => f.id));
   for (const r of rulings) {
     if (r?.ruling !== 'upheld' || known.has(String(r.id))) continue;
@@ -275,7 +282,7 @@ export function scoreRound({ lenses, findings, rulings = [], judgeLensScores = {
   const followUps = rulings
     .filter((r) => r?.ruling === 'dismissed' && typeof r.followUp === 'string' && r.followUp.trim() && !accIds.has(String(r.id)))
     .map((r) => ({ id: String(r.id), lens: findings.find((f) => f.id === String(r.id))?.lens ?? null, title: r.followUp.trim(), reason: (r.reason ?? '').trim() }));
-  return { score: Math.min(...Object.values(lensScores), overall ?? 10), lensScores, judgeScores, judgeOverall: overall, judged: judged && !unusable, upheld, followUps, questions };
+  return { score: Math.min(...Object.values(lensScores), overall ?? 10), lensScores, judgeScores, judgeOverall: overall, judged: judged && !unusable, upheld: holdCleanCodeBlocking(upheld), followUps, questions };
 }
 
 // A judge's score as a number from 0 to 10 (one decimal), or null when it is not one ('n/a', '', null, 11).
@@ -287,7 +294,9 @@ const validScore = (v) => (typeof v === 'number' || (typeof v === 'string' && v.
 // failed and whether the judge ruled at all; with a council, its own conditions too (the merge's error, its failed
 // members, each blocking member's lens, excusing a lens whose upheld findings the council itself excused, blocking
 // findings, owner questions). Returns { score, pass }.
-export function decidePass(config, ctx, r, council = null) {
+export function decidePass(config, ctx, r0, council = null) {
+  // A result seeded, resumed or filtered (the CI wait) holds its clean-code findings blocking too.
+  const r = { ...r0, upheld: holdCleanCodeBlocking(r0.upheld) };
   const passScore = config.prCheck.councilPassScore;
   const judged = r.judged !== false && !(r.failedLenses ?? []).length;
   const overall = r.judgeOverall ?? 10;
@@ -311,7 +320,7 @@ export function decidePass(config, ctx, r, council = null) {
   return { score: Math.max(0, lowest), pass: judged && !council.merged?.error && !(council.failedLenses ?? []).length && lowest >= passScore && !(r.upheld ?? []).some(blocks) && !(r.questions ?? []).length };
 }
 
-function normalizeFinding(raw, lens, id) {
+export function normalizeFinding(raw, lens, id) {
   const text = (v) => (v == null ? '' : String(v));
   return {
     id,
@@ -325,7 +334,8 @@ function normalizeFinding(raw, lens, id) {
     status: 'open',
     thread: [],
     // A council member's finding keeps the council's fields (council.mjs): who raised it, its action and what it targets.
-    ...Object.fromEntries(['action', 'test', 'deletes', 'approach', 'why', 'covers', 'members', 'upheldBy', 'notUpheld', 'protected', 'supersededBy', 'contested', 'adjudication', 'file', 'line'].filter((k) => raw[k] !== undefined && raw[k] !== null).map((k) => [k, raw[k]])),
+    // A clean-code finding keeps its rule, its copies, each raiser's item and its mark through the debate and the ruling.
+    ...Object.fromEntries(['action', 'test', 'deletes', 'approach', 'why', 'covers', 'members', 'upheldBy', 'notUpheld', 'protected', 'supersededBy', 'contested', 'adjudication', 'file', 'line', 'rule', 'copies', 'cleanCode', 'memberEvidence'].filter((k) => raw[k] !== undefined && raw[k] !== null).map((k) => [k, raw[k]])),
   };
 }
 
@@ -369,7 +379,7 @@ async function callAgent(config, ctx, files, { agent, label, task, mode = 'read'
       mode,
       // A council member runs on its seat's pool entry; every other role on its agent's own (models.agents); work the
       // stage's orchestrator keeps is run by the orchestrator itself, with the role's instructions.
-      ...(selfDo ? producerRun(config, { agent, task, selfDo }) : { name: agent, task, entry: member?.entry ?? (seat ? ctx.panelEntry : null) ?? null }),
+      ...(selfDo ? producerRun(config, { agent, task, selfDo }) : { name: agent, task, entry: member?.entry ?? seat?.entry ?? null }),
       cwd: ctx.workRoot,
       timeoutSec: timeoutSec ?? config.prCheck.timeoutSec,
       ...(signal ? { signal } : {}),
@@ -396,11 +406,13 @@ async function critique(config, ctx, files, round, lens, previousUpheld) {
     `## Lens: ${lensInfo(ctx, lens).title}. First pass`,
     '',
     'Review the PR through your lens and report every finding with evidence.',
+    ...reviewerGuidance(ctx.guidance),
     earlier.length ? `\nThese findings were upheld last round; check each one and re-raise it with the same id if it is not fixed:\n\n${json(earlier)}` : '',
   ].join('\n');
   const member = lensInfo(ctx, lens).member ?? null;
   const council = member ? ctx.council : null;
   let last = null;
+  const started = Date.now();
   const review = await callAgent(config, ctx, files, {
     role: lens,
     agent: lensInfo(ctx, lens).agent,
@@ -412,18 +424,41 @@ async function critique(config, ctx, files, round, lens, previousUpheld) {
     validate: (r) => Array.isArray(r.findings) && (member ? true : Number.isFinite(Number(r.score))),
   });
   if (member && !review) ctx.councilRuns[lens] = last;
-  return review;
+  const cleanCode = lensInfo(ctx, lens) === LENSES[CLEAN_CODE_LENS] || member?.fixed;
+  // The clean-code critic's graphify and language-server searches during its run (its trace, GEN-16).
+  return cleanCode ? cleanCodeReview(review, { round, lens, root: ctx.workRoot, searches: searchCalls(ctx.workRoot, { agent: lensInfo(ctx, lens).agent, from: started }).length }) : review;
+}
+
+// The clean-code critic's review as the defender and the judge get it (GEN-16): every finding blocking, and a finding
+// without a rule id, or a duplication without both places, kept aside as a question (logged, never debated or ruled).
+export function cleanCodeReview(review, { round = null, lens = CLEAN_CODE_LENS, searches = null, root = null } = {}) {
+  if (!review || !Array.isArray(review.findings)) return review;
+  const questions = [];
+  const findings = [];
+  for (const f of review.findings) {
+    const item = { ...f, text: `${f.title ?? ''} ${f.detail ?? ''}` };
+    const why = cleanCodeEvidenceProblem([item], { stage: 'prCheck', root });
+    // The rule that passed the evidence rule is the finding's own from here on (the records and the ledger read it).
+    if (why) questions.push({ ...f, question: why });
+    else findings.push({ ...f, rule: ruleIdOf(item), severity: 'blocking' });
+  }
+  if (questions.length) log(`round ${round}: ${lens}: ${questions.length} finding(s) kept as questions (${questions.map((q) => q.question).join('; ')})`);
+  return { ...review, findings, questions: [...(review.questions ?? []), ...questions], ...(Number.isInteger(searches) ? { searches } : {}) };
 }
 
 // The shadow seat beside the critic panel: one non-blocking critic on another family's entry that reviews every lens
 // (the flow critic, which follows the whole change). It never touches the verdict: what it reports goes to the check's
 // follow-ups and the council records, never to the debate or the judge. Nobody waits for it: one run at a time, and a
 // run still going when the check ends is stopped (stopShadow).
+// The shadow's task: every lens at once, and the guidance the last fix's writer had (ctx.guidance, the current hand-off's,
+// not the first decision's): it judges that fix as the critics do.
+export const shadowTask = (head, ctx) => [head, '', '## Every lens. First pass', '', 'Review the PR through every lens and report every finding with evidence.', ...reviewerGuidance(ctx.guidance)].join('\n');
+
 function shadowCritique(config, ctx, files, round) {
   if (ctx.shadowRun) return;
   const member = ctx.panelShadow;
   ctx.shadowAbort = new AbortController();
-  const task = [header(config, ctx, round, files), '', '## Every lens. First pass', '', 'Review the PR through every lens and report every finding with evidence.'].join('\n');
+  const task = shadowTask(header(config, ctx, round, files), ctx);
   ctx.shadowRun = callAgent(config, ctx, files, {
     agent: LENSES.flow.agent,
     label: `shadow-${member.name}`,
@@ -546,34 +581,46 @@ async function judge(config, ctx, files, round, lenses, findings, coverage, fail
   });
 }
 
-async function fixRound(config, ctx, files, round, upheld) {
-  writeJson(files.rulingsAbs, { round, upheld });
-  const before = git(ctx.workRoot, ['rev-parse', 'HEAD']).stdout.trim();
-  // The stage's orchestrator decides, once per check, whether it fixes the upheld findings itself or the fixer does
-  // (findings about the production change still go back to the implement stage under prCheck.returnToImplementation).
-  // The judge who ruled is another agent run; the critics judge the fix next round.
-  ctx.orchestrator ??= await decide(config, {
+// The handoff of a round's upheld findings. The stage's orchestrator decides, once per check, whether it fixes them itself
+// or the fixer does (findings about the production change still go back to the implement stage under
+// prCheck.returnToImplementation); where each round's fix goes and what it reuses is asked for every round, as a later
+// round's findings name other code (ctx.guidance: the fixer's task carries it, and the next round's critics check the fix
+// against it). The judge who ruled is another agent run; the critics judge the fix next round.
+async function fixHandoff(config, ctx, round, upheld) {
+  const ask = {
     section: 'prCheck',
     stage: 'PR check',
     story: ctx.story?.key ?? ctx.id,
     work: 'fixing the findings the judge upheld, on the pull request\'s branch',
-    delegateTo: 'the PR check fixer (`pr-check-fixer`)',
     context: `Upheld findings of round ${round}:\n${upheld.map((f) => `- ${f.id} [${f.severity}] ${f.title ?? ''}${f.file ? ` (${f.file}${f.line ? `:${f.line}` : ''})` : ''}`).join('\n')}`,
     run: (o) => runAgentAsync(config, { ...o, cwd: ctx.workRoot, timeoutSec: Math.min(300, config.prCheck.timeoutSec) }),
-  });
+    cwd: ctx.workRoot,
+  };
+  const reused = Boolean(ctx.orchestrator);
+  ctx.orchestrator ??= await decide(config, { ...ask, delegateTo: 'the PR check fixer (`pr-check-fixer`)', guidance: true });
+  ctx.guidance = (reused ? await guide(config, ask) : ctx.orchestrator).guidance ?? [];
+}
+
+async function fixRound(config, ctx, files, round, upheld, { onGuidance = () => {} } = {}) {
+  writeJson(files.rulingsAbs, { round, upheld });
+  const before = git(ctx.workRoot, ['rev-parse', 'HEAD']).stdout.trim();
+  await fixHandoff(config, ctx, round, upheld);
+  // Saved before the fixer runs: a check interrupted after the fix commits resumes with the guidance the fix had.
+  onGuidance();
   const selfDo = ctx.orchestrator.decision === 'self' ? ctx.orchestrator : null;
+  const guidance = guidanceText(ctx.guidance);
   // D-C8-4: the fixer may run the e2e specs; under `implement run` it does so on a leased slot of its own, never on
   // slot 0 (which the teststack refuses to agents there). No slot free: it works without a stack and says so.
   const slotConfig = { ...config, root: ctx.workRoot };
   const fixer = (env) => callAgent(config, ctx, files, {
     role: 'fixer',
-    agent: 'pr-check-fixer',
+    agent: PR_CHECK_FIXER,
     label: 'fixer',
     mode: 'write',
     timeoutSec: config.prCheck.fixTimeoutSec,
     env,
     selfDo,
-    task: [header(config, ctx, round, files), '', '## Fix these upheld findings', '', `Also in ${files.rulingsFile}.`, '', json(upheld), ...(env.TESTSTACK_SLOT ? ['', `Your test stack is slot ${env.TESTSTACK_SLOT} (TESTSTACK_SLOT, ${env.TESTSTACK_URL}); \`factory teststack up\` and the e2e specs use it.`] : wantsSlot(slotConfig) ? ['', 'No test stack slot is free for you: do not start a stack; feature verification runs the e2e specs after your fix.'] : []), ...(ctx.council ? ['', councilActionsText({ refuse: 'put the finding in `notFixed`', owns: false }), '', fixDeclarationText(fixesFile(ctx.workRoot, config.stateDir, { stage: 'prCheck', story: ctx.story?.key ?? 'pr' }), upheld)] : [])].join('\n'),
+    task: [header(config, ctx, round, files), '', '## Fix these upheld findings', '', `Also in ${files.rulingsFile}.`, '', json(upheld), ...(guidance ? ['', guidance] : []), ...(env.TESTSTACK_SLOT ? ['', `Your test stack is slot ${env.TESTSTACK_SLOT} (TESTSTACK_SLOT, ${env.TESTSTACK_URL}); \`factory teststack up\` and the e2e specs use it.`] : wantsSlot(slotConfig) ? ['', 'No test stack slot is free for you: do not start a stack; feature verification runs the e2e specs after your fix.'] : []), ...(ctx.council ? ['', councilActionsText({ refuse: 'put the finding in `notFixed`', owns: false }), '', fixDeclarationText(fixesFile(ctx.workRoot, config.stateDir, { stage: 'prCheck', story: ctx.story?.key ?? 'pr' }), upheld)] : [])].join('\n'),
     validate: (r) => Array.isArray(r.fixed),
   });
   const leased = await withAgentSlot(slotConfig, ctx.story.key, fixer, undefined, { stage: 'pr-check fixer', owner: `pr-check-fixer-${ctx.id}`, waitSec: 300 });
@@ -598,7 +645,7 @@ async function fixRound(config, ctx, files, round, upheld) {
     log(`round ${round}: the fix fails ${checks.length} check(s) CI or the review would; the fixer fixes them`);
     await callAgent(config, ctx, files, {
       role: 'fixer',
-      agent: 'pr-check-fixer',
+      agent: PR_CHECK_FIXER,
       label: 'fixer-checks',
       mode: 'write',
       timeoutSec: config.prCheck.fixTimeoutSec,
@@ -639,6 +686,11 @@ function roundFiles(ctx, round, { clean = true } = {}) {
   };
 }
 
+// Lenses that sit again on every changed tree, never carried: the acceptance lens (every ticket line is rated again,
+// council C7) and the fixed clean-code seat, which judges every line written, code and tests alike (GEN-16).
+const sitsEveryRound = (m) => m.lens === 'acceptance' || Boolean(m.fixed);
+const alwaysSits = (ctx, lens) => isAcceptanceLens(ctx, lens) || stageCritic(ctx, lens, CLEAN_CODE_LENS) || Boolean(lensInfo(ctx, lens)?.member?.fixed);
+
 // Lenses a fix could not have changed, from round 2 on (cost, dogfood C2): the design critic when the last fix
 // touched no frontend file, the video critic when the frames are the ones it judged and the fix touched no spec
 // or frontend file. Only a lens that scored 10 with nothing upheld is carried; acceptance, flow and style (the
@@ -662,7 +714,7 @@ export function carryOver(ctx, history, gitImpl) {
   const memberOf = (lens) => lensInfo(ctx, lens)?.member ?? null;
   if (last.upheld.length && last.upheld.every((f) => f.severity === 'minor')) {
     for (const lens of Object.keys(last.lensScores)) {
-      if (isAcceptanceLens(ctx, lens) || !clean(lens)) continue;
+      if (alwaysSits(ctx, lens) || !clean(lens)) continue;
       const m = memberOf(lens);
       if (m ? outOfScope(m) : !stageCritic(ctx, lens, 'video') || (!ui && !specs && framesSame)) carry[lens] = 10;
     }
@@ -678,7 +730,7 @@ export function carryOver(ctx, history, gitImpl) {
   // files for ui, the production code for the others. Never the acceptance lens: every ticket line is rated again.
   for (const m of ctx.council?.members ?? []) {
     const lens = m.name;
-    if (!(lens in last.lensScores) || m.lens === 'acceptance') continue;
+    if (!(lens in last.lensScores) || sitsEveryRound(m)) continue;
     const passed = last.lensScores[lens] >= ctx.council.councilPassScore && !last.upheld.some((f) => f.lens === lens);
     if (passed && outOfScope(m)) carry[lens] = last.lensScores[lens];
   }
@@ -736,7 +788,7 @@ async function councilFindings(config, ctx, round, lenses, reviews, previousUphe
       if (member.blocking && !(why && ctx.council.onUnavailable === 'report')) failedLenses.push(lens);
       return;
     }
-    results.push({ member, status: 'ok', score: memberScore(review), verdict: null, summary: String(review.summary ?? ''), ...(ctx.council.intercom?.enabled ? { rawResult: review } : {}), findings: review.findings.filter((f) => f && typeof f === 'object').map((f) => normalizeCouncilFinding({ ...f, text: f.title ?? f.detail }, member)), followUps: review.followUps });
+    results.push({ member, status: 'ok', score: memberScore(review), verdict: null, summary: String(review.summary ?? ''), searches: review.searches, ...(ctx.council.intercom?.enabled ? { rawResult: review } : {}), findings: review.findings.filter((f) => f && typeof f === 'object').map((f) => normalizeCouncilFinding({ ...f, text: f.title ?? f.detail }, member)), followUps: review.followUps });
   });
   const keys = (ctx.tickets ?? [ctx.story]).filter(Boolean).map((t) => t.key);
   const cases = keys.flatMap((k) => planCases(ctx.workRoot, ctx.plansDir, k));
@@ -750,7 +802,7 @@ async function councilFindings(config, ctx, round, lenses, reviews, previousUphe
     round,
     repoRoot: ctx.workRoot,
     reviewed: ctx.baseRev,
-    readOnly: { cwd: ctx.workRoot, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+    readOnly: councilReadOnly(config, ctx.workRoot),
     run: (m, task, o) => runAgentAsync(config, { name: lensInfo(ctx, m.name).agent, task, mode: 'read', entry: m.entry, cwd: ctx.workRoot, timeoutSec: config.prCheck.timeoutSec, usage: { stage: 'pr-check', story: ctx.story?.key ?? null, round, step: `intercom-${m.name}` }, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null }),
     // A split in the members' discussion is ruled by the stage's orchestrator, not by the judge.
     ruler: (task) => runAgentAsync(config, { ...orchestratorRun(config, 'prCheck'), task, mode: 'read', cwd: ctx.workRoot, timeoutSec: Math.min(300, setting(config, 'prCheck.timeoutSec')), usage: { stage: 'pr-check', story: ctx.story?.key ?? null, round, step: 'intercom-ruling' } }),
@@ -768,7 +820,7 @@ async function councilFindings(config, ctx, round, lenses, reviews, previousUphe
     story: ctx.story?.key ?? 'pr',
     round,
     retries: config.agent.resultParseRetries,
-    readOnly: { cwd: ctx.workRoot, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+    readOnly: councilReadOnly(config, ctx.workRoot),
   });
   const findings = [];
   let n = 0;
@@ -823,19 +875,25 @@ export function councilOutcome(config, ctx, round, lenses, council, scored) {
 // lens it judges (CRITIC_LENS). The panel's rounds, usage rows and findings name it the same way.
 function panelSeat(config, ctx, lens) {
   const info = lensInfo(ctx, lens);
-  const e = info?.agent ? entryFor(config, { name: info.agent, entry: ctx.panelEntry ?? null }) : null;
+  // The clean-code critic runs on the clean-code seat's entry; the other critics on the panel's.
+  const picked = info === LENSES[CLEAN_CODE_LENS] ? ctx.panelCleanCode?.entry ?? null : ctx.panelEntry ?? null;
+  const e = info?.agent ? entryFor(config, { name: info.agent, entry: picked }) : null;
   return { name: lens, entry: e?.name ?? null, cli: e?.cli ?? null, model: e?.model ?? null, family: e?.family ?? null, lens: CRITIC_LENS[String(lens).replace(/-critic(?:-\d+)?$/, '')] ?? null, blocking: true };
 }
 
+// The clean-code seat in a panel round's record: marked fixed, with the searches its critic made (the council's own
+// seats get theirs from mergeCouncil).
+const seatTrace = (seat, review) => (seat.lens === CLEAN_CODE_LENS ? { fixed: true, ...(Number.isInteger(review?.searches) ? { searches: review.searches } : {}) } : {});
+
 // The panel's round in council-rounds.jsonl, each critic a seat, so a council of one counts in the scorecard as a
 // council of several does (councilOutcome records those).
-function recordPanelRound(config, ctx, round, lenses, failedLenses, scored) {
+function recordPanelRound(config, ctx, round, lenses, failedLenses, scored, reviews = []) {
   try {
     const shadow = ctx.panelShadow ? [{ ...ctx.panelShadow, blocking: false }] : [];
     const seats = [...lenses.map((lens) => panelSeat(config, ctx, lens)), ...shadow];
     const council = { ...councilFor(config, 'prCheck', { subject: ctx.story?.key ?? ctx.id }), members: seats };
     // The shadow is never waited for: `late` in the record, as a non-blocking council member is.
-    const members = seats.map((m) => ({ name: m.name, cli: m.cli, model: m.model, lens: m.lens, blocking: m.blocking !== false, status: m.blocking === false ? 'late' : failedLenses.includes(m.name) ? 'failed' : 'ok', score: m.blocking === false ? null : scored.lensScores?.[m.name] ?? null }));
+    const members = seats.map((m) => ({ name: m.name, cli: m.cli, model: m.model, lens: m.lens, blocking: m.blocking !== false, status: m.blocking === false ? 'late' : failedLenses.includes(m.name) ? 'failed' : 'ok', score: m.blocking === false ? null : scored.lensScores?.[m.name] ?? null, ...seatTrace(m, reviews[lenses.indexOf(m.name)]) }));
     recordCouncilRound(config, { stage: 'prCheck', story: ctx.story?.key ?? ctx.id, check: ctx.checkRun, stories: checkStories(ctx), round, council, merged: { pass: scored.pass, score: scored.score, members, findings: (scored.upheld ?? []).filter((f) => f.severity !== 'minor'), notes: [] } });
   } catch (error) {
     log(`round ${round}: the panel's round was not recorded: ${error.message}`);
@@ -852,7 +910,7 @@ const checkStories = (ctx) => (ctx.tickets ?? [ctx.story]).filter(Boolean).map((
 export function findingTickets(ctx, f) {
   const keys = (ctx.tickets ?? [ctx.story]).filter(Boolean).map((t) => t.key);
   const text = [f.requirement, f.title, f.detail].filter(Boolean).join(' ');
-  const named = keys.filter((k) => new RegExp(`(^|[^A-Za-z0-9-])${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9-]|$)`, 'i').test(text));
+  const named = keys.filter((k) => new RegExp(`(^|[^A-Za-z0-9-])${escapeRe(k)}([^A-Za-z0-9-]|$)`, 'i').test(text));
   return named.length ? named : keys;
 }
 
@@ -884,6 +942,9 @@ export const prCheckPassed = (config, result) => result.pass ?? decidePass(confi
 // `--until`: a round may end the loop as ACCEPTED with lesser findings left only when it was judged, every critic took
 // part, and there is something to defer (with nothing upheld, only the pass score passes).
 export const prCheckAccepted = (result, { mustFix }) => result.judged !== false && !(result.failedLenses ?? []).length && result.upheld.length > 0 && !result.upheld.some(mustFix);
+
+// A clean-code critic's raw finding carries the mark that holds it blocking on every path (GEN-16).
+const markCleanCode = (ctx, lens, raw) => (lensInfo(ctx, lens) === LENSES[CLEAN_CODE_LENS] ? { ...raw, cleanCode: true } : raw);
 
 export async function runRound(config, ctx, round, previousUpheld, { carry = {} } = {}) {
   const files = roundFiles(ctx, round);
@@ -940,7 +1001,7 @@ export async function runRound(config, ctx, round, previousUpheld, { carry = {} 
       let id = reused ? String(raw.id) : `${lensInfo(ctx, lens).code}-${round}-${++n}`;
       while (used.has(id)) id = `${lensInfo(ctx, lens).code}-${round}-${++n}`;
       used.add(id);
-      findings.push(normalizeFinding(raw, lens, id));
+      findings.push(normalizeFinding(markCleanCode(ctx, lens, raw), lens, id));
     }
   });
 
@@ -966,7 +1027,7 @@ export async function runRound(config, ctx, round, previousUpheld, { carry = {} 
   if (council) councilOutcome(config, ctx, round, lenses, council, scored);
   else {
     Object.assign(scored, decidePass(config, ctx, { ...scored, failedLenses }));
-    recordPanelRound(config, ctx, round, lenses, failedLenses, scored);
+    recordPanelRound(config, ctx, round, lenses, failedLenses, scored, reviews);
   }
   // Every finding of the round, who raised it, and the judge's ruling on it (council-findings.jsonl); an upheld finding
   // also counts as a miss against the earlier councils that passed for the ticket, by its lens.
@@ -1024,6 +1085,18 @@ export function lessonFields(result, previousUpheld = []) {
 // `until` (a severity: 'blocking' or 'major') also ends a fixing loop as ACCEPTED once a round upholds nothing at
 // or above it: the delivery fix mode fixes what matters before the PR opens and reports the rest.
 
+// What a PR check round's record (pr-checks.jsonl) says it is about: the time, the target and its story, and for an epic
+// PR its stories and epic.
+const checkRecordOf = (ctx) => ({ ts: nowIso(), target: ctx.id, story: ctx.story.key, ...(ctx.multi ? { stories: ctx.tickets.map((t) => t.key), epic: ctx.epic?.key ?? null } : {}) });
+
+// How the PR check seats its council on ctx: a full council debates; a sole or shadow seat runs the classic panel, its
+// critics on the sole member's entry, the shadow beside it and the clean-code critic on the clean-code seat's entry.
+function seatPanel(ctx, council) {
+  const panel = council.sole || council.shadow;
+  const seat = (pred) => (panel ? council.members.find(pred) ?? null : null);
+  Object.assign(ctx, { council: panel ? null : council, panelCouncil: panel ? council : null, panelEntry: seat((m) => m.sole)?.entry ?? null, panelShadow: seat((m) => m.shadow), panelCleanCode: seat(isCleanCodeSeat) });
+}
+
 export async function runPrCheck(config, ctx, { fix, resume = null, onProgress = () => {}, afterFix = null, afterNotes = null, until = null, fixLenses = [] }) {
   // A finding about an open ticket line is always fixed, whatever --until says (council C7).
   const mustFix = (f) => f.criterion || severityAtLeast(f.severity, until) || fixLenses.includes(f.lens);
@@ -1035,11 +1108,7 @@ export async function runPrCheck(config, ctx, { fix, resume = null, onProgress =
   const subject = ctx.story?.key ?? ctx.id;
   if (!ctx.council) await selectCouncil(config, 'prCheck', { subject, shape: ticketShape({ key: subject, ui: Boolean(ctx.isFrontend) }), run: (o) => runAgentAsync(config, { ...o, cwd: ctx.workRoot, timeoutSec: 300 }) });
   const council = ctx.council ?? councilFor(config, 'prCheck', { subject });
-  const panel = council.sole || council.shadow;
-  ctx.council = panel ? null : council;
-  ctx.panelCouncil = panel ? council : null;
-  ctx.panelEntry = panel ? (council.members.find((m) => m.sole)?.entry ?? null) : null;
-  ctx.panelShadow = panel ? (council.members.find((m) => m.shadow) ?? null) : null;
+  seatPanel(ctx, council);
   ctx.councilLenses = councilLenses(ctx.council);
   ctx.councilRuns = {};
   ctx.councilLate = lateBox();
@@ -1054,11 +1123,14 @@ export async function runPrCheck(config, ctx, { fix, resume = null, onProgress =
   let verdict = 'FAIL';
   let reason = '';
   const head = () => git(ctx.workRoot, ['rev-parse', '--short', 'HEAD']).stdout.trim();
-  const save = (round, phase) => onProgress({ round, phase, history, previousUpheld, streak: [...streak], head: head(), checkRun: ctx.checkRun });
+  // The last fix's guidance is saved with the round (council r3, sol-07): a resumed check's critics judge that fix against
+  // what its writer was told, as an uninterrupted one's do.
+  if (resume?.guidance) ctx.guidance = resume.guidance;
+  const save = (round, phase) => onProgress({ round, phase, history, previousUpheld, streak: [...streak], head: head(), checkRun: ctx.checkRun, guidance: ctx.guidance ?? [] });
 
   // Fixes the round's upheld findings; returns why the loop must stop, if it must.
   const applyFix = async (entry, files, round) => {
-    entry.fix = await fixRound(config, ctx, files, round, entry.upheld);
+    entry.fix = await fixRound(config, ctx, files, round, entry.upheld, { onGuidance: () => save(round, 'fix') });
     log(`round ${round}: fixer ${entry.fix.commit ? `committed ${entry.fix.commit}` : 'changed nothing'}`);
     // The next round judges the fixed code with fresh evidence: feature verification verifies (and records
     // again) what the fix made stale, and the video frames are extracted again from those recordings.
@@ -1099,11 +1171,8 @@ export async function runPrCheck(config, ctx, { fix, resume = null, onProgress =
       // own: recorded with the seed's score and what the fixer did, escalated or not (council C7: #120's escalated CI
       // fix round left no record, so the gate kept reading the last 10/10).
       if (resume.seeded) {
-        appendJsonl(metricsFile(config, CHECKS_FILE), {
-          ts: nowIso(),
-          target: ctx.id,
-          story: ctx.story.key,
-          ...(ctx.multi ? { stories: ctx.tickets.map((t) => t.key), epic: ctx.epic?.key ?? null } : {}),
+        appendJsonl(metricsFile(config, PR_CHECKS_FILE), {
+          ...checkRecordOf(ctx),
           round: resume.round,
           score: Number.isFinite(entry.score) ? entry.score : null,
           lensScores: entry.lensScores ?? {},
@@ -1133,11 +1202,8 @@ export async function runPrCheck(config, ctx, { fix, resume = null, onProgress =
     const result = await runRound(config, ctx, round, previousUpheld, { carry });
     const entry = { round, score: result.score, pass: result.pass, lensScores: result.lensScores, raised: result.findings.length, upheld: result.upheld, followUps: result.followUps ?? [], questions: result.questions ?? [], failedLenses: result.failedLenses, summary: result.summary, videoKey: ctx.videoKey ?? null, sideEffects: result.sideEffects ?? [] };
     history.push(entry);
-    appendJsonl(metricsFile(config, CHECKS_FILE), {
-      ts: nowIso(),
-      target: ctx.id,
-      story: ctx.story.key,
-      ...(ctx.multi ? { stories: ctx.tickets.map((t) => t.key), epic: ctx.epic?.key ?? null } : {}),
+    appendJsonl(metricsFile(config, PR_CHECKS_FILE), {
+      ...checkRecordOf(ctx),
       round,
       score: result.score,
       // The round's pass decision (decidePass): what the review gate's confidence reads, never the bare score.

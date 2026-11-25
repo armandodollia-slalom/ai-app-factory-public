@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
+import { GITLAB_ROOT } from './render.mjs';
 
 const FORK_TRIGGERS = ['pull_request_target', 'workflow_run'];
 const ANYONE_TRIGGERS = ['issue_comment', 'discussion_comment', 'pull_request_review_comment'];
@@ -37,7 +38,7 @@ const readYaml = (root, rel) => {
 const GITLAB_RESERVED = new Set(['stages', 'variables', 'workflow', 'include', 'default', 'image', 'services', 'cache', 'before_script', 'after_script']);
 function gitlabProblems(root) {
   const problems = [];
-  for (const rel of [...(fs.existsSync(path.join(root, '.gitlab-ci.yml')) ? ['.gitlab-ci.yml'] : []), ...yamlFiles(root, '.gitlab/ci')]) {
+  for (const rel of [...(fs.existsSync(path.join(root, GITLAB_ROOT)) ? [GITLAB_ROOT] : []), ...yamlFiles(root, '.gitlab/ci')]) {
     const { doc } = readYaml(root, rel);
     for (const [name, job] of Object.entries(doc ?? {})) {
       if (name.startsWith('.') || GITLAB_RESERVED.has(name) || !job || typeof job !== 'object') continue;

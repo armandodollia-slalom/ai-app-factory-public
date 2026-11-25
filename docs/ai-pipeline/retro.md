@@ -95,6 +95,43 @@ factory retro scorecard          # compute it from the records and write it
 factory retro scorecard --check  # exit 1 unless the file is the pipeline's own and matches the records
 ```
 
+## Writer clean-code rules
+
+The writing agents carry a short clean-code core and a small set of the [`clean-code`](../../skills/clean-code/SKILL.md)
+rules ([agents.md](agents.md#clean-code)). Which rules is decided by the retro, by arithmetic over the traces, never by
+an agent: the set lives in `.factory/lessons/clean-code-writers.json`, a pipeline-owned file committed with the
+lessons, and the next writer task carries exactly its rules (`writer-rules.mjs`).
+
+Each retro reads one window: the records after the previous ledger's last one (all of them the first time). Per rule:
+
+- **Breach cost:** its upheld clean-code findings on writers' work (the clean-code seat's findings citing it, upheld by
+  the PR check judge or that led to a change) times the mean cost and time of a writer fix run (a writer run after the
+  first round; with none measured, a writer run).
+- **Carry cost:** the tokens its text adds to a writer task (four characters a token), times the writer runs, at the
+  writers' measured price per prompt token.
+- **Accuracy:** the writers' first-round pass rate on it (first-round sittings with no upheld finding citing it) while
+  carried and while not, by the set each round recorded (`writerRules` in `council-rounds.jsonl`).
+
+The decisions, each only with at least `retro.writerRules.minSamples` (default 10) first-round sittings on writers'
+work in the window; with fewer, nothing changes, the window stays open so the evidence builds up, and the report says
+the evidence is insufficient:
+
+- **Add** a rule outside the set when its breach cost exceeds its carry cost.
+- **Remove, on probation,** a carried rule with no upheld breach in the window. If in the trial window (the next one)
+  its breach cost returns above its carry cost, it is put back and cannot be removed for two windows; otherwise it
+  stays out.
+- **Density:** when the last change added rules and the writers' first-round pass rate on all rules has fallen since,
+  the carried rule with the lowest net value (breach cost minus carry cost) is removed first.
+- At most `retro.writerRules.maxChangesPerRetro` (default 2) changes a retro, the largest net value first, so each
+  change's effect can be measured before the next; the others are listed as deferred.
+
+There is no size limit: the numbers alone decide how many rules writers carry. `SCOPE` (change only what the task owns)
+is not a clean-code rule: it is never weighed and never removed. The business rules of the proven-rules epic
+(`rules/`, `RULE-<n>`) belong to the owner: the retro never reads, adds, removes or changes them. The same traces give
+the same decisions and the same file. Every change, deferral or insufficient window is a record in
+`writer-rules.jsonl` (the rule, add, remove or restore, the numbers behind it and the window), the file and the
+records are committed with the retro's other files, and the retro report has a "Writer clean-code rules" section.
+
 ## Factory issues
 
 The retro agent can edit only the factory's agent definitions, docs, templates and skills. A root cause it places in the factory's engine (its scripts) or templates, and sees recur (`where` `engine` or `template`, `pattern` `pattern` in its observations), is filed as an issue against the factory repository (the factory checkout's `origin`), one open issue per title. Ticket keys are removed from the issue; it carries the agent's reading of what the decision log shows and of the root cause, nothing of the application's code. Nothing is filed in a dry run or with `--no-push`.

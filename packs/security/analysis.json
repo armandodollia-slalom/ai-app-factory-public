@@ -629,39 +629,46 @@
       }
     },
     "jscpd": {
-      "enabled": false,
-      "description": "duplicated code (evidence for the rewrite lens; keep its semantic mode off: it downloads a large model)",
+      "description": "duplicated code a change adds: clones with a copy on a changed line, over the whole repository so the other copy is found (evidence for the clean-code reviewer; its semantic mode stays off: it downloads a large model). A dependency of the factory",
       "licence": "MIT",
       "run": [
-        "npx",
-        "--no-install",
-        "jscpd",
-        "--silent",
-        "--reporters",
-        "sarif",
-        "--output",
-        "{out}",
+        "node",
+        "{packs}/security/analysis/duplication.mjs",
+        "--min-tokens",
+        "{minTokens}",
+        "--base",
+        "{mergeBase}",
         "{files}"
       ],
-      "output": "{out}/jscpd-sarif.json",
-      "parse": "sarif",
-      "scope": "changed-files",
-      "baseline": "merge-base",
-      "lens": "rewrite"
-    },
-    "lizard": {
-      "enabled": false,
-      "description": "complexity warnings (evidence for the rewrite lens)",
-      "licence": "MIT",
-      "run": [
-        "lizard",
-        "-w",
-        "{files}"
-      ],
-      "parse": "gcc",
+      "parse": "lines",
       "scope": "changed-lines",
       "baseline": "lines",
-      "lens": "rewrite",
+      "lens": "clean-code",
+      "missingPattern": "jscpd is not installed with the factory",
+      "okExit": [
+        0,
+        1
+      ]
+    },
+    "lizard": {
+      "description": "functions a change adds or edits over the complexity or length limit (evidence for the clean-code reviewer). A Python tool: `lizard` on PATH (pip install lizard), or FACTORY_LIZARD",
+      "licence": "MIT",
+      "run": [
+        "node",
+        "{packs}/security/analysis/complexity.mjs",
+        "--max-cyclomatic",
+        "{maxCyclomatic}",
+        "--max-lines",
+        "{maxFunctionLines}",
+        "--base",
+        "{mergeBase}",
+        "{files}"
+      ],
+      "parse": "lines",
+      "scope": "changed-lines",
+      "baseline": "lines",
+      "lens": "clean-code",
+      "missingPattern": "lizard is not installed",
       "okExit": [
         0,
         1
@@ -749,25 +756,33 @@
       "opengrep",
       "osv-scanner",
       "zizmor",
-      "actionlint"
+      "actionlint",
+      "jscpd",
+      "lizard"
     ],
     "story": [
       "betterleaks",
       "opengrep",
       "osv-scanner",
       "zizmor",
-      "actionlint"
+      "actionlint",
+      "jscpd",
+      "lizard"
     ],
     "prCheck": [
       "betterleaks",
       "opengrep",
       "osv-scanner",
       "zizmor",
-      "actionlint"
+      "actionlint",
+      "jscpd",
+      "lizard"
     ],
     "featureVerification": [
       "betterleaks",
-      "opengrep"
+      "opengrep",
+      "jscpd",
+      "lizard"
     ]
   },
   "suppressions": [

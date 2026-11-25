@@ -18,8 +18,9 @@
 import { HostError, UnsupportedError } from './errors.mjs';
 import { createHttp } from './http.mjs';
 import { expandEnv } from '../env.mjs';
+import { DEFAULT_URLS, defaultMergeMethod } from '../products.mjs';
 
-export const DEFAULT_URL = 'https://bitbucket.org';
+export const DEFAULT_URL = DEFAULT_URLS['bitbucket'];
 export const CAPABILITIES = { requiredChecks: 'partial', codeOwners: false, autoMerge: false, mergeHeadGuard: false, cancelAutoMerge: false, drafts: true, labels: false, checkAnnotations: false, commitStatus: true, attachments: false, botIdentity: true, diff: true, reviewCommentThreads: true, stateEvents: false };
 
 const STATE = { OPEN: 'open', MERGED: 'merged', DECLINED: 'closed', SUPERSEDED: 'closed' };
@@ -211,13 +212,13 @@ export function createBitbucketHost(settings, deps = {}) {
       },
       // No SHA guard on Bitbucket's merge: the head is compared first (the gate does it too) and the merge refused when it
       // moved. Never `auto` (Bitbucket Cloud has no auto-merge).
-      async merge(pr, { method = 'squash', headSha = null, auto = false, deleteBranch = false } = {}) {
+      async merge(pr, { method = defaultMergeMethod(), headSha = null, auto = false, deleteBranch = false } = {}) {
         if (auto) throw new UnsupportedError('Bitbucket Cloud has no auto-merge: the review gate merges the pull request itself at the next board sync');
         if (headSha) {
           const now = (await get(pr))?.headSha;
           if (now && !now.startsWith(headSha.slice(0, now.length)) && !headSha.startsWith(now)) throw new HostError(`pull request ${pr}: its head moved from ${headSha.slice(0, 7)} to ${String(now).slice(0, 7)}; not merged`, { status: 409, code: 'head-moved' });
         }
-        const done = await api('POST', `${PR(pr)}/merge`, { body: { type: 'pullrequest', merge_strategy: STRATEGY[method] ?? 'squash', close_source_branch: Boolean(deleteBranch) } });
+        const done = await api('POST', `${PR(pr)}/merge`, { body: { type: 'pullrequest', merge_strategy: STRATEGY[method] ?? STRATEGY[defaultMergeMethod()], close_source_branch: Boolean(deleteBranch) } });
         return { merged: done?.state === 'MERGED', mergedAt: done?.updated_on ?? null, autoMerge: false };
       },
       async autoMergeArmed() {

@@ -6,6 +6,7 @@ import { git, revExists } from '../../pipeline/lib/git.mjs';
 import { reviewDigest } from '../../review-gate/lib/review-retro.mjs';
 import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
 import { setting } from '../../pipeline/lib/settings.mjs';
+import { PLAN_STAGE, VERIFY_STAGE } from '../../pipeline/lib/decisions.mjs';
 
 // The factory's own commits since the retro window opened (the installed engine is a git checkout of its
 // release), so the retro can tell a finding a later release already fixed from one still open (council C1:
@@ -104,13 +105,13 @@ export function retroDigest(config, decisions, since, { outcomes = [], policy = 
     //    subtasks back: model, verification and split choices next to how they fared.
     implement: {
       plans: take(
-        of('implement-plan')
+        of(PLAN_STAGE)
           .filter((d) => ['plan-written', 'plan-rejected', 'blocked'].includes(d.decision))
           .map((d) => ({ story: d.story, decision: d.decision, mode: d.mode ?? null, reason: d.reason, subtasks: (d.items ?? []).map(({ id, model, modelReason, verify, verifyReason, confidence }) => ({ id, model, modelReason, verify, verifyReason, confidence })) })),
         n * 2,
       ),
-      escalations: take(of('implement-plan').filter((d) => d.decision?.startsWith('escalation-') || d.decision === 'gave-up').map((d) => ({ story: d.story, subtask: d.subtask, decision: d.decision, pairOutcome: d.pair_outcome, reason: d.reason })), n),
-      verifierFindings: findingGroups(of('implement-verify').filter((d) => d.decision !== 'approved'), (i) => key(i.agent, i.category, i.severity)).slice(0, n * 2),
+      escalations: take(of(PLAN_STAGE).filter((d) => d.decision?.startsWith('escalation-') || d.decision === 'gave-up').map((d) => ({ story: d.story, subtask: d.subtask, decision: d.decision, pairOutcome: d.pair_outcome, reason: d.reason })), n),
+      verifierFindings: findingGroups(of(VERIFY_STAGE).filter((d) => d.decision !== 'approved'), (i) => key(i.agent, i.category, i.severity)).slice(0, n * 2),
     },
     // 6. How people reviewed the bug-fix PRs the review gate sent them (all pr-review records, so each
     //    class has its whole sample): whether the 2nd and 3rd reviewers found what the earlier ones

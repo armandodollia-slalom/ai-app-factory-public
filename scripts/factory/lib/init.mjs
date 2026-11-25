@@ -1,9 +1,10 @@
 // `factory init`: the draft .factory/config.json and the starter content of .factory/.
 import fs from 'node:fs';
 import path from 'node:path';
-import { deepMerge } from '../../pipeline/lib/config.mjs';
+import { INSTALL_ROOT, deepMerge } from '../../pipeline/lib/config.mjs';
 import { draftProject } from './detect.mjs';
-import { CI_FOR_HOST, TOKEN_VARS } from './hosting.mjs';
+import { CI_FOR_HOST, DEFAULT_URL, TOKEN_VARS } from './hosting.mjs';
+import { escapeRe } from '../../pipeline/lib/util.mjs';
 
 // Each pack part (lsp.json, tests.json, commands.json, stack.json) may carry a `config` object: the
 // overlay fragment a repository of that language starts from. Fragments merge in pack order; lists
@@ -42,7 +43,7 @@ export function draftConfig(found, packs, { features = {} } = {}) {
     const commands = withPacks.map((p) => p.commands);
     const prepare = commands.map((c) => c.prepare).filter(Boolean);
     const unit = commands.map((c) => c.unitTests).find(Boolean);
-    const checks = withPacks.flatMap((p) => (p.commands.checks ?? []).filter((c) => has(p, c.requires)).map(({ requires, ...c }) => c));
+    const checks = withPacks.flatMap((p) => (p.commands.checks ?? []).filter((c) => has(p, c.requires)).map(({ requires: _requires, ...c }) => c));
     config = mergeFragments(config, {
       implement: { ...(prepare.length ? { prepareCmd: prepare.join(' && ') } : {}), checks, ...(unit ? { unitTests: { cmd: unit } } : {}) },
       featureVerification: {
@@ -83,7 +84,7 @@ export function draftProducts(host) {
   const drafted = { host: { type: host.type, url: host.url, repo: host.repo, token: `\${${TOKEN_VARS[host.type]}}` }, ci };
   if (host.guessed) drafted.host.$comment = 'Guessed from the origin remote of a self-hosted server: check type and url.';
   // GitLab issues in the same project are the default board (the interview asks to confirm).
-  if (host.type === 'gitlab') drafted.tracker = { type: 'gitlab', project: host.repo, auth: { token: `\${${TOKEN_VARS.gitlab}}` }, ...(host.url && host.url !== 'https://gitlab.com' ? { url: host.url } : {}) };
+  if (host.type === 'gitlab') drafted.tracker = { type: 'gitlab', project: host.repo, auth: { token: `\${${TOKEN_VARS.gitlab}}` }, ...(host.url && host.url !== DEFAULT_URL.gitlab ? { url: host.url } : {}) };
   if (host.type === 'azure-devops') {
     const [organization, project] = host.repo.split('/');
     drafted.tracker = { type: 'azure-boards', url: `${host.url.replace(/\/+$/, '')}/${organization}`, project, auth: { token: `\${${TOKEN_VARS['azure-boards']}}` } };
@@ -101,7 +102,7 @@ export function fillPlaceholders(config, found, packs) {
   for (const pack of packs) {
     for (const [name, spec] of Object.entries(pack.commands?.placeholders ?? {})) {
       const candidates = (found.languages.find((l) => l.id === pack.id)?.rootFiles ?? []).filter((f) => (spec?.candidates ?? []).some((g) => globRe(g).test(f)));
-      const inCi = candidates.filter((f) => new RegExp(`(^|[\\s/"'=])${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[\\s"';])`, 'm').test(found.ciText ?? ''));
+      const inCi = candidates.filter((f) => new RegExp(`(^|[\\s/"'=])${escapeRe(f)}($|[\\s"';])`, 'm').test(found.ciText ?? ''));
       const pick = inCi.length === 1 ? inCi[0] : candidates.length === 1 ? candidates[0] : null;
       if (pick) values[name] = pick;
     }
@@ -129,7 +130,7 @@ const SENSITIVE = /(identity|auth|login|payment|billing|checkout|security|secret
 // The review gate's risk model, drafted so a sensitive or shared change can never auto-merge on low ratings
 // alone: the engine's floor paths plus the packs' (schema migrations) and the sensitive services'; the
 // packs' shared build files; the contract folders detect found (integration events).
-export function draftReviewGate(found, packs, project, installRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')) {
+export function draftReviewGate(found, packs, project, installRoot = INSTALL_ROOT) {
   let engineFloor = [];
   try {
     engineFloor = JSON.parse(fs.readFileSync(path.join(installRoot, 'scripts/implement/config.json'), 'utf8')).implement.reviewGate.floor.paths;

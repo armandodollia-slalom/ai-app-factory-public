@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { APP_FILE, appSettingsProblems, OVERLAY_FILE } from './config.mjs';
+import { APP_FILE, appSettingsProblems, MANIFEST_FILE, OVERLAY_FILE } from './config.mjs';
 import { manifestDirs, readProfile } from './policy-topology.mjs';
 import { touchedPaths } from './story-guard.mjs';
 import { resolveAnalysis } from './analysis/config.mjs';
@@ -352,7 +352,7 @@ export function caseInsensitive(root) {
 
 export function manifestPaths(config) {
   try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(config.root, '.factory/manifest.json'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(path.join(config.root, MANIFEST_FILE), 'utf8'));
     return Object.keys(manifest.files ?? {});
   } catch {
     return [];

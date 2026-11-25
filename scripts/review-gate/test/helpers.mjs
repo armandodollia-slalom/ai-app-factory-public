@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { write } from '../../pipeline/test/gate-repo.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const implementConfig = JSON.parse(fs.readFileSync(path.join(here, '../../implement/config.json'), 'utf8'));
@@ -30,10 +31,8 @@ export const SETTINGS = {
 export const AUTO_MERGE = implementConfig.implement.autoMerge;
 
 export const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-export const write = (root, rel, text) => {
-  fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-  fs.writeFileSync(path.join(root, rel), text);
-};
+// One file written under a root, its folders made (the shared test helper, gate-repo.mjs).
+export { write };
 export const jsonl = (root, rel, records) => write(root, rel, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
 
 export function gateConfigFor(root, extra = {}) {

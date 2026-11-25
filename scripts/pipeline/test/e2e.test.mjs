@@ -87,6 +87,8 @@ before(() => {
     fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
   }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
+  // The clean-code skill the writers' and orchestrators' prompts are built from (it includes the council skill's lists).
+  for (const skill of ['clean-code', 'council']) fs.cpSync(path.join(source, 'skills', skill), path.join(repo, 'skills', skill), { recursive: true });
   // The fixture app keeps its tests under tests/ and e2e/: its own settings say so, as an app repository's would.
   fs.mkdirSync(path.join(repo, '.factory'), { recursive: true });
   fs.writeFileSync(path.join(repo, '.factory/config.json'), `${JSON.stringify(FIXTURE_SETTINGS, null, 2)}\n`);
@@ -187,6 +189,13 @@ test('workflow 2: the dispatcher runs the review stage first, then automation lo
     ],
     'test-planner': [{ writePlan: [...happySad, { title: 'Combined coupons rejected', type: 'sad', expected: '409 with code COUPON_COMBINE' }] }],
     'test-plan-verifier': [{ result: { score: 10, gaps: [] } }],
+    // The review's orchestrator, then the tests' (round 1), then the tests' guidance for round 2 (council r2, sol-07: a
+    // later round's gaps get guidance of their own); the plan's re-plan asks for none.
+    'stage-orchestrator': [
+      { result: { decision: 'delegate', reason: 'r', guidance: [{ what: 'the buyer id check', where: 'src/Basket/Owner.cs:4', do: 'reuse' }] } },
+      { result: { decision: 'delegate', reason: 'r', guidance: [{ what: 'the coupon scenario seed', where: 'e2e/teststack/coupons.ts:2', do: 'reuse' }] } },
+      { result: { guidance: [{ what: 'the status assertion helper', where: 'e2e/teststack/assert.ts:5', do: 'reuse' }] } },
+    ],
   });
   const stop = (payload = {}, env) => {
     const r = pipeline(['hook', 'stop'], { input: JSON.stringify(payload), env });
@@ -223,8 +232,21 @@ test('workflow 2: the dispatcher runs the review stage first, then automation lo
   const state = stateOf('DEMO-1');
   assert.ok(state.automation.log, 'automation log path is recorded');
   assert.equal(state.automation.status, 'verified', read(state.automation.log));
-  // Three orchestrator decisions, each delegating: the review's (who fixes round 1), the tests', and the plan's re-plan.
-  assert.deepEqual(calls(), { 'architecture-reviewer': 2, 'stage-orchestrator': 3, 'test-automation': 3, 'test-automation-verifier': 2, 'test-planner': 1, 'test-plan-verifier': 1 });
+  // Three orchestrator decisions, each delegating: the review's (who fixes round 1), the tests', and the plan's re-plan;
+  // and the tests' guidance asked again for round 2 and for the round after the re-plan.
+  assert.deepEqual(calls(), { 'architecture-reviewer': 2, 'stage-orchestrator': 5, 'test-automation': 3, 'test-automation-verifier': 2, 'test-planner': 1, 'test-plan-verifier': 1 });
+  // Council r1 (opus F2): each stage's reviewers check the change against the guidance its writer had: the review's
+  // second sitting, and the test automation verifier of every round the orchestrator's writer wrote.
+  const section = (agent, n) => prompts().split(/^=== /m).find((p) => p.startsWith(`${agent} #${n}`)) ?? '';
+  const guided = (what) => new RegExp(`worked to this guidance[\\s\\S]*reuse: ${what}`);
+  assert.match(section('architecture-reviewer', 2), guided('the buyer id check'));
+  assert.doesNotMatch(section('architecture-reviewer', 1), guided('the buyer id check'), 'no writer before the first sitting');
+  // Round 1's writer has the decision's guidance; round 1 fails its precheck (a case without a test), so round 2 addresses
+  // that: its writer, and the verifier that judges its tests, have round 2's guidance, not round 1's.
+  assert.match(section('test-automation', 1), /reuse: the coupon scenario seed/);
+  assert.match(section('test-automation', 2), /reuse: the status assertion helper/);
+  assert.doesNotMatch(section('test-automation', 2), /the coupon scenario seed/);
+  assert.match(section('test-automation-verifier', 1), guided('the status assertion helper'), 'the verifier of round 2');
   assert.match(jsonl('precheck-failures.jsonl').at(-1).errors.join('\n'), /TC-DEMO-1-02 has no automated test/);
 
   const autoDenials = jsonl('verifier-denials.jsonl').filter((d) => d.stage === 'automation');
@@ -448,7 +470,10 @@ test('the lessons run holds a factory retro over the decision log and keeps only
   assert.match(prompts(), /## Factory retro[\s\S]*"casesThatCaughtBugs": \[\s*\{\s*"story": "DEMO-1",\s*"case": "TC-DEMO-1-02"/);
   // The harness writes the council scorecard beside the lessons (the earlier tests' councils: every row still unknown, one
   // seat each); the agent's edit outside the allowed paths is gone.
-  assert.deepEqual(gitc('show', '--name-only', '--format=', branch).stdout.trim().split('\n'), ['.factory/lessons/scorecard.json', 'docs/ai-pipeline/feature-verification.md']);
+  // Council r1 (opus F10): the writer-rule log rows go into the retro's own PR with the set they explain (here the
+  // evidence is insufficient: one row says so, and no set file is written).
+  assert.deepEqual(gitc('show', '--name-only', '--format=', branch).stdout.trim().split('\n'), ['.factory/lessons/scorecard.json', '.factory/metrics/writer-rules.jsonl', 'docs/ai-pipeline/feature-verification.md']);
+  assert.deepEqual(gitc('show', `${branch}:.factory/metrics/writer-rules.jsonl`).stdout.trim().split('\n').map((l) => JSON.parse(l).event), ['writer-rules.insufficient']);
   const card = JSON.parse(gitc('show', `${branch}:.factory/lessons/scorecard.json`).stdout);
   assert.ok(card.rows.length && card.rows.every((r) => r.unknown && r.score === null), JSON.stringify(card.rows));
   assert.match(gitc('log', '-1', '--format=%B', branch).stdout, /Proposed factory changes \(needs human review\)[\s\S]*`docs\/ai-pipeline\/feature-verification\.md`: TC-DEMO-1-02 caught a missing expiry check/);
@@ -707,6 +732,45 @@ test('a configured policy that cannot run blocks the review instead of being ski
   assert.ok(reviewRound, 'reviewRound turns ERROR into a blocking finding (see review.mjs)');
 });
 
+// Council r2 (sol-07): who fixes is decided once per ticket, but every handoff gets guidance for its own findings. The
+// member's reproducer: round 1 is about the note length limit; after a fix, round 2 asks for the configured tax rate.
+// The second stop must not hand the writer the note guidance again; its council checks the fix against what it had.
+test('sol-07 r2: a later review round hands the writer fresh guidance for its own findings', () => {
+  const config = JSON.parse(read('scripts/review/config.json'));
+  config.architectureReview.policy.enabled = false;
+  write('scripts/review/config.json', JSON.stringify(config, null, 2));
+  seedTicket(repo, { key: 'DEMO-6', slug: 'DEMO-6-tax', text: '# DEMO-6 Tax\n\nRule: a note of up to 200 characters is printed; tax uses the configured rate.\n' });
+  const finding = (issue, fix) => ({ verdict: 'CHANGES_REQUESTED', summary: issue, findings: [{ severity: 'blocking', category: 'correctness', file: 'src/Basket/Coupons.cs', line: 1, issue, fix, evidence: 'src/Basket/Coupons.cs:1' }] });
+  agentScript({
+    'architecture-reviewer': [{ result: finding('a 300-character note is accepted', 'reject notes over 200 characters') }, { result: finding('the tax is rounded by hand', 'use the configured tax rate') }, { result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+    'stage-orchestrator': [
+      { result: { decision: 'delegate', reason: 'the code agent has the context', guidance: [{ what: 'the note length limit', where: 'src/Basket/NoteOptions.cs:4', do: 'reuse' }] } },
+      { result: { guidance: [{ what: 'the configured tax rate', where: 'src/Basket/TaxOptions.cs:7', do: 'reuse' }] } },
+    ],
+  });
+  assert.equal(pipeline(['start', 'DEMO-6']).status, 0);
+  write('src/Basket/Coupons.cs', '// notes and tax\n');
+  assert.equal(pipeline(['done']).status, 0);
+  const stop = () => JSON.parse(cli('scripts/review/review.mjs', ['hook', 'stop'], { input: '{}' }).stdout);
+  const first = stop();
+  assert.match(first.reason, /reuse: the note length limit/);
+  write('src/Basket/Coupons.cs', '// notes checked, tax rounded by hand\n');
+  const second = stop();
+  assert.equal(second.decision, 'block');
+  assert.match(second.reason, /the tax is rounded by hand[\s\S]*reuse: the configured tax rate \(`src\/Basket\/TaxOptions\.cs:7`\)/);
+  assert.doesNotMatch(second.reason, /the note length limit/, 'no stale guidance');
+  assert.equal(calls()['stage-orchestrator'], 2, 'the decision is kept; the guidance is asked again');
+  const section = (agent, n) => prompts().split(/^=== /m).find((x) => x.startsWith(`${agent} #${n}`)) ?? '';
+  assert.match(section('architecture-reviewer', 2), /worked to this guidance[\s\S]*the note length limit/, 'round 2 checks the round-1 fix against its guidance');
+  write('src/Basket/Coupons.cs', '// notes checked, tax from settings\n');
+  assert.match(section('stage-orchestrator', 2), /# Guide the writer of the architecture review work[\s\S]*the tax is rounded by hand/);
+  assert.match(stop().systemMessage ?? '', /approved DEMO-6/);
+  assert.match(section('architecture-reviewer', 3), /reuse: the configured tax rate \(`src\/Basket\/TaxOptions\.cs:7`\)/, 'round 3 checks the round-2 fix against its own guidance');
+  assert.doesNotMatch(section('architecture-reviewer', 3), /reuse: the note length limit/, 'not the round-1 guidance');
+  const led = jsonl('decisions.jsonl').filter((d) => d.stage === 'architectureReview-orchestrator' && d.story === 'DEMO-6');
+  assert.deepEqual(led.map((d) => d.decision), ['delegate', 'guided']);
+});
+
 // GEN-10: the test plan's orchestrator decides to write the plan itself: the test planner never starts, the decision
 // and its reason are in the decision log, and the stage's council still verifies the plan.
 test('a stage orchestrator that does the work itself: no test planner runs, the decision is logged, the verifier still sits', () => {
@@ -749,4 +813,34 @@ test('the architecture review\'s orchestrator fixes the findings itself, and the
   assert.match(prompts(), /=== stage-orchestrator #2[\s\S]*# You are doing the implementer work yourself[\s\S]*a 300-character note is accepted/);
   const led = jsonl('decisions.jsonl').filter((d) => d.stage === 'architectureReview-orchestrator' && d.story === 'DEMO-3');
   assert.deepEqual(led.map((d) => [d.decision, d.reason]), [['self', 'one line to change']]);
+});
+
+// Council r1 (sol-07, GEN-15 AC6): the architecture review's orchestrator is asked where the fix goes and what to reuse,
+// and its guidance reaches whoever writes the fix: the code agent's blocked stop, or the orchestrator's own fix run.
+test('the architecture review\'s orchestrator gives the fix writer guidance, delegated or done itself', () => {
+  const config = JSON.parse(read('scripts/review/config.json'));
+  config.architectureReview.policy.enabled = false;
+  write('scripts/review/config.json', JSON.stringify(config, null, 2));
+  const blocking = { verdict: 'CHANGES_REQUESTED', summary: 'no length check', findings: [{ severity: 'blocking', category: 'correctness', file: 'src/Basket/Coupons.cs', line: 1, issue: 'a 300-character note is accepted', fix: 'reject notes over 200 characters', evidence: 'src/Basket/Coupons.cs:1' }] };
+  const guidance = [{ what: 'the note length limit', where: 'src/Basket/NoteOptions.cs:4', do: 'reuse' }];
+  const reuse = /Where to change and what to reuse[\s\S]*reuse: the note length limit \(`src\/Basket\/NoteOptions\.cs:4`\)/;
+  for (const [key, decision] of [['DEMO-4', 'delegate'], ['DEMO-5', 'self']]) {
+    seedTicket(repo, { key, slug: `${key}-gift-note`, text: `# ${key} Gift note\n\nRule: a note of up to 200 characters is printed on the slip.\n` });
+    agentScript({
+      'architecture-reviewer': [{ result: blocking }, { result: { score: 10, verdict: 'APPROVED', summary: 'ok', findings: [] } }],
+      'stage-orchestrator': [{ result: { decision, reason: 'r', guidance } }, { writeImpl: 'src/Basket/Coupons.cs', result: { status: 'done', reason: 'length checked' } }],
+    });
+    assert.equal(pipeline(['start', key]).status, 0);
+    write('src/Basket/Coupons.cs', `// coupons with gift notes (${decision})\n`);
+    assert.equal(pipeline(['done']).status, 0);
+    const out = JSON.parse(cli('scripts/review/review.mjs', ['hook', 'stop'], { input: '{}' }).stdout);
+    assert.match(prompts(), /=== stage-orchestrator #1[\s\S]*## Guidance for the writer[\s\S]*"guidance": \[/, `${decision}: the orchestrator is asked for guidance`);
+    if (decision === 'delegate') {
+      assert.equal(out.decision, 'block');
+      assert.match(out.reason, reuse, 'the code agent\'s blocked stop carries the guidance');
+    } else {
+      assert.match(out.systemMessage, new RegExp(`approved ${key} \\(round 2\\)`));
+      assert.match(prompts(), new RegExp(`=== stage-orchestrator #2[\\s\\S]*# You are doing the implementer work yourself[\\s\\S]*${reuse.source}`), 'the orchestrator\'s own fix run carries it');
+    }
+  }
 });

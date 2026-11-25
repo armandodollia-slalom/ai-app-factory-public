@@ -13,7 +13,7 @@
 //   3. every value detected earlier in the run, by this boundary or a tool parser (rememberSecret). Only a SHA-256 of
 //      each value is kept, in memory and in the run's state directory (never committed), so a value seen once is
 //      redacted wherever it turns up later, even where no rule would match it.
-// Each match is replaced with `[redacted:<rule>]`. Values holding the factory's placeholder marker (FAKE_SECRET_MARKER,
+// Each match is replaced with `[redacted:<rule>]`. Values holding the factory's placeholder marker (PLACEHOLDER_MARKER,
 // `factoryfake`) are test data and stay.
 //
 // Redaction never touches what the pipeline computes from records: fingerprints and finding ids carry no credential
@@ -283,6 +283,13 @@ export function gate(value, where, opts) {
 // The only way records and published text reach a file (the guard test enforces it). Buffers pass unchanged.
 export function writeText(file, data, opts) {
   fs.writeFileSync(file, typeof data === 'string' ? redact(data) : data, opts);
+}
+// Writes a file only when its text changes (a pipeline-owned file computed from records); returns whether it did.
+export function writeTextIfChanged(file, text) {
+  if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === text) return false;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeText(file, text);
+  return true;
 }
 export function appendText(file, data, opts) {
   fs.appendFileSync(file, typeof data === 'string' ? redact(data) : data, opts);

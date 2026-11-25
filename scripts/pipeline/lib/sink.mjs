@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setMetricsMerger, stateDir, trackedStreamFiles } from './state.mjs';
-import { log, readJson, writeJson } from './util.mjs';
+import { log, parseJsonl, readJson, readJsonl, writeJson } from './util.mjs';
 import { fetchWithTimeout } from './external.mjs';
 import { expandEnv as expandEnvShared } from './env.mjs';
 import { defaultSettings, setting } from './settings.mjs';
@@ -140,13 +140,7 @@ const adapters = {
         sh(settings.push, stream, {}, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
       },
       async pull(stream, since) {
-        return sh(settings.pull, stream, { FACTORY_SINCE: since ?? '' }, '').split('\n').filter((l) => l.trim()).flatMap((l) => {
-          try {
-            return [JSON.parse(l)];
-          } catch {
-            return [];
-          }
-        });
+        return parseJsonl(sh(settings.pull, stream, { FACTORY_SINCE: since ?? '' }, ''));
       },
     };
   },
@@ -248,10 +242,11 @@ export async function pull(config, { adapter = sinkAdapter(config), since = null
   return result;
 }
 
-export const KNOWN_STREAMS = ['decisions.jsonl', 'decision-outcomes.jsonl', 'verifier-runs.jsonl', 'verifier-denials.jsonl', 'precheck-failures.jsonl', 'calibration.jsonl', 'arch-reviews.jsonl', 'pr-checks.jsonl', 'token-usage.jsonl', 'implement-runs.jsonl', 'subtask-runs.jsonl', 'run-conditions.jsonl', 'full-project-runs.jsonl', 'escalations.jsonl', 'retro-observations.jsonl', 'retro-selftests.jsonl', 'runs.jsonl', 'council-rounds.jsonl', 'council-selections.jsonl', 'council-findings.jsonl', 'analysis-runs.jsonl', 'analysis-findings.jsonl', 'pr-check-returns.jsonl', 'analysis-held.jsonl', 'history-rewrites.jsonl', 'secret-decisions.jsonl', 'analysis-agreement.jsonl', 'analysis-gate.jsonl'];
+export const KNOWN_STREAMS = ['decisions.jsonl', 'decision-outcomes.jsonl', 'verifier-runs.jsonl', 'verifier-denials.jsonl', 'precheck-failures.jsonl', 'calibration.jsonl', 'arch-reviews.jsonl', 'pr-checks.jsonl', 'token-usage.jsonl', 'implement-runs.jsonl', 'subtask-runs.jsonl', 'run-conditions.jsonl', 'full-project-runs.jsonl', 'escalations.jsonl', 'retro-observations.jsonl', 'retro-selftests.jsonl', 'runs.jsonl', 'council-rounds.jsonl', 'council-selections.jsonl', 'council-findings.jsonl', 'analysis-runs.jsonl', 'analysis-findings.jsonl', 'pr-check-returns.jsonl', 'analysis-held.jsonl', 'history-rewrites.jsonl', 'secret-decisions.jsonl', 'analysis-agreement.jsonl', 'analysis-gate.jsonl', 'writer-rules.jsonl'];
 // Local only: never shipped (a run's own external-call log, the stack's image cache records).
 // redact-seen.jsonl: hashes of values the redaction boundary saw, in the state directory; never shipped or committed.
-export const LOCAL_STREAMS = ['calls.jsonl', 'images.jsonl', 'redact-seen.jsonl'];
+// graphify-calls.jsonl: the graphify searches of a checkout's agents (search-calls.mjs), beside the LSP calls.jsonl.
+export const LOCAL_STREAMS = ['calls.jsonl', 'graphify-calls.jsonl', 'images.jsonl', 'redact-seen.jsonl'];
 
 // Local records plus what the last pull cached, without duplicates: what a reader that wants the whole
 // picture (the retro) uses in place of the local file alone. Envelope fields are kept; readers ignore them.
@@ -263,13 +258,7 @@ export function mergedRecords(config, stream, localRecords) {
     return _id ?? lineId(JSON.stringify(rest));
   };
   const seen = new Set(localRecords.map((r) => lineId(JSON.stringify(r))));
-  const remote = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim()).flatMap((l) => {
-    try {
-      return [JSON.parse(l)];
-    } catch {
-      return [];
-    }
-  });
+  const remote = readJsonl(file);
   const extra = remote.filter((r) => !seen.has(key(r)) && seen.add(key(r)));
   return [...localRecords, ...extra].sort((a, b) => String(a.ts ?? '').localeCompare(String(b.ts ?? '')));
 }

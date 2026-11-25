@@ -14,6 +14,7 @@ import { addendumText, appendJsonl, killTree, log, nowIso, parseFrontMatter, run
 import { claudeRunHealth, claudeTranscriptPath, degraded, describeHealth } from './provider-health.mjs';
 import { defaultSettings, setting } from './settings.mjs';
 import { agentEnv, entryFor } from './pool.mjs';
+import { cleanCodeSection } from './clean-code.mjs';
 
 // An agent's prompt has three sources, and its version is the hash of all three:
 //   base      <install>/agents/<name>.agent.md     shipped by the factory, the same for every repository
@@ -25,36 +26,82 @@ import { agentEnv, entryFor } from './pool.mjs';
 const read = (file) => (file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
 const inRepo = (config, rel) => [config.root, config.mainRoot].filter(Boolean).map((r) => path.join(r, rel)).find((f) => fs.existsSync(f)) ?? null;
 
+// An agent definition's text with its shared sections in place: each `<!-- include: shared/<name>.md -->` line becomes
+// that file of the definition's own folder (else the install's agents/), without its markdownlint line. A rule several
+// agents follow is written once there (the PR check critics' debate, the pair verifiers' judging).
+const INCLUDE_LINE = /^<!-- include: (shared\/[\w-]+\.md) -->$/gm;
+export function agentText(file) {
+  return read(file).replace(INCLUDE_LINE, (_, rel) => sharedSection(rel, path.dirname(file)));
+}
+
+// A shared section (`shared/<name>.md`) of `dir`, else of the install's agents/, without its markdownlint line. The
+// harness builds task text from them too (the clean-code seat's duties).
+export function sharedSection(rel, dir = path.join(INSTALL_ROOT, 'agents')) {
+  const shared = [dir, path.join(INSTALL_ROOT, 'agents')].map((d) => path.join(d, rel)).find((f) => fs.existsSync(f));
+  if (!shared) throw new Error(`${rel} is not in the factory's agents/ folder`);
+  return read(shared).replace(/^<!-- markdownlint-[^\n]*-->\n/, '').trim();
+}
+
 export function agentSources(config, name) {
   const overlayDir = setting(config, 'agentOverlayDir');
   const override = inRepo(config, path.join(overlayDir, `${name}.agent.md`));
-  const base = override ?? [config.root, INSTALL_ROOT].map((r) => path.join(r, config.agentsDir, `${name}.agent.md`)).find((f) => fs.existsSync(f));
-  if (!base) throw new Error(`unknown agent "${name}": no ${config.agentsDir}/${name}.agent.md in the factory install (${INSTALL_ROOT}) and no ${overlayDir}/${name}.agent.md override in the repository`);
+  const base = override ?? [config.root, INSTALL_ROOT].map((r) => path.join(r, setting(config, 'agentsDir'), `${name}.agent.md`)).find((f) => fs.existsSync(f));
+  if (!base) throw new Error(`unknown agent "${name}": no ${setting(config, 'agentsDir')}/${name}.agent.md in the factory install (${INSTALL_ROOT}) and no ${overlayDir}/${name}.agent.md override in the repository`);
   return { base, overridden: Boolean(override), addendum: inRepo(config, path.join(overlayDir, `${name}.md`)), lessons: inRepo(config, path.join(config.lessonsDir, `${name}.md`)) };
 }
 
+// The clean-code depth a definition's front matter declares (`clean-code: writer` or `full`, clean-code.mjs), or null:
+// the one reader of the key, for the pipeline's prompts and the agent files `factory render` writes.
+export const cleanCodeDepthOf = (frontMatter) => frontMatter?.['clean-code'] || null;
+
+// An agent's clean-code depth: its definition's (an override's when the repository overrides the definition).
+export const cleanCodeDepth = (config, name) => cleanCodeDepthOf(parseFrontMatter(agentText(agentSources(config, name).base)).data);
+
+// An agent's clean-code depth (cleanCodeDepth) adds the clean-code section to its prompt; its text (the writer rule set
+// included) is part of the version.
 export function agentDefinition(config, name) {
   const sources = agentSources(config, name);
-  const text = read(sources.base);
+  const text = agentText(sources.base);
   const rawAddendum = read(sources.addendum);
   const rawLessons = read(sources.lessons);
   const addendum = addendumText(rawAddendum);
-  const body = [parseFrontMatter(text).body.trim(), addendum && `## Project context\n\n${addendum}`].filter(Boolean).join('\n\n');
+  const { body: baseBody } = parseFrontMatter(text);
+  const body = [baseBody.trim(), addendum && `## Project context\n\n${addendum}`].filter(Boolean).join('\n\n');
+  const cleanCode = cleanCodeDepth(config, name);
+  const cleanCodeText = cleanCodeSection(config, cleanCode);
   // Without an addendum the hash input is what it always was, so versions recorded before stay comparable.
-  const version = sha(addendum ? `${text}\n${addendum}\n${rawLessons}` : `${text}\n${rawLessons}`, 8);
-  return { name, body, lessons: rawLessons.trim(), version, sources };
+  const version = sha([addendum ? `${text}\n${addendum}\n${rawLessons}` : `${text}\n${rawLessons}`, cleanCodeText].filter(Boolean).join('\n'), 8);
+  return { name, body, lessons: rawLessons.trim(), version, sources, cleanCode, cleanCodeText };
 }
 
-export function buildPrompt(definition, task) {
+// The agents whose definitions declare a clean-code depth (`clean-code: writer` or `full`), by name: the install's
+// agents and the repository's own, an override's front matter winning.
+export function agentsWithCleanCode(config, depth) {
+  const dirs = [config.root, INSTALL_ROOT].filter(Boolean).map((r) => path.join(r, setting(config, 'agentsDir')));
+  const names = new Set(dirs.flatMap((d) => (fs.existsSync(d) ? fs.readdirSync(d) : [])).filter((f) => f.endsWith('.agent.md')).map((f) => f.slice(0, -'.agent.md'.length)));
+  return [...names].filter((n) => cleanCodeDepth(config, n) === depth).sort();
+}
+
+// `cleanCodeText` is the clean-code section of this run's prompt: the definition's own unless the run asks for another
+// depth.
+export function buildPrompt(definition, task, { cleanCodeText = definition.cleanCodeText } = {}) {
   const parts = [definition.body];
   if (definition.lessons) {
     parts.push(`## Lessons from earlier reviews, verifier denials and test failures (follow these)\n\n${definition.lessons}`);
   }
+  if (cleanCodeText) parts.push(cleanCodeText);
   parts.push(`## Task\n\n${task}`);
   // Every agent and council member, on every CLI (redact.mjs).
   parts.push(AGENT_SECRET_RULE);
   return parts.join('\n\n');
 }
+
+// The names of agents the harness itself refers to (their definitions are agents/<name>.agent.md).
+export const IMPLEMENTER = 'implementer';
+export const PR_CHECK_FIXER = 'pr-check-fixer';
+
+// Where each agent tool reads a repository's skills.
+export const SKILL_DIRS = { claude: '.claude/skills', copilot: '.github/skills', codex: '.agents/skills' };
 
 // Children get `factory` on PATH (the install's bin/), so the commands their prompts name run as written.
 const FACTORY_BIN = path.join(INSTALL_ROOT, 'bin');
@@ -144,7 +191,7 @@ export function intercomEnv(intercom) {
   };
 }
 
-export function cliInvocation(config, { prompt, mode, model, cli = 'claude', noSubagents = false, cwd = config.root, usageFile = null, effort = null, cmd = null, intercom = null }) {
+export function cliInvocation(config, { prompt, mode, model, cli = 'claude', noSubagents = false, usageFile = null, effort = null, cmd = null, intercom = null }) {
   const iEnv = intercomEnv(intercom);
   if (config.agent.cmd || cmd) {
     // A council member's model and effort reach its command (and a fake agent under PIPELINE_AGENT_CMD) as variables.
@@ -217,7 +264,7 @@ export function cliInvocation(config, { prompt, mode, model, cli = 'claude', noS
     args.push(
       '-c', `mcp_servers.${LSP_SERVER}.command="node"`,
       '-c', `mcp_servers.${LSP_SERVER}.args=${JSON.stringify([path.join(INSTALL_ROOT, 'scripts/lsp/mcp.mjs')])}`,
-      '-c', `mcp_servers.${LSP_SERVER}.env_vars=["PIPELINE_AGENT_NAME"]`,
+      '-c', `mcp_servers.${LSP_SERVER}.env_vars=["PIPELINE_AGENT_NAME","PIPELINE_COUNCIL_MEMBER"]`,
       '-c', `mcp_servers.${LSP_SERVER}.default_tools_approval_mode="approve"`,
     );
     if (mode === 'read' || mode === 'verify') args.push('-c', `mcp_servers.${LSP_SERVER}.disabled_tools=${JSON.stringify(LSP_MUTATING)}`);
@@ -331,13 +378,16 @@ const usageFileFor = () => path.join(os.tmpdir(), `pipeline-usage-${process.pid}
 // gives its CLI, model id, reasoning effort (`effort` overrides it for one run) and process environment. A custom entry
 // runs its own `cmd`; PIPELINE_AGENT_CMD (the test fake agent) replaces every CLI and gets the model and effort as
 // variables.
-function prepare(config, { name, task, mode, entry = null, noSubagents, cwd, promptFile, effort = null, intercom = null }) {
+// `cleanCode` asks for a clean-code depth other than the agent's own for this run (the implementer plans as an
+// orchestrator, `full`).
+const promptOf = (config, definition, task, cleanCode) => buildPrompt(definition, task, cleanCode && cleanCode !== definition.cleanCode ? { cleanCodeText: cleanCodeSection(config, cleanCode) } : {});
+function prepare(config, { name, task, mode, entry = null, noSubagents, cwd, promptFile, effort = null, intercom = null, cleanCode }) {
   const definition = agentDefinition(config, name);
   const e = entryFor(config, { name, entry });
   const cmd = e.cli === 'custom' ? e.cmd : null;
   const cli = cmd && !config.agent.cmd ? 'custom' : e.cli;
   effort = effort ?? e.effort ?? null;
-  let prompt = buildPrompt(definition, task);
+  let prompt = promptOf(config, definition, task, cleanCode);
   // Copilot takes its prompt as a command-line argument (capped at 32K chars on Windows, and cmd.exe
   // mangles newlines), so its prompt is written to a file and the agent is told to read it. The file
   // goes under the agent's own working directory: headless Copilot trusts only `cwd` and refuses to
@@ -430,11 +480,11 @@ const finalize = (config, prepared, { name, mode, usage, cwd }, { stdout, stderr
 // this call (for example a verifier on another provider); PIPELINE_AGENT_CMD still wins.
 // `usage` ({ stage, story, round, step }) attributes the run's tokens and cost; see usage.mjs. The
 // result's `usage` sums what was recorded ({ tokens, costUsd, premiumRequests, ... }).
-export function runAgent(config, { name, task, mode = 'read', entry = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, usage = {}, effort = null, intercom = null, work = null }) {
+export function runAgent(config, { name, task, mode = 'read', entry = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, usage = {}, effort = null, intercom = null, work = null, cleanCode }) {
   usage = withMember(usage, extraEnv);
   // On Windows, npm-installed CLIs are .cmd shims that only start through a shell, and a Copilot
   // prompt must go through a file (see prepare), exactly as in runAgentAsync.
-  const prepared = prepare(config, { name, task, mode, entry, noSubagents, cwd, promptFile: process.platform === 'win32' && !config.agent.cmd ? null : false, effort, intercom });
+  const prepared = prepare(config, { name, task, mode, entry, noSubagents, cwd, promptFile: process.platform === 'win32' && !config.agent.cmd ? null : false, effort, intercom, cleanCode });
   const useShell = process.platform === 'win32' && !config.agent.cmd && prepared.invocation.cli !== 'custom';
   const { invocation, usageFile, entryEnv } = prepared;
   const guard = protectedSnapshot(config, cwd, work ?? name);
@@ -453,11 +503,11 @@ export function runAgent(config, { name, task, mode = 'read', entry = null, noSu
 // Non-blocking variant of runAgent, so a stage or the implement harness can run several fresh agents in
 // parallel. `signal` (an AbortSignal) kills the agent; on Windows a Copilot prompt goes through
 // `promptFile` (see prepare).
-export function runAgentAsync(config, { name, task, mode = 'read', entry = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, promptFile = null, signal, usage = {}, effort = null, intercom = null, work = null }) {
+export function runAgentAsync(config, { name, task, mode = 'read', entry = null, noSubagents = false, cwd = config.root, timeoutSec = 900, extraEnv = {}, promptFile = null, signal, usage = {}, effort = null, intercom = null, work = null, cleanCode }) {
   usage = withMember(usage, extraEnv);
   let prepared;
   try {
-    prepared = prepare(config, { name, task, mode, entry, noSubagents, cwd, promptFile, effort, intercom });
+    prepared = prepare(config, { name, task, mode, entry, noSubagents, cwd, promptFile, effort, intercom, cleanCode });
   } catch (error) {
     return Promise.reject(error);
   }

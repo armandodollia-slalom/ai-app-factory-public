@@ -38,5 +38,6 @@
     "build",
     ".next"
   ],
+  "configSources": ["**/config/*", "**/config.js", "**/config.ts", "**/config.mjs", "**/.env.example"],
   "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers)."
 }

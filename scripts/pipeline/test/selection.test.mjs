@@ -34,15 +34,18 @@ const picker = (...picks) => {
 };
 const events = (config) => readJsonl(path.join(config.root, '.factory/metrics/council-selections.jsonl'));
 const seat = (entry, lens, reason = `${entry} for ${lens}`) => ({ entry, lens, reason });
+// The clean-code seat every pick carries beside its counted seats (GEN-16), and the counted members of a sitting.
+const cc = (entry) => seat(entry, 'clean-code', 'the clean-code seat');
+const counted = (members) => members.filter((m) => !m.fixed);
 
 test('a pick that seats one family twice while another has no seat is rejected with the reason, and asked for once more', async (t) => {
   const config = setup(t, { pool: [POOL[0], POOL[1], POOL[2]], seats: { architectureReview: { councilMembers: 2 } } });
-  const o = picker([seat('opus', 'correctness'), seat('sonnet', 'security')], [seat('opus', 'correctness'), seat('sol', 'security')]);
+  const o = picker([seat('opus', 'correctness'), seat('sonnet', 'security'), cc('sol')], [seat('opus', 'correctness'), seat('sol', 'security'), cc('sonnet')]);
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: o.run });
   assert.equal(o.tasks.length, 2);
   assert.match(o.tasks[1].task, /## Your last pick was rejected[\s\S]*Anthropic sit twice while OpenAI has no seat/);
   assert.deepEqual([o.tasks[0].name, o.tasks[0].entry, o.tasks[0].mode], ['stage-orchestrator', 'opus', 'read']);
-  assert.deepEqual([r.chooser, r.members.map((m) => [m.name, m.lens, m.blocking])], ['orchestrator', [['opus', 'correctness', true], ['sol', 'security', true]]]);
+  assert.deepEqual([r.chooser, r.members.map((m) => [m.name, m.lens, m.blocking])], ['orchestrator', [['opus', 'correctness', true], ['sol', 'security', true], ['clean-code', 'clean-code', true]]]);
   assert.match(events(config)[0].rejected[0].reason, /^Anthropic sit twice while OpenAI has no seat: seat one entry per family first/);
 });
 
@@ -52,16 +55,16 @@ test('a second bad pick: the harness seats one entry per family in pool order, a
   const o = picker(bad, bad);
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: o.run });
   assert.equal(r.chooser, 'harness');
-  assert.deepEqual(r.members.map((m) => [m.entry, m.lens]), [['opus', 'correctness'], ['sol', 'security']]);
+  assert.deepEqual(counted(r.members).map((m) => [m.entry, m.lens]), [['opus', 'correctness'], ['sol', 'security']]);
   const [ev] = events(config);
   assert.deepEqual([ev.chooser, ev.rejected.length, ev.rejected.map((x) => x.pick.map((s) => s.entry).join('+'))], ['harness', 2, ['opus+sonnet', 'opus+sonnet']]);
 });
 
 test('two families and three seats: each family once and one repeat is accepted', async (t) => {
   const config = setup(t, { pool: [POOL[0], POOL[1], POOL[2]], seats: { architectureReview: { councilMembers: 3 } } });
-  const o = picker([seat('opus', 'correctness'), seat('sol', 'security'), seat('sonnet', 'rewrite')]);
+  const o = picker([seat('opus', 'correctness'), seat('sol', 'security'), seat('sonnet', 'rewrite'), cc('sonnet')]);
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: o.run });
-  assert.deepEqual([o.tasks.length, r.chooser, r.members.map((m) => m.entry)], [1, 'orchestrator', ['opus', 'sol', 'sonnet']]);
+  assert.deepEqual([o.tasks.length, r.chooser, r.members.map((m) => m.entry)], [1, 'orchestrator', ['opus', 'sol', 'sonnet', 'sonnet']]);
 });
 
 test('the rules: the stage\'s core lens, a lens it allows, ui only on a CLI that drives a browser, no shared lens while one is free, the count', () => {
@@ -79,33 +82,33 @@ test('the rules: the stage\'s core lens, a lens it allows, ui only on a CLI that
 // Council r1 (A12, sol-08): the orchestrator picks the one seat too; the harness keeps the stage's own verifier for a bad pick.
 test('one seat: the orchestrator picks its entry, the member reviews every lens on it, and a bad pick falls back to the stage\'s own verifier', async (t) => {
   const config = setup(t);
-  const o = picker([seat('sol', 'all', 'another family reads plans well')]);
+  const o = picker([seat('sol', 'all', 'another family reads plans well'), cc('opus')]);
   const r = await selectCouncil(config, 'testPlan', { subject: 'K-1', run: o.run });
   assert.deepEqual([o.tasks.length, o.tasks[0].name], [1, 'stage-orchestrator']);
   assert.match(o.tasks[0].task, /Seat 1 member for the testPlan stage[\s\S]*reviews through every lens \(lens `all`\)/);
-  assert.deepEqual([r.chooser, r.members.map((m) => [m.name, m.entry, m.lens, m.sole])], ['orchestrator', [['verifier', 'sol', 'all', true]]]);
+  assert.deepEqual([r.chooser, counted(r.members).map((m) => [m.name, m.entry, m.lens, m.sole])], ['orchestrator', [['verifier', 'sol', 'all', true]]]);
   assert.equal(councilFor(config, 'testPlan', { subject: 'K-1' }).members[0].entry, 'sol', 'the stage sits the picked entry');
   const [ev] = events(config);
-  assert.deepEqual([ev.event, ev.seats, ev.lenses, ev.chooser, ev.pick[0].entry], ['council.selection', 1, ['all'], 'orchestrator', 'sol']);
+  assert.deepEqual([ev.event, ev.seats, ev.lenses, ev.chooser, ev.pick[0].entry], ['council.selection', 1, ['all', 'clean-code'], 'orchestrator', 'sol']);
   // The pair UI verifier drives a browser: a Codex entry goes back; two bad picks seat the stage's own verifier.
   const ui = picker([seat('sol', 'all')]);
   const fallback = await selectCouncil(config, 'pairUiVerify', { subject: 'K-1', run: ui.run });
   assert.match(ui.tasks[1].task, /sol runs on codex, which cannot drive a browser/);
-  assert.deepEqual([fallback.chooser, fallback.members.map((m) => m.entry)], ['harness', ['sonnet']]);
+  assert.deepEqual([fallback.chooser, counted(fallback.members).map((m) => m.entry)], ['harness', ['sonnet']]);
 });
 
 test('the pick is kept: a second round, a resume or another subtask sees the same members and lenses, and no new selection is made', async (t) => {
   const config = setup(t, { seats: { prCheck: { councilMembers: 3 } } });
-  const o = picker([seat('opus', 'acceptance', 'strongest reader'), seat('sol', 'correctness', 'another family'), seat('gem', 'security', 'a third family')]);
+  const o = picker([seat('opus', 'acceptance', 'strongest reader'), seat('sol', 'correctness', 'another family'), seat('gem', 'security', 'a third family'), cc('sonnet')]);
   await selectCouncil(config, 'prCheck', { subject: 'K-1', run: o.run });
   const again = await selectCouncil(config, 'prCheck', { subject: 'K-1', run: o.run });
   assert.deepEqual([o.tasks.length, again.chooser], [1, 'kept']);
-  assert.deepEqual(councilFor(config, 'prCheck', { subject: 'K-1' }).members.map((m) => [m.name, m.lens, m.blocking]), [['opus', 'acceptance', true], ['sol', 'correctness', true], ['gem', 'security', true]]);
+  assert.deepEqual(councilFor(config, 'prCheck', { subject: 'K-1' }).members.map((m) => [m.name, m.lens, m.blocking]), [['opus', 'acceptance', true], ['sol', 'correctness', true], ['gem', 'security', true], ['clean-code', 'clean-code', true]]);
   assert.equal(events(config).length, 1, 'exactly one council.selection event for the pick');
   const [ev] = events(config);
   for (const field of ['ts', 'event', 'stage', 'story', 'seats', 'pool', 'pick', 'lenses', 'reasons', 'scorecardVersion', 'rejected', 'chooser']) assert.ok(field in ev, field);
   assert.deepEqual(ev.pool.map((p) => [p.entry, p.family]), [['opus', 'Anthropic'], ['sonnet', 'Anthropic'], ['sol', 'OpenAI'], ['gem', 'Google']]);
-  assert.deepEqual([ev.stage, ev.story, ev.reasons, ev.scorecardVersion, ev.rejected], ['prCheck', 'K-1', ['strongest reader', 'another family', 'a third family'], null, []]);
+  assert.deepEqual([ev.stage, ev.story, ev.reasons, ev.scorecardVersion, ev.rejected], ['prCheck', 'K-1', ['strongest reader', 'another family', 'a third family', 'the clean-code seat'], null, []]);
   assert.match(o.tasks[0].task, /## Pool[\s\S]*- sol: codex, gpt-6\.1-sol, family OpenAI[\s\S]*## Scorecard[\s\S]*\(empty: every model is unknown\)/);
 });
 
@@ -125,11 +128,11 @@ const REVIEW_ROWS = [
 test('three seats and an entry with no seats in the stage: it holds the exploration seat, a pick without it goes back, and the event marks it', async (t) => {
   const config = setup(t, { seats: { architectureReview: { councilMembers: 3 } } });
   scorecard(config, REVIEW_ROWS);
-  const o = picker([seat('opus', 'correctness'), seat('sol', 'security'), seat('sonnet', 'rewrite')], [seat('opus', 'correctness'), seat('sol', 'security'), seat('gem', 'rewrite')]);
+  const o = picker([seat('opus', 'correctness'), seat('sol', 'security'), seat('sonnet', 'rewrite'), cc('gem')], [seat('opus', 'correctness'), seat('sol', 'security'), seat('gem', 'rewrite'), cc('sonnet')]);
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: o.run });
   assert.match(o.tasks[0].task, /## Exploration seat\n\nOne seat is gem's: it has the fewest seats in this stage/);
   assert.match(o.tasks[1].task, /the exploration seat is gem's \(the fewest seats in this stage\): give it a seat/);
-  assert.deepEqual(r.members.map((m) => [m.entry, m.lens, Boolean(m.exploration)]), [['opus', 'correctness', false], ['sol', 'security', false], ['gem', 'rewrite', true]]);
+  assert.deepEqual(counted(r.members).map((m) => [m.entry, m.lens, Boolean(m.exploration)]), [['opus', 'correctness', false], ['sol', 'security', false], ['gem', 'rewrite', true]]);
   const [ev] = events(config);
   assert.deepEqual([ev.explorationSeat, ev.shadowSeat, ev.scorecardVersion, ev.pick.filter((p) => p.exploration).map((p) => p.entry)], ['gem', null, 'sc-1', ['gem']]);
 });
@@ -140,7 +143,7 @@ test('the harness fill with the exploration seat: the least-sampled entry takes 
   const bad = [seat('opus', 'correctness'), seat('sonnet', 'security'), seat('sol', 'rewrite')];
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: picker(bad, bad).run });
   // correctness: opus (0.5) before sol (0.2); security: the families not seated yet, OpenAI (sol); rewrite: gem.
-  assert.deepEqual([r.chooser, r.members.map((m) => [m.entry, m.lens, Boolean(m.exploration)])], ['harness', [['opus', 'correctness', false], ['sol', 'security', false], ['gem', 'rewrite', true]]]);
+  assert.deepEqual([r.chooser, counted(r.members).map((m) => [m.entry, m.lens, Boolean(m.exploration)])], ['harness', [['opus', 'correctness', false], ['sol', 'security', false], ['gem', 'rewrite', true]]]);
   assert.equal(events(config)[0].explorationSeat, 'gem');
 });
 
@@ -152,7 +155,7 @@ test('exploration off: every seat goes by the family rule and the score, and no 
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: o.run });
   assert.doesNotMatch(o.tasks[0].task, /Exploration seat/);
   // security: gem (0.3) before sol (no row: 0); rewrite: the family left, OpenAI. Seats in pool order.
-  assert.deepEqual(r.members.map((m) => [m.entry, m.lens, Boolean(m.exploration)]), [['opus', 'correctness', false], ['sol', 'rewrite', false], ['gem', 'security', false]]);
+  assert.deepEqual(counted(r.members).map((m) => [m.entry, m.lens, Boolean(m.exploration)]), [['opus', 'correctness', false], ['sol', 'rewrite', false], ['gem', 'security', false]]);
   assert.equal(events(config)[0].explorationSeat, null);
 });
 
@@ -174,12 +177,13 @@ test('one seat with the shadow seat on: two members run, only the first decides,
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: o.run });
   assert.equal(o.tasks.length, 2, 'no readable pick twice: the harness seats the stage\'s own verifier');
   // The sole member runs on sonnet (Anthropic): the shadow is another family's best-ranked entry, gem.
-  assert.deepEqual(r.members.map((m) => [m.name, m.entry, m.lens, m.blocking, Boolean(m.shadow)]), [['verifier', 'sonnet', 'all', true, false], ['gem', 'gem', 'all', false, true]]);
+  // The clean-code seat takes a family no counted seat has (the shadow is not counted): sol.
+  assert.deepEqual(r.members.map((m) => [m.name, m.entry, m.lens, m.blocking, Boolean(m.shadow)]), [['verifier', 'sonnet', 'all', true, false], ['gem', 'gem', 'all', false, true], ['clean-code', 'sol', 'clean-code', true, false]]);
   const [ev] = events(config);
-  assert.deepEqual([ev.seats, ev.shadowSeat, ev.pick.map((p) => [p.entry, p.blocking, Boolean(p.shadow)])], [1, 'gem', [['sonnet', true, false], ['gem', false, true]]]);
+  assert.deepEqual([ev.seats, ev.shadowSeat, ev.pick.map((p) => [p.entry, p.blocking, Boolean(p.shadow)])], [1, 'gem', [['sonnet', true, false], ['gem', false, true], ['sol', true, false]]]);
   const council = councilFor(config, 'architectureReview', { subject: 'K-1' });
-  assert.deepEqual([council.members.length, council.sole, council.shadow, council.onUnavailable, council.intercom.enabled], [2, false, 'gem', 'fail', false]);
-  assert.match(memberTask('t', { council, member: council.members[0], round: 1, skill: '' }), /only deciding member[\s\S]*A non-blocking member, gem, reviews it apart from you/);
+  assert.deepEqual([council.members.length, council.sole, council.shadow, council.onUnavailable, council.intercom.enabled], [3, false, 'gem', 'fail', false]);
+  assert.match(memberTask('t', { council, member: council.members[0], round: 1, skill: '' }), /only deciding counted member[\s\S]*A non-blocking member, gem, reviews it apart from you/);
   assert.match(memberTask('t', { council, member: council.members[1], round: 1, skill: '' }), /non-blocking shadow member[\s\S]*You are non-blocking: your findings are feedback and your score is not recorded/);
   // The round: the stage does not wait for the shadow; the decider's score decides; the late result is next round's feedback.
   const late = [];
@@ -194,7 +198,7 @@ test('one seat with the shadow seat on: two members run, only the first decides,
     onLate: (x) => late.push(x),
     log: () => {},
   });
-  assert.deepEqual(out.results.map((x) => [x.member.name, x.status]), [['verifier', 'ok'], ['gem', 'late']]);
+  assert.deepEqual(out.results.map((x) => [x.member.name, x.status]), [['verifier', 'ok'], ['gem', 'late'], ['clean-code', 'ok']]);
   assert.equal(mergeCouncil(council, out.results).pass, true, 'only the sole member decides');
   release();
   await new Promise((res) => setTimeout(res, 20));
@@ -204,14 +208,14 @@ test('one seat with the shadow seat on: two members run, only the first decides,
 
   const off = setup(t);
   const one = await selectCouncil(off, 'architectureReview', { subject: 'K-1', run: picker([]).run });
-  assert.deepEqual([one.members.length, councilFor(off, 'architectureReview', { subject: 'K-1' }).members.length, events(off)[0].shadowSeat], [1, 1, null]);
+  assert.deepEqual([one.members.length, councilFor(off, 'architectureReview', { subject: 'K-1' }).members.length, events(off)[0].shadowSeat], [2, 2, null]);
 });
 
 // Council r1 (A2): the PR check's one seat (its critic panel) gets a shadow too, of another family than its critics'.
 test('the PR check\'s critic panel gets a shadow seat of another family when it is on', async (t) => {
   const config = setup(t, { seats: { council: { shadowSeat: { enabled: true } } } });
   const r = await selectCouncil(config, 'prCheck', { subject: 'K-1', run: picker([]).run });
-  assert.deepEqual(r.members.map((m) => [m.name, m.entry, m.blocking, Boolean(m.shadow)]), [['verifier', null, true, false], ['sol', 'sol', false, true]]);
+  assert.deepEqual(r.members.map((m) => [m.name, m.entry, m.blocking, Boolean(m.shadow)]), [['verifier', null, true, false], ['sol', 'sol', false, true], ['clean-code', 'opus', true, false]]);
   const council = councilFor(config, 'prCheck', { subject: 'K-1' });
   assert.deepEqual([council.sole, council.shadow], [false, 'sol']);
 });
@@ -220,8 +224,8 @@ test('the PR check\'s critic panel gets a shadow seat of another family when it 
 test('an entry named a-2 beside a repeated entry a: the seats are a, a-2 and a-3, never two a-2', async (t) => {
   const pool = [{ name: 'a', cli: 'claude', model: 'claude-opus-5-5', effort: 'high' }, { name: 'a-2', cli: 'codex', model: 'gpt-6.1-sol', effort: 'high' }];
   const config = setup(t, { pool, seats: { architectureReview: { councilMembers: 3 }, orchestrator: { model: 'a' } } });
-  const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: picker([seat('a', 'correctness'), seat('a-2', 'security'), seat('a', 'rewrite')]).run });
-  assert.deepEqual([r.chooser, r.members.map((m) => [m.name, m.entry])], ['orchestrator', [['a', 'a'], ['a-2', 'a-2'], ['a-3', 'a']]]);
+  const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: picker([seat('a', 'correctness'), seat('a-2', 'security'), seat('a', 'rewrite'), cc('a-2')]).run });
+  assert.deepEqual([r.chooser, r.members.map((m) => [m.name, m.entry])], ['orchestrator', [['a', 'a'], ['a-2', 'a-2'], ['a-3', 'a'], ['clean-code', 'a-2']]]);
   // The fill, which repeats a before seating a-2: still each entry under its own name first.
   const { seatNames } = await import('../lib/council.mjs');
   assert.deepEqual(seatNames(['a', 'a', 'a-2']), ['a', 'a-3', 'a-2']);
@@ -247,7 +251,7 @@ test('six pair UI seats, two browser entries of one family and five other famili
   const pool = [{ name: 'opus', cli: 'claude', model: 'claude-opus-5-5', effort: 'high' }, { name: 'sonnet', cli: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, ...['m1', 'm2', 'm3', 'm4', 'm5'].map((m) => ({ name: m, cli: 'codex', model: m, effort: 'high' }))];
   const config = setup(t, { pool, seats: { implement: { councilMembers: 6 }, orchestrator: { model: 'opus' } } });
   const r = await selectCouncil(config, 'pairUiVerify', { subject: 'K-1', run: picker([]).run });
-  const families = r.members.map((m) => (m.entry === 'opus' || m.entry === 'sonnet' ? 'Anthropic' : m.entry));
+  const families = counted(r.members).map((m) => (m.entry === 'opus' || m.entry === 'sonnet' ? 'Anthropic' : m.entry));
   assert.deepEqual([r.chooser, r.members.filter((m) => m.lens === 'ui').length, new Set(families).size], ['harness', 1, 6]);
   assert.equal(events(config)[0].fillProblems, undefined);
 });
@@ -255,7 +259,7 @@ test('six pair UI seats, two browser entries of one family and five other famili
 // Council r2 (sol-18): with exploration on and two or more seats, one seat is always reserved, ties included.
 test('exploration on with an empty scorecard: the last of the equally sampled entries holds the exploration seat', async (t) => {
   const config = setup(t, { pool: [POOL[0], POOL[1], POOL[2]], seats: { architectureReview: { councilMembers: 3 } } });
-  const o = picker([seat('opus', 'correctness'), seat('sol', 'security'), seat('sonnet', 'rewrite')]);
+  const o = picker([seat('opus', 'correctness'), seat('sol', 'security'), seat('sonnet', 'rewrite'), cc('opus')]);
   const r = await selectCouncil(config, 'architectureReview', { subject: 'K-1', run: o.run });
   assert.match(o.tasks[0].task, /## Exploration seat\n\nOne seat is sol's/);
   assert.deepEqual([events(config)[0].explorationSeat, r.members.find((m) => m.exploration)?.entry], ['sol', 'sol']);
@@ -267,7 +271,7 @@ test('two pair UI seats, pool Opus, Sol, Sonnet with Sonnet reserved for explora
   const pool = [POOL[0], POOL[2], POOL[1]];
   const config = setup(t, { pool, seats: { implement: { councilMembers: 2 } } });
   const r = await selectCouncil(config, 'pairUiVerify', { subject: 'K-1', run: picker([]).run });
-  assert.deepEqual([r.chooser, r.members.map((m) => [m.entry, m.lens, Boolean(m.exploration)]).sort()], ['harness', [['sol', 'correctness', false], ['sonnet', 'ui', true]]]);
+  assert.deepEqual([r.chooser, counted(r.members).map((m) => [m.entry, m.lens, Boolean(m.exploration)]).sort()], ['harness', [['sol', 'correctness', false], ['sonnet', 'ui', true]]]);
   assert.equal(events(config)[0].fillProblems, undefined);
   // Whatever the pool order and reserved entry, the fill passes the rules whenever some council does.
   for (const order of [[0, 1, 2], [2, 1, 0], [1, 0, 2]]) {
@@ -319,7 +323,7 @@ test('one pair UI seat: when the picks and the stage\'s own entry cannot drive a
   config.models.agents = { default: 'sol' };
   const o = picker([seat('sol', 'all')], [seat('sol', 'all')]);
   const r = await selectCouncil(config, 'pairUiVerify', { subject: 'K-1', run: o.run });
-  assert.deepEqual([r.chooser, r.members.map((m) => m.entry)], ['harness', ['opus']]);
+  assert.deepEqual([r.chooser, counted(r.members).map((m) => m.entry)], ['harness', ['opus']]);
   assert.equal(events(config)[0].fillProblems, undefined);
 });
 

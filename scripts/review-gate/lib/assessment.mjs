@@ -5,10 +5,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
+import { OUTCOMES_FILE, PR_CHECKS_FILE, SUBTASK_RUNS_FILE } from '../../implement/lib/decisions.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
-import { nowIso, readJsonl } from '../../pipeline/lib/util.mjs';
+import { nowIso } from '../../pipeline/lib/util.mjs';
 import { readMeta, ticketFile } from '../../board/lib/source.mjs';
-import { runTriage } from './assess.mjs';
+import { TRIAGE_AGENT, TRIAGE_STAGE, runTriage } from './assess.mjs';
 import { confidence, ticketSignals } from './confidence.mjs';
 import { setTicketBody, setTriageFields, ticketBody } from './fields.mjs';
 import { checksState, prNumber } from './github.mjs';
@@ -20,8 +21,6 @@ import { overridePathsHit, systemsTouched, gateSystemsSettings } from './systems
 import { extractTriage, upsertTriage } from './triage-section.mjs';
 import { readMetricsLocal } from '../../pipeline/lib/state.mjs';
 import { headActivities } from '../../implement/lib/pre-open.mjs';
-
-export const TRIAGE_STAGE = 'bug-triage';
 
 // The main checkout of a worktree (the git common dir's parent): where board sync and the group
 // outcomes write their metrics, since a published PR's branch must not get new commits for them.
@@ -156,7 +155,7 @@ export function loadTicket(config, key) {
 
 export function readMetrics(config) {
   const read = (f) => readMetricsLocal(config, f);
-  return { implementRuns: read('implement-runs.jsonl'), subtaskRuns: read('subtask-runs.jsonl'), prChecks: read('pr-checks.jsonl'), outcomes: read('decision-outcomes.jsonl') };
+  return { implementRuns: read('implement-runs.jsonl'), subtaskRuns: read(SUBTASK_RUNS_FILE), prChecks: read(PR_CHECKS_FILE), outcomes: read(OUTCOMES_FILE) };
 }
 
 // One ticket's assessment from its rating, files, signals and earlier triage (its reopens).
@@ -308,7 +307,7 @@ export function logTriageDecision(metricsConfig, a, gate = null) {
   return logDecision(metricsConfig, {
     stage: TRIAGE_STAGE,
     story: a.tickets[0]?.key ?? null,
-    agent: 'bug-triage',
+    agent: TRIAGE_AGENT,
     subject: 'implementer',
     decision: gate?.action ?? 'assessed',
     reason: [`PR severity ${a.severity.level ?? 'unknown'} (${a.severity.explanation})`, gate?.reasons?.length ? `review: ${gate.reasons.join('; ')}` : null].filter(Boolean).join('. '),

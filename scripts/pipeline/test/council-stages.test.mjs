@@ -200,7 +200,8 @@ test('review council: a non-blocking member runs detached, is not waited for, an
 // and the ui lens only to an entry whose CLI can drive a browser.
 test('each seat gets the stage\'s lenses in order, core lens first; ui never goes to a Codex entry', () => {
   const two = [{ name: 'opus', cli: 'claude', model: 'opus' }, { name: 'sol', cli: 'codex', model: 'sol' }];
-  const seated = (pool, stage, section) => councilFor({ ...poolSettings(pool), [section]: { councilMembers: 2 } }, stage).members.map((m) => [m.name, m.lens]);
+  // The counted seats (the clean-code seat's lens is never one of them).
+  const seated = (pool, stage, section) => councilFor({ ...poolSettings(pool), [section]: { councilMembers: 2 } }, stage).members.filter((m) => !m.fixed).map((m) => [m.name, m.lens]);
   assert.deepEqual(seated(two, 'testAutomation', 'testAutomation'), [['opus', 'test-value'], ['sol', 'correctness']]);
   assert.deepEqual(seated(two, 'architectureReview', 'architectureReview'), [['opus', 'correctness'], ['sol', 'security']]);
   assert.deepEqual(seated(two, 'prCheck', 'prCheck'), [['opus', 'acceptance'], ['sol', 'correctness']]);

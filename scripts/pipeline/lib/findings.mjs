@@ -19,17 +19,19 @@
 // streams' rules (redaction, the sink) like every other stream.
 import path from 'node:path';
 import { COUNCIL_FILE } from './council.mjs';
+import { SOLE_LENS } from './council-config.mjs';
 import { memoryFile } from './council.mjs';
 import { familyOf, poolEntry } from './pool.mjs';
 import { metricsFile, readMetricsLocal } from './state.mjs';
 import { setting } from './settings.mjs';
 import { appendJsonl, nowIso, readJson } from './util.mjs';
+import { CLEAN_CODE_LENS, ruleIdOf } from './clean-code.mjs';
 
 export const FINDINGS_FILE = 'council-findings.jsonl';
 // The councils a later problem can count against, by the lens it maps to.
 const VERIFIER_STAGES = ['pairVerify', 'pairUiVerify', 'architectureReview', 'testPlan', 'testAutomation'];
 // The PR check's own critics, as the council lens each judges.
-export const CRITIC_LENS = { acceptance: 'acceptance', flow: 'correctness', design: 'ui', style: 'rewrite', video: 'acceptance' };
+export const CRITIC_LENS = { acceptance: 'acceptance', flow: 'correctness', design: 'ui', style: 'rewrite', video: 'acceptance', [CLEAN_CODE_LENS]: CLEAN_CODE_LENS };
 
 const write = (config, rows) => {
   if (!rows.length) return;
@@ -46,6 +48,17 @@ export function seatFacts(config, member) {
   const e = member?.entry ? poolEntry(config, member.entry) : null;
   return { seat: member?.name ?? null, entry: member?.entry ?? null, model: e?.model ?? member?.model ?? null, family: e ? familyOf(e) : member?.family ?? null, lens: member?.lens ?? null };
 }
+
+// The clean-code rule a raiser's item cites, for the retro's writer-rule ledger (writer-rules.mjs): only a clean-code
+// item's (the raiser's own evidence in a merged finding, `ev` with its member; else the finding when it is the
+// clean-code seat's own).
+const cleanCodeRule = (f, ev) => {
+  const own = ev?.member ? ev : null;
+  const item = own ?? f;
+  return (item?.lens === CLEAN_CODE_LENS || (!own && f?.cleanCode)) && ruleIdOf(item) ? { rule: ruleIdOf(item) } : {};
+};
+// A raiser's own evidence in a merged finding.
+const raiserItem = (f, member) => (f.memberEvidence ?? []).find((e) => e.member === member);
 
 // The finding records of one council round, and the outcomes it settles: its own notes now, and the previous round's
 // upheld findings by their sealed fix declarations (the round's memory ledger).
@@ -70,7 +83,7 @@ export function recordRoundFindings(config, { stage, story, step = null, round, 
     const id = f.id ?? `${stage}-r${round}-${i + 1}`;
     for (const name of raisers) {
       const ev = (f.memberEvidence ?? []).find((e) => e.member === name) ?? {};
-      rows.push({ kind: 'finding', story, stage, ...(step ? { step } : {}), round, finding: id, ...seatFacts(config, members.get(name) ?? { name }), severity: ev.severity ?? f.severity ?? null, action: ev.action ?? f.action ?? null, file: relative(config, ev.file ?? f.file), line: ev.line ?? f.line ?? null, shared: raisers.length > 1, ...(f.feedback ? { feedback: true } : {}) });
+      rows.push({ kind: 'finding', story, stage, ...(step ? { step } : {}), round, finding: id, ...seatFacts(config, members.get(name) ?? { name }), severity: ev.severity ?? f.severity ?? null, action: ev.action ?? f.action ?? null, file: relative(config, ev.file ?? f.file), line: ev.line ?? f.line ?? null, shared: raisers.length > 1, ...cleanCodeRule(f, ev), ...(f.feedback ? { feedback: true } : {}) });
     }
   });
   // A note never starts a fix cycle: no change comes of it. Feedback has no outcome at all.
@@ -102,7 +115,7 @@ export function recordPrCheckRound(config, { story, round, check = null, finding
   const rows = [];
   for (const f of findings ?? []) {
     const raisers = f.members?.length ? f.members : [f.lens];
-    for (const r of raisers) rows.push({ kind: 'finding', story, stage: 'prCheck', ...(check ? { check } : {}), round, finding: String(f.id), ...seatOf(r, f), severity: f.severity ?? null, action: f.action ?? null, file: relative(config, f.file), line: f.line ?? null, shared: raisers.length > 1, ...(feedback ? { feedback: true } : {}) });
+    for (const r of raisers) rows.push({ kind: 'finding', story, stage: 'prCheck', ...(check ? { check } : {}), round, finding: String(f.id), ...seatOf(r, f), severity: f.severity ?? null, action: f.action ?? null, file: relative(config, f.file), line: f.line ?? null, shared: raisers.length > 1, ...cleanCodeRule(f, raiserItem(f, r)), ...(feedback ? { feedback: true } : {}) });
     if (!outcomes) continue;
     const outcome = up.has(String(f.id)) ? 'upheld' : 'dismissed';
     const ruling = ruled.get(String(f.id)) ?? null;
@@ -131,7 +144,7 @@ export function recordMisses(config, { story, lens = null, source, finding = nul
   for (const c of passedCouncils(config, story, { prCheck: source !== 'prCheck' })) {
     const sole = (c.members ?? []).length === 1;
     for (const m of c.members ?? []) {
-      if (lens && !sole && m.lens !== lens && m.lens !== 'all') continue;
+      if (lens && !sole && m.lens !== lens && m.lens !== SOLE_LENS) continue;
       rows.push({ kind: 'miss', story, stage: c.stage, ...(c.step ? { step: c.step } : {}), councilRound: c.round, seat: m.name, entry: m.entry ?? null, model: m.model ?? null, family: m.family ?? null, lens: m.lens ?? null, missedLens: lens, source, ...(finding ? { finding } : {}), ...(check ? { check } : {}), ...(head ? { head } : {}), ...(lowWeight ? { lowWeight: true } : {}) });
     }
   }

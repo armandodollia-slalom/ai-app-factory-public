@@ -10,15 +10,15 @@ import { fixTaskText } from '../../pipeline/lib/analysis/report.mjs';
 import { withStaticAnalysis } from '../../pipeline/lib/analysis/report.mjs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { ceiling, runAgent } from '../../pipeline/lib/agents.mjs';
+import { IMPLEMENTER, ceiling, runAgent } from '../../pipeline/lib/agents.mjs';
 import { INSTALL_ROOT, deepMerge, loadConfig } from '../../pipeline/lib/config.mjs';
 import { formatBugs, normalizeBugs } from '../../pipeline/lib/decisions.mjs';
 import { addWorktree, git, implChanges, revExists } from '../../pipeline/lib/git.mjs';
 import { HUMAN_DECISIONS_FILE, decisionsBlock, readDecisions } from '../../pipeline/lib/human-decisions.mjs';
-import { loadState, metricsFile, readMetrics, readMetricsLocal, updateState } from '../../pipeline/lib/state.mjs';
+import { loadState, RUN_CONDITIONS_FILE, metricsFile, readMetrics, readMetricsLocal, updateState } from '../../pipeline/lib/state.mjs';
 import { runDied } from '../../pipeline/lib/recovery.mjs';
 import { prsDisabled, runTags } from '../../pipeline/lib/run-tags.mjs';
-import { addUsage } from '../../pipeline/lib/usage.mjs';
+import { USAGE_FILE, addUsage } from '../../pipeline/lib/usage.mjs';
 import { activeStoryFile } from '../../pipeline/lib/stories.mjs';
 import { openPullRequest, prPublisher, pushBranch, pushFoldedBranch } from '../../pipeline/lib/bot.mjs';
 import { clearEscalationNotes, resolvedLabel } from '../../board/lib/escalation.mjs';
@@ -27,21 +27,21 @@ import { gateConfig } from '../../review-gate/lib/config.mjs';
 import { liveDiffKey, localDiffKey } from '../../review-gate/lib/assessment.mjs';
 import { recordReopen } from '../../review-gate/lib/sync.mjs';
 import { metaFor } from '../../board/lib/ticket-format.mjs';
-import { appendJsonl, bootId, extractResult, isProcessAlive, log, nowIso, readJson, run, runAsync, sleep, stepRecord, tail, writeJson } from '../../pipeline/lib/util.mjs';
+import { VIDEO_SECTION_END, VIDEO_SECTION_START, appendJsonl, bootId, extractResult, isProcessAlive, log, nowIso, readJson, run, runAsync, sleep, stepRecord, tail, writeJson } from '../../pipeline/lib/util.mjs';
 import { branchFor, collectStories, orderStories, worktreeFor } from './batch.mjs';
 import { boardEvent } from './board-events.mjs';
 import { OUTCOMES_FILE, attributeEscaped, storyOutcomeRecord } from './decisions.mjs';
 import { changedLineLint, parityGate, paritySection } from './ci-parity.mjs';
 import { analysisFindings, analysisGate, analysisGateSection, remedyRedBranch } from './analysis-gate.mjs';
-import { ciFixBudget, ciGate, ciLine, ciOutcome, deliveryDecision } from './ci-wait.mjs';
+import { ciFixBudget, ciGate, ciLine, deliveryDecision } from './ci-wait.mjs';
 import { sideEffectsSection } from './side-effects.mjs';
 import { councilFor, councilRecords, councilReviewSection, fixDeclarationText, fixesFile, sealPendingFixes, withCouncilReview } from '../../pipeline/lib/council.mjs';
 import { freeReroute, returnSettings, returnTask, routeFindings, unaddressed } from './pr-check-return.mjs';
 import { dedupeFollowUps, followUpLine } from './follow-ups.mjs';
 
 export { dedupeFollowUps };
-import { commitAll, commitEnv, commitRecords, filesChanged, formattingOnlyHunks, headSha, listSubtaskWorktrees, mustGit, removeWorktree, stackedRef } from './gitops.mjs';
-import { formatDiagnostics, lspAdapter } from './lsp.mjs';
+import { commitAll, commitEnv, commitRecords, filesChanged, formattingOnlyHunks, headSha, listSubtaskWorktrees, removeWorktree, stackedRef } from './gitops.mjs';
+import { LSP_RECORD, formatDiagnostics, lspAdapter } from './lsp.mjs';
 import { LimitError, RESUME_NOTE, checkBudget, createContext, orchestrate, verifyLaterChange } from './orchestrate.mjs';
 import { applyResources, resourcesFromEnv, waitForMemory } from './resources.mjs';
 import { newFeedbackLog } from './feedback.mjs';
@@ -1122,7 +1122,7 @@ async function implementStoryInner(config, opts, holder) {
         integration = null;
         let res;
         try {
-          res = runAgent(wt, { name: 'implementer', task, mode: 'implement', noSubagents: Boolean(ctx), timeoutSec: left, usage: { stage: 'implement', story: key, round: metrics.implementerRuns } });
+          res = runAgent(wt, { name: IMPLEMENTER, task, mode: 'implement', noSubagents: Boolean(ctx), timeoutSec: left, usage: { stage: 'implement', story: key, round: metrics.implementerRuns } });
         } finally {
           release?.();
         }
@@ -1585,7 +1585,7 @@ export async function deliverFinished(config, wt, o) {
   body = body.split('\n').filter((l) => !/^- (CI before this PR|CI's analysis jobs before the push|Review gate, assessed before this PR opened):/.test(l)).join('\n').replace(/^\n+/, '');
   const anchor = '\n- Test plan and automated tests: verified';
   body = body.includes(anchor) ? body.replace(anchor, `${anchor}\n${evidence}`) : `${evidence}\n\n${body}`;
-  if (media.video) body += `\n\n<!-- pr-demo-video:start -->\n${media.video}\n<!-- pr-demo-video:end -->`;
+  if (media.video) body += `\n\n${VIDEO_SECTION_START}\n${media.video}\n${VIDEO_SECTION_END}`;
   if (media.api) body += `\n\n<!-- pr-api-summary:start -->\n${media.api}\n<!-- pr-api-summary:end -->`;
   if (media.notes?.length && (media.video || media.api || branchCi?.state === 'success')) body += `\n\n<sub>Demo video and API summary: ${media.notes.join('; ')}.</sub>`;
   save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, ...onHold });
@@ -1618,7 +1618,7 @@ export async function deliverFinished(config, wt, o) {
       // at pre-open with the refusal, and `implement resume` retries delivery on this head (delivery-stage agents may still run if needed).
       const refusal = { at: nowIso(), head, attempts: opened.attempts ?? [], records: opened.records ?? null, reason: opened.reason };
       save({ phase: 'pre-open', branch, worktree, base, firstPushAt, greenAt, provenHead, openRefused: refusal, ...onHold });
-      appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'host-refusal', what: 'pr-open', head, accepted: false, attempts: refusal.attempts.length }]);
+      appendJsonl(metricsFile(wt, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'host-refusal', what: 'pr-open', head, accepted: false, attempts: refusal.attempts.length }]);
       log(`${label}: ${opened.reason}; the branch ${branch} stays pushed and CI-proven on ${head.slice(0, 7)}: \`implement resume\` retries opening the PR`);
       return { ...result, outcome: 'pr-refused', reason: `no PR: ${opened.reason}; the CI-proven head ${head.slice(0, 7)} is kept and \`implement resume\` retries opening the PR without re-running implementation or review (delivery-stage agents may still run if needed)`, pr: null, finalSha: head, greenAt, openRefused: refusal };
     }
@@ -1626,7 +1626,7 @@ export async function deliverFinished(config, wt, o) {
     prUrl = opened.url;
     openedAt = nowIso();
     if (opened.reduced) {
-      appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'host-refusal', what: 'pr-open', head, accepted: true, pr: opened.url, attempts: opened.reduced.attempts.length, dropped: opened.reduced.dropped, comments: (opened.reduced.comments ?? []).map((c) => `${c.id}:${c.outcome}`) }]);
+      appendJsonl(metricsFile(wt, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'host-refusal', what: 'pr-open', head, accepted: true, pr: opened.url, attempts: opened.reduced.attempts.length, dropped: opened.reduced.dropped, comments: (opened.reduced.comments ?? []).map((c) => `${c.id}:${c.outcome}`) }]);
       log(`${label}: the code host refused the PR's full text; it opened with a shorter body (without ${opened.reduced.dropped.join(', ')}); the full text is in ${opened.reduced.records}`);
     }
     // Recorded at once: a run that stops from here on resumes after the open (its rating published first), never opening
@@ -1828,7 +1828,7 @@ export function deliveryIo(wt) {
         return null;
       }
     },
-    usage: () => readMetricsLocal(wt, 'token-usage.jsonl'),
+    usage: () => readMetricsLocal(wt, USAGE_FILE),
   };
 }
 
@@ -1950,7 +1950,7 @@ export async function afterOpen(config, wt, o) {
     if (headSha(worktree) !== before) recordHeadActivity(wt, prUrl, headSha(worktree), 'synchronize');
   }
   log(`${label}: ${ciLine(ci)}`);
-  if (ci.flaky?.length) appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'flaky-tests', pr: prUrl, tests: ci.flaky, state: ci.state }]);
+  if (ci.flaky?.length) appendJsonl(metricsFile(wt, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'flaky-tests', pr: prUrl, tests: ci.flaky, state: ci.state }]);
   const ciDelivery = deliveryDecision(ci, { issues });
   const delivery = holdFailed ? mergeDecisions(holdFailed, ciDelivery) : releaseFailed ? mergeDecisions(releaseFailed, ciDelivery) : ciDelivery;
   const deliveryFile = path.join(worktree, setting(wt, 'stateDir'), 'pr-check', `${id}-delivery.json`);
@@ -1961,7 +1961,7 @@ export async function afterOpen(config, wt, o) {
   // ready, unless the PR was on hold at that moment.
   const auditKeys = o.auditKeys ?? keys;
   const audit = readyAudit({ keys: auditKeys, readyAt, holds }, io.usage());
-  if (!audit.ok) appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'agent-after-ready', pr: prUrl, readyAt, runs: audit.after }]);
+  if (!audit.ok) appendJsonl(metricsFile(wt, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'agent-after-ready', pr: prUrl, readyAt, runs: audit.after }]);
   const nextPhase = releaseFailed || holdFailed ? 'ci-wait' : null;
   save({ phase: nextPhase, pr: prUrl, preOpen: true, readyAt, holds, readyAudit: audit, ...(releaseFailed ? { releaseConfirmed: false } : {}), ...(holdFailed ? { holdFailed: holdFailed.reason } : {}) });
   // The delivery's own figures (metrics): time from the first push of the branch to the PR, and to ready; holds; the audit.
@@ -1969,7 +1969,7 @@ export async function afterOpen(config, wt, o) {
   const mins = (a, b) => (a && b ? Math.round((Date.parse(b) - Date.parse(a)) / 600) / 100 : null);
   const firstPushAt = rec.firstPushAt ?? result.firstPushAt ?? null;
   const openedAt = rec.openedAt ?? result.openedAt ?? null;
-  appendJsonl(metricsFile(wt, 'run-conditions.jsonl'), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'pre-open', pr: prUrl, first_push_at: firstPushAt, opened_at: openedAt, ready_at: readyAt, first_push_to_open_min: mins(firstPushAt, openedAt), first_push_to_ready_min: mins(firstPushAt, readyAt), branch_ci: rec.branchCi ?? null, holds: holds.length, agents_after_ready: audit.after.length, ci: ci.state, ...(releaseFailed ? { release_confirmed: false } : {}), ...(holdFailed ? { hold_failed: true } : {}) }]);
+  appendJsonl(metricsFile(wt, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: keys[0], ...(keys.length > 1 ? { stories: keys } : {}), kind: 'pre-open', pr: prUrl, first_push_at: firstPushAt, opened_at: openedAt, ready_at: readyAt, first_push_to_open_min: mins(firstPushAt, openedAt), first_push_to_ready_min: mins(firstPushAt, readyAt), branch_ci: rec.branchCi ?? null, holds: holds.length, agents_after_ready: audit.after.length, ci: ci.state, ...(releaseFailed ? { release_confirmed: false } : {}), ...(holdFailed ? { hold_failed: true } : {}) }]);
   // The PR's head as delivered: a hold's CI fixing round may have pushed after the open.
   const out = { ...result, finalSha: headSha(worktree), pr: prUrl, ci: ci.state, phase: nextPhase, readyAt, holds, readyAudit: { ok: audit.ok, after: audit.after.length }, ...(releaseFailed ? { releaseConfirmed: false } : {}) };
   if (delivery) return { ...out, outcome: delivery.outcome, reason: delivery.reason, findings: delivery.findings, delivery };
@@ -2122,18 +2122,18 @@ export function followUpsSection(followUps) {
 // External calls that timed out or needed a retry (pipeline/lib/external.mjs) are recorded in the story's run conditions,
 // so the run log, the metrics and the PR body say so (a story worker is its own process, so the environment is its own).
 function recordExternalCalls(wt, key) {
-  process.env.FACTORY_EXTERNAL_LOG = metricsFile(wt, 'run-conditions.jsonl');
+  process.env.FACTORY_EXTERNAL_LOG = metricsFile(wt, RUN_CONDITIONS_FILE);
   process.env.FACTORY_EXTERNAL_STORY = key;
 }
 
 export function runConditions(config, keys) {
-  return readMetricsLocal(config, 'run-conditions.jsonl').filter((r) => keys.includes(r.story));
+  return readMetricsLocal(config, RUN_CONDITIONS_FILE).filter((r) => keys.includes(r.story));
 }
 
 export function runConditionsSection(records, inMemoryLsp = []) {
   const lines = [];
   const lsp = new Map();
-  for (const r of records.filter((x) => x.kind === 'lsp')) for (const m of r.missing ?? []) lsp.set(`${r.story}\0${m}`, `${r.story} (${r.worktree}): ${m}`);
+  for (const r of records.filter((x) => x.kind === LSP_RECORD)) for (const m of r.missing ?? []) lsp.set(`${r.story}\0${m}`, `${r.story} (${r.worktree}): ${m}`);
   if (!lsp.size && inMemoryLsp.length) for (const m of inMemoryLsp) lsp.set(m, m);
   if (lsp.size) lines.push(`- Code intelligence: the run went without ${[...lsp.values()].join('; ')}; the agents used graphify and search instead`);
   const slots = records.filter((x) => x.kind === 'stack-slot');

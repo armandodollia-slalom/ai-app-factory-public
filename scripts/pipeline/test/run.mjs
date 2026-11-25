@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { AGENT_CLIS, realAgentCalls } from './temp-preload.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const preload = pathToFileURL(path.join(here, 'temp-preload.mjs')).href;
@@ -22,9 +23,20 @@ const keep = process.env.FACTORY_TEST_KEEP_TMP === '1';
 const noHost = fs.mkdtempSync(path.join(base, 'ftrun-nohost-'));
 fs.writeFileSync(path.join(noHost, 'gh'), '#!/bin/sh\necho "gh: tests run offline" >&2\nexit 1\n', { mode: 0o755 });
 fs.writeFileSync(path.join(noHost, 'gh.cmd'), '@echo gh: tests run offline 1>&2\r\n@exit /b 1\r\n');
+// No test starts a paid agent: each agent CLI on PATH is a stand-in that records the call and fails. A test's own fake
+// CLIs come before it on PATH (tests prepend their fake bin), and PIPELINE_AGENT_CMD fakes never reach it. A call fails
+// its test file (temp-preload.mjs) and the run.
+const agentCalls = path.join(noHost, 'agent-calls.log');
+fs.writeFileSync(agentCalls, '');
+for (const cli of AGENT_CLIS) {
+  // A version probe (the interview's and the doctor's "is it installed") sees a machine without the CLI, the same on
+  // every machine; anything else is an agent run: recorded, and it fails.
+  fs.writeFileSync(path.join(noHost, cli), `#!/bin/sh\ncase "$1" in --version|-v|version) echo "${cli}: not installed (tests)" >&2; exit 127;; esac\nprintf '%s\\t%s\\t%s\\n' "\${FACTORY_TEST_FILE:-?}" "$PWD" "${cli} $*" | cut -c1-600 >> "${agentCalls}"\necho "${cli}: a test started the real agent CLI; tests run every agent through a fake (PIPELINE_AGENT_CMD or a fake bin first on PATH)" >&2\nexit 1\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(noHost, `${cli}.cmd`), `@echo %FACTORY_TEST_FILE%\t%CD%\t${cli} %*>> "${agentCalls}"\r\n@echo ${cli}: a test started the real agent CLI 1>&2\r\n@exit /b 1\r\n`);
+}
 // FACTORY_PRUNE=0: no test's `implement run` prunes this machine's real images or engine installs.
 // Git reaches only local repositories (a fetch from an https or ssh remote a fixture names fails at once).
-const env = { ...process.env, GIT_ALLOW_PROTOCOL: 'file', GIT_TERMINAL_PROMPT: '0', FACTORY_PRUNE: '0', TMPDIR: base, TMP: base, TEMP: base, FACTORY_TEST_TMP_REGISTRY: registry, PATH: `${noHost}${path.delimiter}${process.env.PATH ?? ''}`, NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${preload}`, `--import=${offline}`].filter(Boolean).join(' ') };
+const env = { ...process.env, FACTORY_TEST_AGENT_CALLS: agentCalls, GIT_ALLOW_PROTOCOL: 'file', GIT_TERMINAL_PROMPT: '0', FACTORY_PRUNE: '0', TMPDIR: base, TMP: base, TEMP: base, FACTORY_TEST_TMP_REGISTRY: registry, PATH: `${noHost}${path.delimiter}${process.env.PATH ?? ''}`, NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${preload}`, `--import=${offline}`].filter(Boolean).join(' ') };
 for (const k of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITLAB_TOKEN', 'AZURE_DEVOPS_TOKEN', 'AZURE_DEVOPS_EXT_PAT', 'SYSTEM_ACCESSTOKEN', 'BITBUCKET_TOKEN']) delete env[k];
 // A run started from inside a test (the guard test) is a run of its own.
 delete env.FACTORY_TEST_TMP_FILE;
@@ -45,6 +57,8 @@ const cleanup = () => {
 const child = spawn(process.execPath, ['--test', ...process.argv.slice(2)], { stdio: 'inherit', env });
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
 child.on('close', (code, signal) => {
+  const calls = realAgentCalls(agentCalls);
+  for (const c of calls) console.error(`a test started a real agent CLI: ${c}`);
   cleanup();
-  process.exit(code ?? (signal ? 1 : 0));
+  process.exit(calls.length ? 1 : code ?? (signal ? 1 : 0));
 });

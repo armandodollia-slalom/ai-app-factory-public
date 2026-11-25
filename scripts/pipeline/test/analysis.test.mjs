@@ -66,15 +66,14 @@ test('validation names the key of every mistake; a correct section has none; no 
 test('without an analysis section nothing resolves; with one, the security pack and the language packs supply tools, slots and CI jobs', () => {
   assert.equal(resolveAnalysis(cfg('/r', undefined)), null);
   const a = resolveAnalysis(cfg('/r', {}, { project: { languages: ['dotnet', 'typescript'] } }));
-  for (const id of ['betterleaks', 'osv-scanner', 'opengrep', 'opengrep-interfile', 'zizmor', 'actionlint', 'roslyn-security', 'nuget-audit', 'eslint-security']) assert.ok(a.tools.has(id), id);
-  for (const off of ['jscpd', 'lizard', 'trivy-config', 'psalm-taint']) assert.ok(!a.tools.has(off), `${off} is optional and off`);
+  for (const id of ['betterleaks', 'osv-scanner', 'opengrep', 'opengrep-interfile', 'zizmor', 'actionlint', 'roslyn-security', 'nuget-audit', 'eslint-security', 'jscpd', 'lizard']) assert.ok(a.tools.has(id), id);
+  for (const off of ['trivy-config', 'psalm-taint']) assert.ok(!a.tools.has(off), `${off} is optional and off`);
   assert.deepEqual(a.stages.ci, []);
   assert.ok(a.stages.pair.includes('opengrep') && a.stages.pair.includes('nuget-audit') && !a.stages.pair.includes('roslyn-security'), 'the solution rebuild is not a pair-round tool');
   assert.deepEqual(a.ci.jobs.map((j) => [j.id, j.tools.join('+'), j.required, j.toolchain]), [['secrets', 'betterleaks', true, false], ['dependencies', 'osv-scanner+nuget-audit', true, true], ['sast', 'opengrep-interfile', true, false], ['workflows', 'zizmor+actionlint', true, false]]);
   // A repository's entry changes only the keys it names; null turns a tool off.
-  const b = resolveAnalysis(cfg('/r', { tools: { lizard: { enabled: true }, zizmor: null } }));
-  assert.equal(b.tools.get('lizard').parse, 'gcc');
-  assert.ok(!b.tools.has('zizmor'));
+  const b = resolveAnalysis(cfg('/r', { tools: { 'trivy-config': { enabled: true }, zizmor: null } }));
+  assert.ok(b.tools.has('trivy-config') && !b.tools.has('zizmor'));
 });
 
 test('blocks: a tool blocks only on its block list (levels, rules, rule prefixes)', () => {

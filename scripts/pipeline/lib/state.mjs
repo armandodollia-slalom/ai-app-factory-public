@@ -60,6 +60,9 @@ export function trackedWriteFile(config, name) {
   const shard = metricsShard(config);
   return shard ? path.join(shardDirOf(path.join(config.root, config.metricsDir), name), `${shard}.jsonl`) : trackedMetricsFile(config, name);
 }
+// The run conditions stream: what a run met that is not the work's own (CI state, stack slots, language servers, retried
+// tests).
+export const RUN_CONDITIONS_FILE = 'run-conditions.jsonl';
 export const metricsFile = (config, name) => (spools(config) ? path.join(spoolDir(config), name) : trackedWriteFile(config, name));
 // Every tracked file of a stream in a metrics folder: its own file, then every branch's shard (sorted).
 export function trackedStreamFiles(metricsDir, name) {
@@ -137,16 +140,6 @@ export function updateState(config, key, mutate) {
   mutate(state);
   saveState(config, state);
   return state;
-}
-
-export function allStates(config) {
-  const dir = path.join(stateDir(config), 'stories');
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => readJson(path.join(dir, f), null))
-    .filter(Boolean);
 }
 
 export const lockFile = (config, key, stage) => path.join(stateDir(config), 'locks', `${key}-${stage}.lock`);

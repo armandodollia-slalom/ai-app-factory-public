@@ -8,11 +8,11 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { labelDecisions } from '../../implement/lib/decisions.mjs';
+import { DECISIONS_FILE, OUTCOMES_FILE, SUBTASK_RUNS_FILE, VERIFY_STAGE, labelDecisions } from '../../implement/lib/decisions.mjs';
 import { INSTALL_ROOT } from './config.mjs';
 import { addWorktree, git } from './git.mjs';
 import { epicTickets, loadTicket } from './tickets.mjs';
-import { summarizeUsage } from './usage.mjs';
+import { USAGE_FILE, summarizeUsage } from './usage.mjs';
 import { log, nowIso, readJson, run, writeJson } from './util.mjs';
 import { trackedStreamFiles } from './state.mjs';
 import { setting } from './settings.mjs';
@@ -239,7 +239,7 @@ export function armRecords(root, exp, arm, metricsDir = '.factory/metrics') {
 export function bucketOf(r) {
   if (r.stage === 'implement-pair') return 'implement';
   if (r.stage === 'implement') return r.step === 'plan' || r.step === 'epic-plan' ? 'overhead' : 'implement';
-  if (r.stage === 'implement-verify' || r.stage === 'implement-ui-verify') return 'verify';
+  if (r.stage === VERIFY_STAGE || r.stage === 'implement-ui-verify') return 'verify';
   return 'overhead';
 }
 
@@ -277,7 +277,7 @@ const add = (rows, field) => rows.reduce((n, r) => n + (Number(r[field]) || 0), 
 
 // One arm's numbers. `records` from armRecords, `log` the parsed history of its result.
 export function summarizeArm(arm, records, commits = [], thresholds = {}) {
-  const usage = records['token-usage.jsonl'];
+  const usage = records[USAGE_FILE];
   const total = summarizeUsage(usage);
   const buckets = { implement: 0, verify: 0, overhead: 0 };
   for (const r of usage) {
@@ -286,7 +286,7 @@ export function summarizeArm(arm, records, commits = [], thresholds = {}) {
     buckets[bucketOf(r)] += (t.input ?? 0) + (t.output ?? 0) + (t.cache_read ?? 0) + (t.cache_write_5m ?? 0) + (t.cache_write_1h ?? 0);
   }
   const runs = records['implement-runs.jsonl'];
-  const labels = labelDecisions({ decisions: records['decisions.jsonl'], runs: records['subtask-runs.jsonl'], outcomes: records['decision-outcomes.jsonl'] }, thresholds);
+  const labels = labelDecisions({ decisions: records[DECISIONS_FILE], runs: records[SUBTASK_RUNS_FILE], outcomes: records[OUTCOMES_FILE] }, thresholds);
   const labelCounts = {};
   for (const row of labels) for (const l of row.labels) labelCounts[l] = (labelCounts[l] ?? 0) + 1;
   const all = buckets.implement + buckets.verify + buckets.overhead;

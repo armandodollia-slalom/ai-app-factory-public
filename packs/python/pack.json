@@ -40,5 +40,6 @@
     "dist",
     "build"
   ],
+  "configSources": ["**/settings.py", "**/settings/*.py", "**/config.py", "**/.env.example"],
   "$comment": "Detection data for `factory detect`. Other files of this pack: lsp.json (language servers), tests.json (test runners), commands.json (build and lint), stack/ (test stack helpers)."
 }

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { run } from '../util.mjs';
 import { commandValidator, installBinary, pruneData, ruleSet } from './fetch.mjs';
 import { expand, machineCache, pinnedBin, platformKey, preparedAgeDays, ruleDirs, toolDataDir } from './runner.mjs';
+import { TOOL_TIMEOUT_SEC } from './config.mjs';
 
 export { preparedAgeDays };
 
@@ -45,7 +46,7 @@ export function prepareTool(config, tool, { runner = run } = {}) {
   const cmd = expand(tool.prepare, { bin: pinnedBin(config, tool), cache, root: config.root });
   const [c, a] = Array.isArray(cmd) ? [cmd[0], cmd.slice(1)] : process.platform === 'win32' ? ['cmd.exe', ['/d', '/s', '/c', cmd]] : ['sh', ['-c', cmd]];
   const env = { ...process.env, ...Object.fromEntries(Object.entries(tool.env ?? {}).map(([k, v]) => [k, expand(String(v), { cache, root: config.root })])) };
-  const r = runner(c, a, { cwd: config.root, timeoutSec: tool.timeoutSec ?? 600, env });
+  const r = runner(c, a, { cwd: config.root, timeoutSec: tool.timeoutSec ?? TOOL_TIMEOUT_SEC, env });
   if (!(tool.okExit ?? [0]).includes(r.status) || (tool.errorPattern && new RegExp(tool.errorPattern).test(`${r.stdout}${r.stderr}`))) return { ok: false, detail: `${tool.id}: prepare failed (exit ${r.status}): ${String(r.stderr).trim().slice(-300)}` };
   const removed = pruneData(cache, tool.data);
   fs.writeFileSync(path.join(cache, '.prepared'), new Date().toISOString());

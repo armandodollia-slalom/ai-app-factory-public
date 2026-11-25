@@ -543,7 +543,9 @@ test('factory council review --rulings: checks room, stage, checkout and every e
     `fs.appendFileSync(${JSON.stringify(counter)}, "run\\n");`,
     'const { FACTORY_INTERCOM_URL: url, FACTORY_INTERCOM_TOKEN: tok, FACTORY_INTERCOM_SEAT: seat } = process.env;',
     'const call = (name, args) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });',
-    'if (url) {',
+    // The clean-code seat (GEN-16) approves and takes no part in the dispute this test is about.
+    'if (process.env.PIPELINE_COUNCIL_MEMBER === "clean-code") { if (!url) console.log(\'AGENT_RESULT: {"score": 10, "verdict": "APPROVED", "summary": "s", "findings": []}\'); }',
+    'else if (url) {',
     '  if (seat === "sol") await call("open_dispute", { findingId: "opus:1", kind: "fix", effect: "drop", position: "not a bug" });',
     '  else for (let i = 0; i < 100; i++) { const r = await (await call("vote_dispute", { findingId: "opus:1", effect: "keep", position: "it is" })).json(); if (!r.result.isError) break; await new Promise((s) => setTimeout(s, 50)); }',
     '} else if (process.env.PIPELINE_COUNCIL_MEMBER === "opus" || process.env.MEMBER === "opus") console.log(\'AGENT_RESULT: {"score": 9, "verdict": "CHANGES_REQUESTED", "summary": "s", "findings": [{"id": "F1", "severity": "blocking", "file": "src/a.js", "line": 2, "issue": "wrong", "evidence": "src/a.js:2"}]}\');',
@@ -774,7 +776,7 @@ test('off: usage and every council output are what v0.2.95 printed when the sett
   assert.equal(absent[2][2], `Unknown command "bogus".\n\n${USAGE_0_2_95}`);
   const checked = JSON.parse(absent[4][1]);
   assert.deepEqual(checked.stages.map((x) => x.stage), ['pairVerify', 'pairUiVerify', 'architectureReview', 'testPlan', 'testAutomation', 'prCheck'], 'every verifier stage is a council');
-  assert.deepEqual(checked.stages.find((x) => x.stage === 'architectureReview'), { stage: 'architectureReview', seats: 1, maxCouncilRounds: 5, councilPassScore: 9.5, blockQuorum: 'any', onUnavailable: 'fail', members: ['its own verifier (own)'] });
+  assert.deepEqual(checked.stages.find((x) => x.stage === 'architectureReview'), { stage: 'architectureReview', seats: 1, maxCouncilRounds: 5, councilPassScore: 9.5, blockQuorum: 'any', onUnavailable: 'fail', members: ['its own verifier (own)', 'the clean-code seat clean-code (other, other)'] }, 'the clean-code seat (GEN-16) is listed beside the counted seat');
   assert.equal(/intercom/i.test(absent[3][1]), false);
   assert.deepEqual(outputs({ enabled: false }), absent, 'enabled: false is byte-identical to absent');
   const on = outputs({ enabled: true });

@@ -1,6 +1,7 @@
 ---
 name: pair-implementer
 description: Implements one subtask of a story inside its own worktree, changing only the files the subtask owns, for the `factory implement run` verifier pairs. A fresh pair-verifier checks every round. Headless only; started by the implement harness, never by hand.
+clean-code: writer
 ---
 
 # Pair implementer

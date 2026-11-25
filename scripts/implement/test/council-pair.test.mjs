@@ -13,6 +13,7 @@ import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { createContext, orchestrate } from '../lib/orchestrate.mjs';
 import { isResolvesQuestion, RESOLVES_ANSWER } from '../../pipeline/test/fixtures/resolves-question.mjs';
 import { councilSettings } from '../../pipeline/test/fixtures/pool.mjs';
+import { cleanCodeSeatAnswer } from '../../pipeline/test/fixtures/clean-code-seat.mjs';
 
 const sh = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -69,6 +70,8 @@ const fakeLsp = { start: async () => ({ ok: true }), stop: async () => {}, stopA
 function fakeAgents(script) {
   const calls = [];
   const runAgent = async (config, opts) => {
+    const seat = cleanCodeSeatAnswer(opts, script);
+    if (seat) return seat;
     if (isResolvesQuestion(opts.task)) return { ok: true, status: 0, timedOut: false, output: RESOLVES_ANSWER, version: 'v1', seconds: 0 };
     const member = opts.extraEnv?.PIPELINE_COUNCIL_MEMBER;
     const key = member ? `${opts.name}@${member}` : opts.name;
@@ -122,9 +125,10 @@ test('a three-member council on claude, codex and copilot verifies a pair: paral
   assert.equal((second.task.match(/the owner check is missing/g) ?? []).length, 1);
   assert.match(second.task, /\[raised by opus, sol\]/);
   // 6 member runs, plus the follow-up question for `resolves` to the two members whose round-1 finding lacked it.
-  assert.equal(ctx.metrics.byRole.verifier, 8, 'every member is an agent run of the story (maxAgentRunsPerStory), the resolves question too');
+  // The clean-code seat's two runs count too.
+  assert.equal(ctx.metrics.byRole.verifier, 10, 'every member is an agent run of the story (maxAgentRunsPerStory), the resolves question too');
   const rounds = readJsonl(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'));
-  assert.deepEqual(rounds.map((x) => [x.stage, x.step, x.round, x.pass, x.members.map((m) => m.score).join(',')]), [['pairVerify', 'api', 1, false, '6,5,9'], ['pairVerify', 'api', 2, true, '9,10,9']]);
+  assert.deepEqual(rounds.map((x) => [x.stage, x.step, x.round, x.pass, x.members.map((m) => m.score).join(',')]), [['pairVerify', 'api', 1, false, '6,5,9,10'], ['pairVerify', 'api', 2, true, '9,10,9,10']]);
 });
 
 test('implement.maxCouncilRounds limits the pair for any council size, and at the limit the pair escalates exactly as before', async () => {
@@ -182,7 +186,7 @@ test('an unavailable member stops the story under onUnavailable fail; under repo
     } else {
       assert.ok(r.ok, JSON.stringify(r));
       const rec = readJsonl(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'))[0];
-      assert.deepEqual(rec.members.map((m) => [m.name, m.status]), [['opus', 'ok'], ['sol', 'unavailable']]);
+      assert.deepEqual(rec.members.map((m) => [m.name, m.status]), [['opus', 'ok'], ['sol', 'unavailable'], ['clean-code', 'ok']]);
     }
     assert.equal(agents.calls.filter((c) => c.member).length, 2, 'no other model was started in its place');
   }
@@ -203,9 +207,9 @@ test('without council members the pair seats its own verifier as a council of on
   assert.equal(calls[0].member, undefined, 'it runs on the verifier role\'s own CLI and model');
   // Council r1 (sol-14): its usage rows still name its seat and lens, so the scorecard counts its cost.
   assert.deepEqual([calls[0].usage?.member, calls[0].usage?.lens], ['verifier', 'all']);
-  assert.match(calls[0].task, /You are the council's only member/);
+  assert.match(calls[0].task, /You are the council's only counted member/);
   const rows = fs.readFileSync(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.deepEqual(rows.map((x) => [x.stage, x.members.length, x.members[0].lens, x.passScore, x.pass]), [['pairVerify', 1, 'all', 9.5, true]]);
+  assert.deepEqual(rows.map((x) => [x.stage, x.members.length, x.members[0].lens, x.passScore, x.pass]), [['pairVerify', 2, 'all', 9.5, true]], 'beside the clean-code seat');
 });
 
 test('a protected test the pair implementer deletes is restored and the round fails with a finding; the council instructions reach the implementer for any council size', async () => {
@@ -281,6 +285,8 @@ test('a pair council does not block, in a later round, the change an earlier rou
     // Round 2's scope objection is on lines declared for api-r1-1: both members are asked, fresh, and accept it.
     'pair-verifier@opus': [async () => verdict(9), async () => verdict(8, [scope]), adjudicationYes],
     'pair-verifier@sol': [async () => verdict(6, [crash]), async () => verdict(9), adjudicationYes],
+    // The clean-code seat is a blocking member too: it finds nothing and accepts the objection on adjudication.
+    'pair-verifier@clean-code': [async () => verdict(10), async () => verdict(10), adjudicationYes],
   });
   const ctx = context(env, makeConfig(env.repo, council), agents);
   const r = await orchestrate(ctx);
@@ -291,7 +297,7 @@ test('a pair council does not block, in a later round, the change an earlier rou
   const rounds = readJsonl(path.join(env.repo, '.factory/metrics/council-rounds.jsonl'));
   assert.deepEqual(rounds.map((x) => [x.kind ?? 'round', x.round, x.pass ?? null, x.earlierRound ?? x.covered ?? 0]), [['round', 1, false, 0], ['adjudication', 2, null, 1], ['round', 2, true, 1]]);
   const adj = agents.calls.filter((c) => /^# Council adjudication/.test(c.task));
-  assert.deepEqual(adj.map((c) => [c.member, c.mode]), [['opus', 'read'], ['sol', 'read']]);
+  assert.deepEqual(adj.map((c) => [c.member, c.mode]), [['opus', 'read'], ['sol', 'read'], ['clean-code', 'read']]);
 });
 
 test('a pair council: the same objection stands when one member does not accept it on adjudication', async () => {

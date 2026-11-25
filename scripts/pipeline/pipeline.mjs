@@ -19,6 +19,7 @@ import { pushInBackground } from './lib/sink.mjs';
 import { denyOutput, installGuard, networkGuard, storyGuard, foreignTestGuard, stackGuard, ticketWriteGuard } from './lib/story-guard.mjs';
 import { loadUsageAcrossWorktrees } from './lib/usage.mjs';
 import { nowIso } from './lib/util.mjs';
+import { recordGraphifyCall } from './lib/search-calls.mjs';
 
 const CMD = 'factory';
 
@@ -73,6 +74,14 @@ PR bot (docs/ai-pipeline/setup.md#the-pipelines-pr-bot)
 Hooks (called by agent tool configs and .githooks)
   hook stop | hook session-start [--nested] | hook pre-tool
   git-hook post-commit | post-merge | pre-push`;
+
+// The guards' reason to deny a tool call, or null. An allowed call is traced when it searches (search-calls.mjs: the
+// clean-code rules ask for graphify searches); a denied call searched nothing.
+function guardToolCall(config, toolCall) {
+  const reason = storyGuard(config, toolCall) ?? installGuard(config, toolCall) ?? networkGuard(config, toolCall) ?? ticketWriteGuard(config, toolCall) ?? foreignTestGuard(config, toolCall) ?? stackGuard(config, toolCall) ?? factoryGuard(config, toolCall);
+  if (!reason) recordGraphifyCall(toolCall);
+  return reason;
+}
 
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
@@ -209,7 +218,7 @@ async function main() {
           return 0;
         }
         const toolCall = read.payload;
-        const reason = storyGuard(config, toolCall) ?? installGuard(config, toolCall) ?? networkGuard(config, toolCall) ?? ticketWriteGuard(config, toolCall) ?? foreignTestGuard(config, toolCall) ?? stackGuard(config, toolCall) ?? factoryGuard(config, toolCall);
+        const reason = guardToolCall(config, toolCall);
         if (reason) process.stdout.write(JSON.stringify(denyOutput(reason)));
         return 0;
       }

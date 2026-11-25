@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent, runAgentAsync } from '../../pipeline/lib/agents.mjs';
-import { contestedText, councilFor, councilMemory, fixesFile, memoryFile, nameFindings, memberRunEnv, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
+import { councilReadOnly, contestedText, councilFor, councilMemory, fixesFile, memoryFile, nameFindings, memberRunEnv, memberScore, memberTask, mergeCouncil, planCases, recordCouncilRound, rewriteText, runCouncil, testProtection, adjudicate } from '../../pipeline/lib/council.mjs';
 import { runIntercomDiscussion } from '../../pipeline/lib/intercom.mjs';
 import { logDecision } from '../../pipeline/lib/decisions.mjs';
 import { orchestratorRun } from '../../pipeline/lib/orchestrator.mjs';
@@ -194,7 +194,7 @@ export async function councilVerifier(config, { stage, story, round, task, produ
   // Each member runs on its seat's pool entry; a council of one is the stage's own verifier on its own entry.
   const call = runMember ?? ((m, t, o) => runAgentAsync(config, { name, task: t, mode: 'read', entry: m.entry, timeoutSec: m.timeoutSec ?? config.featureVerification.timeoutsSec.verifier, extraEnv: memberRunEnv(m), intercom: o?.intercom ?? null, usage: { stage: `${stage}-verify`, story: story.key, round, step: o?.purpose === 'intercom' ? `intercom-${m.name}` : m.name } }));
   const memory = councilMemory({ file: memoryFile(config.root, config.stateDir, { stage: COUNCIL_STAGE[stage], story: story.key }), cwd: config.root, round, fixes: fixesFile(config.root, config.stateDir, { stage: COUNCIL_STAGE[stage], story: story.key }) });
-  const readOnly = { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] };
+  const readOnly = councilReadOnly(config);
   const out = await runCouncil({
     council,
     round,
@@ -233,7 +233,7 @@ export async function councilVerifier(config, { stage, story, round, task, produ
     story: story.key,
     round,
     retries: config.agent.resultParseRetries,
-    readOnly: { cwd: config.root, exclude: [config.metricsDir, config.stateDir, ...(config.implExclude ?? [])] },
+    readOnly,
   });
   if (!merged.error) memory.remember(nameFindings(merged.findings, `${COUNCIL_STAGE[stage]}-r${round}`));
   recordCouncilRound(config, { stage: COUNCIL_STAGE[stage], story: story.key, round, council, merged });

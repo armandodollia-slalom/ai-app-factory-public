@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INSTALL_ROOT, toolConfig } from '../../pipeline/lib/config.mjs';
+import { lspStateDir } from '../../pipeline/lib/search-calls.mjs';
 
 export { INSTALL_ROOT };
 export const LSP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -114,12 +115,7 @@ export const worktreeOf = (dir = process.cwd()) => git(dir, ['rev-parse', '--sho
 
 // Per-checkout state (logs, call log, server load states) lives in the checkout's git dir, outside the working tree:
 // <main>/.git/lsp for the main checkout, <main>/.git/worktrees/<name>/lsp for a linked worktree.
-export function stateDir(worktree) {
-  const gitDir = path.resolve(worktree, git(worktree, ['rev-parse', '--git-dir']));
-  const dir = path.join(gitDir, 'lsp');
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
+export const stateDir = (worktree) => lspStateDir(worktree);
 
 // The main checkout, where node_modules usually lives when a fresh worktree has none.
 export function mainCheckout(worktree) {
@@ -333,11 +329,5 @@ export async function control(socket, header, timeoutMs = 5000) {
   });
 }
 
-// True when the module at `metaUrl` is the script node was started with.
-export const isMain = (metaUrl) => {
-  try {
-    return fs.realpathSync(fileURLToPath(metaUrl)) === fs.realpathSync(process.argv[1]);
-  } catch {
-    return false;
-  }
-};
+// isMain lives in pipeline/lib/util.mjs; the lsp scripts import it from here.
+export { isMain } from '../../pipeline/lib/util.mjs';

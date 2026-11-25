@@ -4,10 +4,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
+import { packsDir } from '../../pipeline/lib/settings.mjs';
 import { matchGlob } from './plan.mjs';
+import { escapeRe } from '../../pipeline/lib/util.mjs';
 
 const toPosix = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // One path pattern against a repository-relative file. A pattern is a glob (`src/web/**`, `**/*.vue`),
 // a directory (`src/web/` or `src/web`: everything under it), an extension or suffix (`.vue`,
@@ -64,7 +65,7 @@ export function pathLikeRegex(project, { roots = [], extensions = [] } = {}) {
 // Language packs
 // ---------------------------------------------------------------------------------------------
 
-export const packsDir = (installRoot = INSTALL_ROOT) => path.join(installRoot, 'packs');
+export { packsDir };
 
 // One file of a pack (packs/<id>/<file>), parsed, or null when the pack or the file does not exist.
 export function readPack(id, file, installRoot = INSTALL_ROOT) {
@@ -80,6 +81,3 @@ export function readPack(id, file, installRoot = INSTALL_ROOT) {
 
 // The test runners a pack defines (packs/<id>/tests.json → runners), each stamped with its pack.
 export const packRunners = (id, installRoot = INSTALL_ROOT) => (readPack(id, 'tests.json', installRoot)?.runners ?? []).map((r) => ({ ...r, pack: id }));
-
-// The default commands of a pack (packs/<id>/commands.json), for the config generator.
-export const packCommands = (id, installRoot = INSTALL_ROOT) => readPack(id, 'commands.json', installRoot);

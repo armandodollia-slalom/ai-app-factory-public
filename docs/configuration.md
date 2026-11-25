@@ -557,6 +557,9 @@ the allowed values, and a name not listed here.
 | `analysis.secrets` | Values a person declares are not secrets (`allow.stopwords`, `allow.regexes`). | object | see the linked page | none | none |
 | `analysis.commercial` | A licensed scanner, or a list of them ([commercial scanners](providers/commercial-scanners.md)). | any | an object or a list of objects | none | none |
 | `analysis.commercial.timeoutSec` | How long the gate waits for a licensed scanner's result on a head (each entry of a list has its own). | whole number | whole number of 1 or more seconds | `3600` | none |
+| `analysis.duplication.minTokens` | The smallest clone `jscpd` reports, in tokens: shorter repeats are not duplication. | whole number | whole number from 10 to 1000 tokens | `50` | none |
+| `analysis.complexity.maxCyclomatic` | The cyclomatic complexity a function the change adds or edits may have before `lizard` reports it. | whole number | whole number from 1 to 100 | `15` | none |
+| `analysis.complexity.maxFunctionLines` | The length a function the change adds or edits may have before `lizard` reports it. | whole number | whole number from 5 to 2000 lines | `100` | none |
 | `analysis.maxFixRounds` | How many times static analysis findings are handed back for fixing within one round of verification (and at ticket level). | whole number | whole number of 0 or more rounds | `2` | none |
 
 ### `architectureReview`
@@ -577,7 +580,7 @@ the allowed values, and a name not listed here.
 | `architectureReview.policy.timeoutSec` | How long the policy engine's command may take. | whole number | whole number of 1 or more seconds | `600` | none |
 | `architectureReview.maxCouncilRounds` | How many rounds the architecture review council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `5` | none |
 | `architectureReview.councilPassScore` | The score every blocking member of the architecture review council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9.5` | none |
-| `architectureReview.councilMembers` | How many members sit on the architecture review council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `architectureReview.councilMembers` | How many counted members sit on the architecture review council, beside the fixed clean-code seat (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
 | `architectureReview.orchestrator.model` | The `models.pool` entry the architecture review orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
 | `architectureReview.orchestrator.effort` | The architecture review orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
 | `architectureReview.councilIntercom` | The architecture review council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
@@ -651,7 +654,7 @@ the allowed values, and a name not listed here.
 | `council.blockQuorum` | How many blocking members must object to a finding for it to block (no effect on a council of one). | choice | `any`, `majority`, `all` | `any` | none |
 | `council.onUnavailable` | What a round does when a member cannot run: fail the round, or report it and go on without the member (a council of one always fails). | choice | `fail`, `report` | `fail` | none |
 | `council.lateGraceSec` | How long the PR check waits, after its last round, for a non-blocking member's late result. | whole number | whole number of 0 or more seconds | `120` | none |
-| `council.members` | How many members a council seats, from `models.pool`; 1 seats the stage's own verifier alone. Each stage section's `councilMembers` overrides it. | whole number | whole number from 1 to 10 | `1` | none |
+| `council.members` | How many counted members a council seats, from `models.pool`; 1 seats the stage's own verifier. The clean-code seat always sits beside them and is never counted (1 sits 2 members). Each stage section's `councilMembers` overrides it. | whole number | whole number from 1 to 10 | `1` | none |
 | `council.explorationSeat.enabled` | With two or more seats, reserves one seat for the eligible pool entry with the fewest seats in the stage (by the scorecard), so models it knows little about are still tried; the family rule still applies. | on/off | `true`, `false` | `true` | none |
 | `council.shadowSeat.enabled` | With one seat, adds a second, non-blocking member from another model family: its findings are feedback, its score never decides and the stage does not wait for it; beside the PR check's critic panel it is one more critic. It doubles the verifier runs of a one-seat council. | on/off | `true`, `false` | `false` | none |
 | `council.scorecard.minSeats` | The seats a model needs in a lens and stage before its scorecard row has numbers; a row with fewer is unknown, neither good nor bad for selection. | whole number | whole number of 1 or more | `10` | none |
@@ -848,7 +851,7 @@ the allowed values, and a name not listed here.
 | `implement.autoMerge.hostAutoMerge.enabled` | Lets the code host's own auto-merge finish an approved PR; off means the pipeline merges it after re-checking the final commit. | on/off | `true`, `false` | `false` | none |
 | `implement.maxCouncilRounds` | How many rounds the pair verifier (and pair UI verifier) council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `3` | none |
 | `implement.councilPassScore` | The score every blocking member of the pair verifier (and pair UI verifier) council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9.5` | none |
-| `implement.councilMembers` | How many members sit on the pair verifier and pair UI verifier councils (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `implement.councilMembers` | How many counted members sit on the pair verifier and pair UI verifier councils, beside the fixed clean-code seat (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
 | `implement.orchestrator.model` | The `models.pool` entry the implement stage (the implementer agent: it implements the ticket itself or plans subtasks for pairs) orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
 | `implement.orchestrator.effort` | The implement stage orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
 | `implement.subtaskModels` | The `models.pool` entries the planner may give a subtask's pair implementer; it names one per subtask (`null`: every entry). | list | list of pool entry name (names of `models.pool` entries), or `null` | `null` | none |
@@ -969,7 +972,7 @@ the allowed values, and a name not listed here.
 | `prCheck.fixLenses` | Kinds of PR check findings that are always fixed, whatever their severity. | list | list of lens | `[]` | none |
 | `prCheck.maxCouncilRounds` | How many rounds the PR check gets, in delivery, in an epic, in a CI fix and by hand (`--max-rounds` overrides it for a run by hand), before it escalates. | whole number | whole number from 1 to 50 rounds | `3` | none |
 | `prCheck.councilPassScore` | The score every blocking member of the PR check council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9.5` | none |
-| `prCheck.councilMembers` | How many members sit on the PR check council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `prCheck.councilMembers` | How many counted members sit on the PR check council, beside the fixed clean-code seat (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
 | `prCheck.orchestrator.model` | The `models.pool` entry the PR check orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
 | `prCheck.orchestrator.effort` | The PR check orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
 | `prCheck.councilIntercom` | The PR check council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
@@ -980,6 +983,7 @@ the allowed values, and a name not listed here.
 | --- | --- | --- | --- | --- | --- |
 | `project.name` | Names machine-wide state (stack project, language server sockets), so two repositories on one machine never collide. | text | text | the main checkout's folder name | none |
 | `project.languages` | The language packs (`packs/<id>/`) in use. | list | list of pack id | `[]` | none |
+| `project.configSources` | Where the application's configuration defaults live (options classes, `appsettings*.json`, config modules, `.env.example`, settings modules): the sources the repeated-values check compares fallbacks with. `factory init` drafts it from the language packs' candidates and asks when it finds none. | list | list of glob | `[]` | none |
 | `project.toolPaths` | Folders added to `PATH` for every command and agent the pipeline starts. | list | list of folder (`~` allowed) | `[]` | none |
 | `project.services` | The buildable units: their paths, unit tests and dependencies; drives subtask planning, unit tests, stack rebuilds and the review gate's systems. | list | list of object | `[]` | none |
 | `project.services[].name` | A service's name. | text | text | none | none |
@@ -1070,6 +1074,8 @@ the allowed values, and a name not listed here.
 | `retro.lessons.retireAfterStories` | A rule is retired when its category has not recurred for this many tickets. | whole number | whole number of 1 or more | `10` | none |
 | `retro.lessons.revertMinRounds` | A rule is reverted when, after this many verifier rounds, its category's denial rate did not drop. | whole number | whole number of 1 or more rounds | `6` | none |
 | `retro.lessons.examplesPerCategory` | Examples per category in the digest the retro agent reads. | whole number | whole number of 0 or more | `5` | none |
+| `retro.writerRules.minSamples` | The first-round council sittings on writers' work a window needs before the retro adds or removes a writer clean-code rule; with fewer it changes nothing and says the evidence is insufficient (the same minimum as `council.scorecard.minSeats`). | whole number | whole number of 1 or more sittings | `10` | none |
+| `retro.writerRules.maxChangesPerRetro` | The most writer clean-code rules one retro adds or removes, the largest net value first, so each change's effect can be measured before the next; the rest are listed as deferred. | whole number | whole number of 1 or more rules | `2` | none |
 
 ### `stack`
 
@@ -1129,7 +1135,7 @@ the allowed values, and a name not listed here.
 | --- | --- | --- | --- | --- | --- |
 | `testAutomation.maxCouncilRounds` | How many rounds the test automation council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `5` | none |
 | `testAutomation.councilPassScore` | The score every blocking member of the test automation council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9` | none |
-| `testAutomation.councilMembers` | How many members sit on the test automation council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `testAutomation.councilMembers` | How many counted members sit on the test automation council, beside the fixed clean-code seat (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
 | `testAutomation.orchestrator.model` | The `models.pool` entry the test automation stage orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
 | `testAutomation.orchestrator.effort` | The test automation stage orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
 | `testAutomation.councilIntercom` | The test automation council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |
@@ -1140,7 +1146,7 @@ the allowed values, and a name not listed here.
 | --- | --- | --- | --- | --- | --- |
 | `testPlan.maxCouncilRounds` | How many rounds the test plan council gets before the stage escalates to a person (any council size). | whole number | whole number from 1 to 50 rounds | `5` | none |
 | `testPlan.councilPassScore` | The score every blocking member of the test plan council must give, with no blocking finding standing, for it to pass (any council size). | number | number with at most 1 decimal place from 0 to 10 | `9` | none |
-| `testPlan.councilMembers` | How many members sit on the test plan council (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
+| `testPlan.councilMembers` | How many counted members sit on the test plan council, beside the fixed clean-code seat (`null`: `council.members`). | whole number | whole number from 1 to 10, or `null` | `null` | none |
 | `testPlan.orchestrator.model` | The `models.pool` entry the test plan stage orchestrator runs on (`null`: `orchestrator.model`). | text | a `models.pool` entry name, or `null` | `null` | none |
 | `testPlan.orchestrator.effort` | The test plan stage orchestrator's reasoning effort (`null`: `orchestrator.effort`, else its entry's). | choice | `low`, `medium`, `high`, `xhigh`, `max`, or `null` | `null` | none |
 | `testPlan.councilIntercom` | The test plan council's own discussion settings, over `council.intercom` (a council of one holds no discussion). | object | the keys of `council.intercom` | none | none |

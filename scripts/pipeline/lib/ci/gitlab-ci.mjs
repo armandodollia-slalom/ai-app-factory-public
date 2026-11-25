@@ -7,6 +7,7 @@
 // settings: { url, repo ("group/project": the host's), token ("${GITLAB_TOKEN}"), expected }. deps: { send, env }.
 import { UnsupportedError } from '../hosts/errors.mjs';
 import { ciClient, run, secret } from './rest.mjs';
+import { DEFAULT_URL } from '../hosts/gitlab.mjs';
 
 export const CAPABILITIES = { logs: true, expectedFromDefinition: true, runsByCommit: true, reviewEvents: false, schedules: 'partial', rerun: true, branchPipelines: true };
 const STATUS = { created: 'queued', waiting_for_resource: 'queued', preparing: 'queued', pending: 'queued', scheduled: 'queued', manual: 'queued', running: 'running', success: 'completed', failed: 'completed', canceled: 'completed', skipped: 'completed' };
@@ -15,7 +16,7 @@ export const PIPELINE = 'gitlab-pipeline';
 
 export function createGitlabCi(settings = {}, deps = {}) {
   const config = deps.config ?? {};
-  const url = String(settings.url ?? config.host?.url ?? 'https://gitlab.com').replace(/\/+$/, '');
+  const url = String(settings.url ?? config.host?.url ?? DEFAULT_URL).replace(/\/+$/, '');
   const repo = settings.project ?? settings.repo ?? config.host?.repo;
   const env = deps.env ?? process.env;
   const token = secret(settings.token, 'ci.token', env) ?? secret(config.host?.token, 'host.token', env) ?? env.GITLAB_TOKEN ?? env.CI_JOB_TOKEN ?? null;

@@ -59,6 +59,7 @@ Open `.factory/config.json` and `.factory/app.json` (the application's topology:
 | --- | --- |
 | `project.services` | One entry per deployable or separately built unit: `name`, `kind` (`backend`, `frontend`, `worker`, `library`), `paths` (globs that own its files), `unitTests` (where its unit tests live). Remove units that are tooling, examples or generated code. A monolith is one service. |
 | `project.frontendPaths` | Globs of everything a user sees: templates, components, styles. Empty for a codebase without UI. |
+| `project.configSources` | Globs of the files where the application's configuration defaults live: options or settings classes, `appsettings*.json`, config modules, `.env.example`, settings modules. The repeated-values check compares new fallbacks and literals with them (a `?? 900` beside an options default of 900). `init` drafts it from the language packs' candidates; read the code for where defaults are really declared. When you cannot find where they live, ask the person; never guess a source. |
 | `project.toolPaths` | Folders that hold the toolchain when it is not on the default PATH (hooks do not load a shell profile). |
 | `implement.prepareCmd`, `implement.checks`, `implement.unitTests` | The commands CI runs to restore, build and unit-test. Run each one yourself; a command you have not seen pass does not go in. |
 | `precheck.testRunners` | One runner per test framework in use, with the convention that ties a test to its story. Start from the pack's `tests.json`; adjust paths. |

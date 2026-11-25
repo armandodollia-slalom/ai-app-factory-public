@@ -63,12 +63,10 @@ test('a combined row: each reader of the new setting follows it', async (t) => {
   const { isTestFile } = await import('../../feature-verification/lib/runners.mjs');
   assert.equal(isTestFile(config, 'data/scenarios/x-1/seed.sql', []), true);
   // hooks.codeAgents: the architecture review and the automatic PR check.
-  const review = await import('../../review/lib/review.mjs');
   const hooks = await import('../../pr-check/lib/hooks.mjs');
-  for (const stop of [review.isCodeAgentStop, hooks.isCodeAgentStop]) {
-    assert.equal(stop(config, { hook_event_name: 'SubagentStop', agent_type: 'builder' }), true);
-    assert.equal(stop(config, { hook_event_name: 'SubagentStop', agent_type: 'implementer' }), false);
-  }
+  const { isCodeAgentStop } = await import('../lib/cli.mjs');
+  assert.equal(isCodeAgentStop(config, { hook_event_name: 'SubagentStop', agent_type: 'builder' }), true);
+  assert.equal(isCodeAgentStop(config, { hook_event_name: 'SubagentStop', agent_type: 'implementer' }), false);
   // prCheck.returnToImplementation.maxReturns: the pipeline's returns and the hook's checks (one more than the returns).
   const { returnSettings } = await import('../../implement/lib/pr-check-return.mjs');
   assert.equal(returnSettings(config).maxReturns, 4);

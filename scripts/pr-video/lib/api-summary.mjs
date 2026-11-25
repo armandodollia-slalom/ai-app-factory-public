@@ -16,7 +16,8 @@ import { pathToFileURL } from 'node:url';
 import { isFrontendFile, matchesAnyPath, servicesOfFile } from '../../implement/lib/project.mjs';
 import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
 import { git } from '../../pipeline/lib/git.mjs';
-import { workflowFile } from './pr-video.mjs';
+import { latestAttempts, workflowFile } from './pr-video.mjs';
+import { escapeRe } from '../../pipeline/lib/util.mjs';
 
 export const API_MARKERS = { start: '<!-- pr-api-summary:start -->', end: '<!-- pr-api-summary:end -->' };
 const SECTION_BUDGET = 40000;
@@ -226,7 +227,7 @@ function routeRegex(route) {
     .filter(Boolean)
     .map((seg) => {
       const optional = /^\{\w+\?\}$/.test(seg);
-      const body = /^\{\w+\??\}$/.test(seg) ? '[^/]+' : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const body = /^\{\w+\??\}$/.test(seg) ? '[^/]+' : escapeRe(seg);
       return optional ? `(?:/${body})?` : `/${body}`;
     })
     .join('');
@@ -245,12 +246,7 @@ export function matchEndpoint(endpoints, method, url) {
 
 // Recorded calls from artifacts/e2e-videos/manifest.json (last attempt of each test).
 export function recordedExchanges(manifest) {
-  const latest = new Map();
-  for (const t of manifest?.tests ?? []) {
-    const key = [t.project, t.file, ...t.titlePath].join('\u0000');
-    if (!latest.has(key) || latest.get(key).retry <= t.retry) latest.set(key, t);
-  }
-  return [...latest.values()].flatMap((t) => (t.api ?? []).map((x) => ({ ...x, test: t.titlePath.slice(2).join(' › ') || t.title, file: t.file })));
+  return latestAttempts(manifest).flatMap((t) => (t.api ?? []).map((x) => ({ ...x, test: t.titlePath.slice(2).join(' › ') || t.title, file: t.file })));
 }
 
 // The documents to describe endpoints with: URLs are fetched (a running stack), anything else is a JSON

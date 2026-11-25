@@ -10,12 +10,10 @@ import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ALLOWLIST } from '../../pipeline/lib/analysis/licences.mjs';
 import { toolsDir } from '../../pipeline/lib/analysis/runner.mjs';
-import { defaultSettings } from '../../pipeline/lib/settings.mjs';
+import { INSTALL_ROOT, defaultSettings } from '../../pipeline/lib/settings.mjs';
 
-const INSTALL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export const PINS = JSON.parse(fs.readFileSync(path.join(INSTALL_ROOT, 'packs/video/tools.json'), 'utf8'));
 
 // The defaults are in scripts/pr-video/config.json (`video`).
@@ -70,11 +68,17 @@ export function resolveTools(config = {}, { env = process.env } = {}) {
   return { home, python, files, ffmpeg, narration: narrationWhyOff ? null : { ...s.narration, python, ...files }, narrationWhyOff, settings: s };
 }
 
+// The binary the pinned imageio-ffmpeg ships, asked of the toolchain's Python once per process and kept once found: a
+// later probe that fails (a slow Python start under load) does not take it away from a run that already had it.
+const pinned = new Map();
 function pinnedFfmpeg(python) {
   if (!fs.existsSync(python)) return null;
+  if (pinned.has(python) && fs.existsSync(pinned.get(python))) return pinned.get(python);
   const r = spawnSync(python, ['-I', '-c', 'import imageio_ffmpeg as i; print(i.get_ffmpeg_exe())'], { encoding: 'utf8', timeout: 60_000 });
   const exe = r.status === 0 ? r.stdout.trim() : '';
-  return exe && fs.existsSync(exe) ? exe : null;
+  if (!exe || !fs.existsSync(exe)) return null;
+  pinned.set(python, exe);
+  return exe;
 }
 function onPath(cmd) {
   const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf8' });

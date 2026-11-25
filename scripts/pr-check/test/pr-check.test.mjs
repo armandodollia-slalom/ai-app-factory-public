@@ -96,6 +96,8 @@ before(() => {
     fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
   }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
+  // The clean-code skill the writers' and orchestrators' prompts are built from (it includes the council skill's lists).
+  for (const skill of ['clean-code', 'council']) fs.cpSync(path.join(source, 'skills', skill), path.join(repo, 'skills', skill), { recursive: true });
   write('.gitignore', '.factory/state/\n.factory/metrics/\n');
   seedTicket(repo, { key: 'DEMO-1', slug: 'DEMO-1-apply-coupon', text: '# DEMO-1 Apply coupon\n\nAC 1: a valid coupon gives 10% off. AC 2: an expired coupon is rejected with 400.\n' });
   sh('git', ['init', '-q', '-b', 'main']);
@@ -124,6 +126,7 @@ test('report-only (--no-fix) runs one round, never calls the fixer, and fails be
     'pr-check-style': [clean('style')],
     'pr-check-defender': [{ result: { responses: [{ id: 'ACC-1-1', position: 'concede', argument: 'true' }] } }],
     'pr-check-judge': [upheldRound],
+    'pr-check-clean-code': [{ search: ['lsp_workspace_symbols', 'lsp_find_references'], result: { lens: 'clean-code', score: 10, summary: 'clean', findings: [] } }],
   });
   assert.equal(r.status, 1, r.stderr);
   const result = JSON.parse(r.stdout);
@@ -134,8 +137,10 @@ test('report-only (--no-fix) runs one round, never calls the fixer, and fails be
   // its agent's entry with the council lens it judges, and each critic's usage rows naming that seat and lens.
   const stream = (name) => trackedStreamFiles(path.join(repo, '.factory/metrics'), name).filter((f) => fs.existsSync(f)).flatMap((f) => fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)));
   const round = stream('council-rounds.jsonl').filter((x) => x.stage === 'prCheck' && x.story === 'DEMO-1').at(-1);
-  assert.deepEqual(round.members.map((m) => [m.name, m.lens, Boolean(m.entry), m.status]), [['acceptance', 'acceptance', true, 'ok'], ['flow', 'correctness', true, 'ok'], ['style', 'rewrite', true, 'ok']]);
+  assert.deepEqual(round.members.map((m) => [m.name, m.lens, Boolean(m.entry), m.status]), [['acceptance', 'acceptance', true, 'ok'], ['flow', 'correctness', true, 'ok'], ['style', 'rewrite', true, 'ok'], ['clean-code', 'clean-code', true, 'ok']]);
   assert.equal(round.pass, false);
+  // Council r1 (opus F8): the panel's clean-code critic is the fixed seat, with the searches it made.
+  assert.deepEqual(round.members.filter((m) => m.lens === 'clean-code').map((m) => [m.fixed, m.searches]), [[true, 2]]);
   const critic = stream('token-usage.jsonl').filter((u) => u.agent === 'pr-check-flow').at(-1);
   assert.deepEqual([critic.seat, critic.lens], ['flow', 'correctness']);
   // Council r1 (T1): the round's records through the real path: the finding, the judge's own ruling, and the miss.
@@ -146,6 +151,39 @@ test('report-only (--no-fix) runs one round, never calls the fixer, and fails be
   const runs = found.filter((x) => x.kind !== 'miss').map((x) => x.check);
   assert.ok(runs[0] && runs.every((c) => c === runs[0]), JSON.stringify(runs));
   assert.deepEqual(found.filter((x) => x.kind === 'miss').map((x) => [x.story, x.stage, x.seat, x.source, x.finding]), [['DEMO-1', 'architectureReview', 'verifier', 'prCheck', 'ACC-1-1']]);
+});
+
+// Council r1 (TV-1, TV-4): the clean-code critic's real findings through the PR check. One with its proof (a rule id and
+// both copies) reaches the defender and the judge as blocking, whatever severity the critic wrote; one without its rule
+// id is kept aside as a question and never debated or ruled. The critic runs on its definition's full clean-code rules.
+test('TV-1, TV-4: the clean-code critic\'s proven finding is debated as blocking, an unproven one is kept as a question; its prompt has the full rules', () => {
+  const proven = { severity: 'minor', rule: 'CC-1', copies: ['src/Basket/Coupons.cs:1', 'src/Basket/Settings.cs:4'], title: 'The coupon timeout default is written twice', detail: '900 again', evidence: 'src/Basket/Coupons.cs:1', fix: 'read the setting' };
+  const unproven = { severity: 'blocking', title: 'The discount helper repeats the cart helper', detail: 'copied logic', evidence: 'src/Basket/Coupons.cs:1', fix: 'extract one helper' };
+  // Council r3 (test-value follow-up): one place spelt twice, once by its absolute path in the checkout. The critic's
+  // evidence rule gets the checkout's root, so this is one place: a question, never debated.
+  const aliased = { severity: 'blocking', rule: 'CC-1', copies: [path.join(fs.realpathSync(repo), 'src/Basket/Coupons.cs') + ':1', 'src/Basket/Coupons.cs:1'], title: 'The coupon line is written twice in one place', detail: 'same line', evidence: 'src/Basket/Coupons.cs:1', fix: 'none' };
+  const r = prCheck(['--no-fix', '--json'], {
+    'pr-check-acceptance': [clean('acceptance')],
+    'pr-check-flow': [clean('flow')],
+    'pr-check-style': [clean('style')],
+    'pr-check-clean-code': [{ result: { lens: 'clean-code', score: 6, summary: 'one duplication', findings: [proven, unproven, aliased] } }],
+    'pr-check-defender': [{ result: { responses: [{ id: 'CLN-1-1', position: 'concede', argument: 'it is written twice' }] } }],
+    'pr-check-judge': [{ result: { score: 6, lensScores: { 'clean-code': 6 }, summary: 'duplication', rulings: [{ id: 'CLN-1-1', ruling: 'upheld', severity: 'minor', reason: 'conceded' }] } }],
+  });
+  assert.equal(r.status, 1, r.stderr);
+  const result = JSON.parse(r.stdout);
+  assert.equal(result.verdict, 'FAIL');
+  assert.deepEqual(result.openFindings.map((f) => [f.id, f.severity]), [['CLN-1-1', 'blocking']]);
+  const prompts = fs.readFileSync(`${scriptFile}.prompts.log`, 'utf8');
+  const section = (agent) => prompts.split(/^=== /m).find((x) => x.startsWith(`${agent} #1`)) ?? '';
+  for (const agent of ['pr-check-defender', 'pr-check-judge']) {
+    assert.match(section(agent), /"severity": "blocking"[^{}]*"title": "The coupon timeout default is written twice"|"title": "The coupon timeout default is written twice"[^{}]*"severity": "blocking"/, `${agent}: the proven finding, blocking`);
+    assert.doesNotMatch(section(agent), /The discount helper repeats the cart helper/, `${agent}: the unproven one is never debated or ruled`);
+    assert.doesNotMatch(section(agent), /The coupon line is written twice in one place/, `${agent}: one place spelt twice is no duplication`);
+  }
+  assert.match(r.stderr, /clean-code: 2 finding\(s\) kept as questions \(it cites no clean-code rule id/);
+  // TV-4: the critic's own definition asks for the full rules (clean-code: full), so its prompt carries them.
+  assert.match(section('pr-check-clean-code'), /## Clean code \(the full rules\)[\s\S]*CC-14 No useless tests/);
 });
 
 test('a multi-ticket check (--epic, --stories) runs the design lens for every frontend ticket and the epic journey', (t) => {
@@ -176,8 +214,9 @@ test('a multi-ticket check (--epic, --stories) runs the design lens for every fr
   });
   assert.equal(r.status, 1, r.stderr);
   const result = JSON.parse(r.stdout);
-  assert.deepEqual([result.id, result.story, result.stories, result.epic, result.lenses], ['epic-checkout', 'DEMO-3', ['DEMO-3', 'DEMO-4'], 'epic-checkout', ['design']]);
-  assert.deepEqual(Object.keys(calls()).sort(), ['pr-check-defender', 'pr-check-design', 'pr-check-judge'], 'only the design lens ran');
+  // --lenses narrows the critics, never the clean-code seat (GEN-16).
+  assert.deepEqual([result.id, result.story, result.stories, result.epic, result.lenses], ['epic-checkout', 'DEMO-3', ['DEMO-3', 'DEMO-4'], 'epic-checkout', ['design', 'clean-code']]);
+  assert.deepEqual(Object.keys(calls()).sort(), ['pr-check-defender', 'pr-check-design', 'pr-check-judge'], 'only the design lens ran (the unscripted clean-code critic is not counted)');
   const prompt = fs.readFileSync(`${scriptFile}.prompts.log`, 'utf8').split('=== pr-check-design #1')[1].split('\n=== ')[0];
   assert.match(prompt, /### Tickets in this check \(2, epic epic-checkout\)/);
   assert.match(prompt, /- DEMO-3 \(frontend\): DEMO-3: \[FE - WebApp\] - Cart coupon box\n {2}- Story: .*DEMO-3\/story\.md\n {2}- Mockups: .*DEMO-3-cart\/Main\.dc\.html/);
@@ -226,11 +265,18 @@ test('the loop debates, fixes, commits and re-reviews with fresh critics until 1
     ],
     'pr-check-judge': [upheldRound, { result: { score: 10, lensScores: {}, summary: 'all met', rulings: [] } }],
     'pr-check-fixer': [{ writeImpl: 'src/Basket/Coupons.cs', result: { fixed: ['ACC-1-1'], notFixed: [], summary: 'reject expired' } }],
+    'stage-orchestrator': [{ result: { decision: 'delegate', reason: 'the fixer has the context', guidance: [{ what: 'the coupon expiry check', where: 'src/Basket/Coupons.cs:1', do: 'change' }] } }],
   });
   assert.equal(r.status, 0, r.stderr);
   const result = JSON.parse(r.stdout);
   assert.deepEqual([result.verdict, result.score, result.rounds, result.commits.length], ['PASS', 10, 2, 1]);
-  assert.deepEqual(calls(), { 'pr-check-acceptance': 3, 'pr-check-flow': 2, 'pr-check-style': 2, 'pr-check-defender': 2, 'pr-check-judge': 2, 'pr-check-fixer': 1, 'stage-orchestrator': 1 }, 'the orchestrator decided once who fixes: unscripted, it delegated to the fixer');
+  assert.deepEqual(calls(), { 'pr-check-acceptance': 3, 'pr-check-flow': 2, 'pr-check-style': 2, 'pr-check-defender': 2, 'pr-check-judge': 2, 'pr-check-fixer': 1, 'stage-orchestrator': 1 }, 'the orchestrator decided once who fixes, and delegated to the fixer');
+  // Council r1 (opus F2): the critics of the round after the fix check the fix against the guidance its writer had.
+  const prompts = fs.readFileSync(`${scriptFile}.prompts.log`, 'utf8');
+  const guided = /worked to this guidance[\s\S]*change here: the coupon expiry check \(`src\/Basket\/Coupons\.cs:1`\)/;
+  const section = (agent, n) => prompts.split(/^=== /m).find((p) => p.startsWith(`${agent} #${n}`)) ?? '';
+  assert.match(section('pr-check-flow', 2), guided, 'round 2 critic');
+  assert.doesNotMatch(section('pr-check-flow', 1), guided, 'round 1 had no writer yet');
   assert.match(sh('git', ['log', '-1', '--format=%s']), /DEMO-1: PR check round 1 fixes/);
   assert.notEqual(sh('git', ['rev-parse', 'HEAD^']).trim(), sh('git', ['rev-parse', 'HEAD']).trim());
   assert.equal(sh('git', ['rev-parse', 'HEAD^']).trim(), head);
@@ -253,6 +299,36 @@ test('the loop debates, fixes, commits and re-reviews with fresh critics until 1
 // Delivery fix mode (implement.prCheck.mode fix): the loop stops once nothing major or worse is upheld.
 // Council r3 (T8, sol-01): the one pass decision, through real runs: no judge result, or the judge's 9.4 with no lens
 // scores and nothing upheld, is neither PASS nor (with --until major) ACCEPTED.
+// Council r2 (sol-07): the PR check keeps who fixes for the whole check, but every fix round gets guidance for its own
+// findings: round 2's fix (a hand-rounded tax) does not get round 1's guidance (the coupon expiry check), and round 3's
+// critics check that fix against what its writer had.
+test('sol-07 r2: each PR check fix round gets its own guidance; the decision of who fixes is kept', () => {
+  const tax = { severity: 'blocking', title: 'The tax is rounded by hand', detail: 'the rate is configured', evidence: 'src/Basket/Coupons.cs:1', requirement: 'AC 1', fix: 'use the configured tax rate' };
+  const r = prCheck(['--json'], {
+    'pr-check-acceptance': [{ result: { lens: 'acceptance', score: 6, summary: 'AC 2', coverage: rowsAc2Unmet, findings: [expiredCoupon] } }, clean('acceptance')],
+    'pr-check-flow': [clean('flow'), { result: { lens: 'flow', score: 6, summary: 'tax', coverage: [], findings: [tax] } }, clean('flow')],
+    'pr-check-style': [clean('style')],
+    'pr-check-defender': [{ result: { responses: [{ id: 'ACC-1-1', position: 'concede', argument: 'true' }] } }, { result: { responses: [{ id: 'FLOW-2-1', position: 'concede', argument: 'true' }] } }],
+    'pr-check-judge': [upheldRound, { result: { score: 6, lensScores: { flow: 6 }, summary: 'tax', rulings: [{ id: 'FLOW-2-1', ruling: 'upheld', severity: 'blocking', reason: 'conceded', fix: 'use the configured tax rate' }] } }, { result: { score: 10, lensScores: {}, summary: 'ok', rulings: [] } }],
+    'pr-check-fixer': [{ writeImpl: 'src/Basket/Coupons.cs', result: { fixed: ['ACC-1-1'], notFixed: [], summary: 'reject expired' } }, { writeFiles: { 'src/Basket/Coupons.cs': '// coupons, expiry and tax\n' }, result: { fixed: ['FLOW-2-1'], notFixed: [], summary: 'tax from settings' } }],
+    'stage-orchestrator': [
+      { result: { decision: 'delegate', reason: 'the fixer has the context', guidance: [{ what: 'the coupon expiry check', where: 'src/Basket/Coupons.cs:1', do: 'change' }] } },
+      { result: { guidance: [{ what: 'the configured tax rate', where: 'src/Basket/TaxOptions.cs:7', do: 'reuse' }] } },
+    ],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).rounds, 3);
+  assert.equal(calls()['stage-orchestrator'], 2);
+  const prompts = fs.readFileSync(`${scriptFile}.prompts.log`, 'utf8');
+  const section = (agent, n) => prompts.split(/^=== /m).find((x) => x.startsWith(`${agent} #${n}`)) ?? '';
+  assert.match(section('pr-check-fixer', 1), /the coupon expiry check/);
+  assert.match(section('pr-check-fixer', 2), /reuse: the configured tax rate \(`src\/Basket\/TaxOptions\.cs:7`\)/);
+  assert.doesNotMatch(section('pr-check-fixer', 2), /the coupon expiry check/, 'no stale guidance');
+  // Council r3 (T1): the guidance block itself (not the earlier findings' fix text), and none of round 1's.
+  assert.match(section('pr-check-flow', 3), /worked to this guidance[\s\S]*reuse: the configured tax rate \(`src\/Basket\/TaxOptions\.cs:7`\)/, 'round 3 checks the round-2 fix against its own guidance');
+  assert.doesNotMatch(section('pr-check-flow', 3), /the coupon expiry check/, 'not round 1\'s guidance');
+});
+
 test('a real PR check run passes only on a valid judged score: no judge result fails, and 9.4 with no lens scores fails, also with --until major', () => {
   const critics = { 'pr-check-acceptance': [clean('acceptance')], 'pr-check-flow': [clean('flow')], 'pr-check-style': [clean('style')] };
   const unjudged = prCheck(['--no-fix', '--json'], { ...critics, 'pr-check-judge': [{ result: null }] });
@@ -685,6 +761,50 @@ test('a manual check killed during a fix resumes from that fix, not from the sta
   assert.deepEqual(rounds.filter((x) => x.stage === 'prCheck' && x.check === checkRun).map((x) => x.round).sort(), [1, 2]);
 });
 
+// Council r3 (sol-07): the member's probe. Round 1's fix commits with the orchestrator's guidance (the coupon expiry
+// check) and the round is saved done; the check is killed as round 2's critics start. Resumed in a new process, round 2's
+// critics check the fix against that guidance, as an uninterrupted check's do.
+test('sol-07 r3: a check resumed after a committed fix judges it with the guidance the fix had', () => {
+  write('src/Basket/Coupons.cs', '// coupons v7\n');
+  sh('git', ['add', '-A']);
+  sh('git', ['commit', '-qm', 'DEMO-1: coupons v7']);
+  const progressFile = '.factory/state/pr-check/DEMO-1/progress.json';
+  const progress = () => JSON.parse(fs.readFileSync(path.join(repo, progressFile), 'utf8'));
+  const script = {
+    'pr-check-acceptance': [{ result: { lens: 'acceptance', score: 6, summary: 'AC 2', coverage: rowsAc2Unmet, findings: [expiredCoupon] } }, { killPidIn: progressFile, ...clean('acceptance') }, clean('acceptance')],
+    'pr-check-flow': [clean('flow')],
+    'pr-check-style': [clean('style')],
+    'pr-check-defender': [{ result: { responses: [{ id: 'ACC-1-1', position: 'concede', argument: 'true' }] } }],
+    'pr-check-judge': [upheldRound, { result: { score: 10, lensScores: {}, summary: 'all met', rulings: [] } }],
+    'pr-check-fixer': [{ writeImpl: 'src/Basket/Coupons.cs', result: { fixed: ['ACC-1-1'], notFixed: [], summary: 'reject expired' } }],
+    'stage-orchestrator': [{ result: { decision: 'delegate', reason: 'the fixer has the context', guidance: [{ what: 'the existing expiry helper', where: 'src/Basket/Coupons.cs:1', do: 'reuse' }] } }],
+  };
+  const killed = prCheck(['--json'], script);
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr.slice(-1500));
+  assert.deepEqual([progress().loop.round, progress().loop.phase], [1, 'done']);
+  assert.deepEqual(progress().loop.guidance.map((g) => g.what), ['the existing expiry helper'], 'the round is saved with its fix\'s guidance');
+  // The same script and call counts: the resumed round 2 takes the next steps.
+  const env = { ...process.env, FACTORY_METRICS_SHARD: '1', PIPELINE_AGENT_CMD: `"${process.execPath}" "${fakeAgent}"`, PIPELINE_FAKE_SCRIPT: scriptFile, PIPELINE_BASE_REF: 'main' };
+  for (const k of ['PIPELINE_CHILD', 'PIPELINE_DISABLE']) delete env[k];
+  const resumed = spawnSync(process.execPath, ['scripts/pr-check/pr-check.mjs', 'run', '--story', 'DEMO-1', '--resume', '--json'], { cwd: repo, encoding: 'utf8', env });
+  assert.equal(resumed.status, 0, resumed.stderr.slice(-1500));
+  assert.deepEqual([JSON.parse(resumed.stdout).verdict, JSON.parse(resumed.stdout).rounds], ['PASS', 2]);
+  const prompts = fs.readFileSync(`${scriptFile}.prompts.log`, 'utf8');
+  const section = (agent, n) => prompts.split(/^=== /m).find((x) => x.startsWith(`${agent} #${n}`)) ?? '';
+  assert.match(section('pr-check-fixer', 1), /the existing expiry helper/);
+  assert.match(section('pr-check-acceptance', 3), /worked to this guidance[\s\S]*the existing expiry helper/, 'the resumed critic has the fix\'s guidance');
+  // Killed while the fixer works: the fix phase is saved with that fix's guidance before the fixer starts, so a fix
+  // that commits before the interruption resumes with it.
+  write('src/Basket/Coupons.cs', '// coupons v7b\n');
+  sh('git', ['add', '-A']);
+  sh('git', ['commit', '-qm', 'DEMO-1: coupons v7b']);
+  const duringFix = prCheck(['--json'], { ...script, 'pr-check-acceptance': [script['pr-check-acceptance'][0], clean('acceptance')], 'pr-check-fixer': [{ writeImpl: 'src/Basket/Coupons.cs', killPidIn: progressFile }, script['pr-check-fixer'][0]] });
+  assert.equal(duringFix.signal, 'SIGKILL', duringFix.stderr.slice(-1500));
+  assert.deepEqual([progress().loop.round, progress().loop.phase, progress().loop.guidance.map((g) => g.what)], [1, 'fix', ['the existing expiry helper']]);
+  const finished = spawnSync(process.execPath, ['scripts/pr-check/pr-check.mjs', 'run', '--story', 'DEMO-1', '--resume', '--json'], { cwd: repo, encoding: 'utf8', env });
+  assert.equal(JSON.parse(finished.stdout).verdict, 'PASS', finished.stderr.slice(-1500));
+});
+
 test('a background check whose process died is restarted, escalated after repeated crashes, and retried with --force', async () => {
   write('.factory/state/active-story', 'DEMO-1\n');
   write('src/Basket/Coupons.cs', '// coupons v8\n');
@@ -811,6 +931,26 @@ test('carryOver: a minor-only fix re-runs only the lenses its findings were on; 
   assert.deepEqual(carryOver(ctx, history([{ lens: 'design', id: 'UI-2-1', severity: 'minor' }]), gitWith(['src/WebApp/Components/Pages/User/Orders.razor.css'])), { flow: 10, style: 10 }, 'the UI changed: video runs again, the design lens runs on its finding');
   assert.deepEqual(carryOver(ctx, history([{ lens: 'design', id: 'UI-2-1', severity: 'minor' }]), gitWith(['src/Catalog.API/a.cs'])), { flow: 10, style: 10, video: 10 });
   assert.deepEqual(carryOver(ctx, history([{ lens: 'design', id: 'UI-1-1', severity: 'major' }]), gitWith(['src/Catalog.API/a.cs'])), { video: 10 }, 'a major fix: the code lenses run');
+});
+
+// Council r2 (sol-10): the fixed clean-code seat is never carried. The member's reproducers: a panel whose minor flow
+// fix touched production code, and a council whose fixed seat (named code-style) judged a round before a test change.
+test('sol-10: the clean-code seat sits again on every changed tree, in the panel and in a council', async () => {
+  const { carryOver, councilLenses } = await import('../lib/loop.mjs');
+  const gitWith = (files) => () => ({ stdout: files.join('\n') });
+  const panel = { workRoot: '/r', frontendHit: () => false, videoKey: 'v1' };
+  const minorFlow = [{ fix: { commit: 'abc' }, lensScores: { acceptance: 10, flow: 9, style: 10, 'clean-code': 10 }, upheld: [{ lens: 'flow', id: 'FLW-1-1', severity: 'minor' }], videoKey: 'v1' }];
+  assert.deepEqual(carryOver(panel, minorFlow, gitWith(['src/order.js'])), { style: 10 });
+  const council = { councilPassScore: 9, members: [{ name: 'opus', lens: 'correctness' }, { name: 'sol', lens: 'test-value' }, { name: 'code-style', lens: 'clean-code', fixed: true }] };
+  const ctx = { workRoot: '/r', council, councilLenses: councilLenses(council), frontendHit: () => false, videoKey: 'v1' };
+  const majorFix = [{ fix: { commit: 'abc' }, lensScores: { acceptance: 10, opus: 6, sol: 10, 'code-style': 10 }, upheld: [{ lens: 'opus', id: 'OPUS-1-1', severity: 'major' }], videoKey: 'v1' }];
+  const carried = carryOver(ctx, majorFix, gitWith(['tests/order.test.js']));
+  assert.ok(!('code-style' in carried), JSON.stringify(carried));
+  assert.ok(!('code-style' in carryOver(ctx, majorFix, gitWith(['src/order.js']))));
+  // Council r3 (TV-9): the council's minor-only path too. A minor opus fix that only touched a test: the fixed seat
+  // (named code-style, so only its `fixed` mark says what it is) scored 10 and sits again.
+  const minorFix = [{ fix: { commit: 'abc' }, lensScores: { acceptance: 10, opus: 9, sol: 10, 'code-style': 10 }, upheld: [{ lens: 'opus', id: 'OPUS-1-1', severity: 'minor' }], videoKey: 'v1' }];
+  assert.deepEqual(carryOver(ctx, minorFix, gitWith(['tests/order.test.js'])), {});
 });
 
 // A minor-only fix carried a council member with the acceptance lens when it was not named `acceptance`.
@@ -961,7 +1101,7 @@ test('the check after a CI fix round does not re-check the CI finding; it can pa
     'pr-check-acceptance': [clean('acceptance')],
     'pr-check-flow': [clean('flow')],
     'pr-check-style': [clean('style')],
-    'pr-check-judge': [{ result: { score: 8, lensScores: { acceptance: 10, style: 10 }, summary: 'ci unverifiable', rulings: [{ id: 'flow-coverage-1', ruling: 'upheld', severity: 'major', title: "Coverage gap: the flow critic rated 'CI-1: record check passes on PR head' unverifiable", reason: 'no evidence CI-1 passes on the head yet' }] } }],
+    'pr-check-judge': [{ result: { score: 8, lensScores: { acceptance: 10, style: 10, 'clean-code': 10 }, summary: 'ci unverifiable', rulings: [{ id: 'flow-coverage-1', ruling: 'upheld', severity: 'major', title: "Coverage gap: the flow critic rated 'CI-1: record check passes on PR head' unverifiable", reason: 'no evidence CI-1 passes on the head yet' }] } }],
   });
   const out = JSON.parse(r.stdout);
   assert.deepEqual([out.verdict, out.rounds], ['PASS', 2], r.stderr.slice(-600));

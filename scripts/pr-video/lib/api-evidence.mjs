@@ -377,16 +377,8 @@ function maskStructured(text, audit, depth = 0) {
   while (stack.length > 1) stack.pop().entry.end = n;
   // Then from the top down, so a card container (b) and a card key (a) reach every value beneath them.
   finish(root, false, null);
-  if (!edits.length) return text;
-  edits.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
-  let out = '';
-  let at = 0;
-  for (const [start, end, replacement] of edits) {
-    if (start < at) continue; // inside an edit already made (a masked object)
-    out += text.slice(at, start) + replacement;
-    at = end;
-  }
-  return out + text.slice(at);
+  // An edit inside one already made (a masked object) is skipped (splice).
+  return splice(text, edits.sort((a, b) => a[0] - b[0] || b[1] - a[1]));
 }
 
 // ---- any text -------------------------------------------------------------------------------------------------------
@@ -494,7 +486,8 @@ export function cleanEvidenceText(raw, { env = process.env, audit = null } = {})
   return { text: out, hits, values, residual, cardKeys };
 }
 
-// Non-overlapping [start, end, replacement] edits (sorted by start) applied to `text`.
+// [start, end, replacement] edits (sorted by start) applied to `text`; an edit that starts inside one already applied is
+// skipped.
 function splice(text, edits) {
   if (!edits.length) return text;
   let at = 0;

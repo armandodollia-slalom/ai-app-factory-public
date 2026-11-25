@@ -8,7 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const { analysisGate, analysisGateSection, GATE_METRICS, whyNotRun } = await import('../lib/analysis-gate.mjs');
+const { analysisGate, analysisGateSection, whyNotRun } = await import('../lib/analysis-gate.mjs');
+const { GATE_METRICS } = await import('../../pipeline/lib/analysis/fixloop.mjs');
 const { prAnalysisSection } = await import('../../pipeline/lib/analysis/fixloop.mjs');
 const { readMetricsLocal } = await import('../../pipeline/lib/state.mjs');
 const { KNOWN_STREAMS } = await import('../../pipeline/lib/sink.mjs');

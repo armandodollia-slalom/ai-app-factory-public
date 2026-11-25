@@ -13,6 +13,9 @@ import { autoFix, recordPrefixes, runSlot, slotHash, touchedFiles, uncommittedIn
 import { isTestFile, testRunners } from '../../../feature-verification/lib/runners.mjs';
 import { setting } from '../settings.mjs';
 
+// The pre-push analysis gate's records (implement/lib/analysis-gate.mjs writes them; the report reads them).
+export const GATE_METRICS = 'analysis-gate.jsonl';
+
 export const FINDINGS_FILE = 'analysis-findings.jsonl';
 export const RUNS_FILE = 'analysis-runs.jsonl';
 
@@ -76,6 +79,8 @@ export function recordAnalysis(config, { story, stage, step = null, round = null
       open: report.findings.length,
       blocking: report.findings.filter((f) => f.severity === 'blocking').length,
       suppressions: report.suppressions?.length ?? 0,
+      // What the clean-code tools reported on this ticket's change (GEN-17), beside what its clean-code member upheld.
+      cleanCode: cleanCodeCounts(report),
       toolWallMs: report.fixLoop?.toolWallMs ?? report.tools.reduce((n, t) => n + (t.wallMs ?? 0), 0),
       ...tags,
     });
@@ -88,6 +93,15 @@ export function recordAnalysis(config, { story, stage, step = null, round = null
   } catch {
     /* metrics are best effort */
   }
+}
+
+// The clean-code tools' items of a report by kind: clones (jscpd), breaches (lizard's complexity and length) and
+// repeats (the repeated-values check).
+const KIND = { 'code-clone': 'clones', 'high-complexity': 'breaches', 'long-function': 'breaches', 'repeated-default': 'repeats', 'repeated-constant': 'repeats' };
+export function cleanCodeCounts(report) {
+  const counts = { clones: 0, breaches: 0, repeats: 0 };
+  for (const f of report?.cleanCode ?? []) if (KIND[f.rule]) counts[KIND[f.rule]] += 1;
+  return counts;
 }
 
 // The report for the head of `cwd`: one any slot already wrote for that commit (the pair rounds, the story, another PR
@@ -145,7 +159,7 @@ export function prAnalysisSection(config, keys, { cwd = config.root, head = null
   const distinct = new Set(observed.map((r) => r.id ?? `${r.tool}|${r.rule}|${r.file}|${r.line}`)).size;
   // CI's analysis jobs as the pre-push gate ran them here (its newest run for these stories): what ran, what could not
   // and why, so a job CI alone decided is visible in the report, not only in a log line.
-  const gateRows = readMetricsLocal(config, 'analysis-gate.jsonl').filter((r) => keys.includes(r.story) || (r.stories ?? []).some((k) => keys.includes(k)));
+  const gateRows = readMetricsLocal(config, GATE_METRICS).filter((r) => keys.includes(r.story) || (r.stories ?? []).some((k) => keys.includes(k)));
   const lastTs = gateRows.reduce((m, r) => (r.ts > m ? r.ts : m), '');
   const gate = gateRows.filter((r) => r.ts === lastTs);
   const gateLines = gate.length
@@ -186,6 +200,7 @@ export function analysedAncestor(config, cwd, sha, { base = null } = {}) {
 
 // Generic test locations and names (any language), for repositories without configured test runners.
 const TEST_PATH = /(^|\/)(tests?|specs?|e2e|__tests__)\/|[Tt]ests?\.(cs|[cm]?[jt]sx?|py|java|kt|go)$|\.(spec|test)\.[cm]?[jt]sx?$|_test\.(go|py)$/;
+export const isGenericTestPath = (file) => TEST_PATH.test(file);
 
 // Sorts changed files into { production, tests, fromBase }: `fromBase`, files this change itself does not touch (they
 // differ from the head only because the base was merged in; known only with `base`); `tests`, test plans, scenarios and

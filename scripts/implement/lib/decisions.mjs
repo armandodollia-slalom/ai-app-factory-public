@@ -5,16 +5,15 @@
 // metrics in subtask-runs.jsonl and decision-outcomes.jsonl. Everything joins on `decisionId` (one per
 // accepted plan; `decision_id` in decisions.jsonl) and `subtaskId`. Builders, attribution and labeling
 // are pure.
-import { DECISIONS_FILE as SHARED_DECISIONS_FILE } from '../../pipeline/lib/decisions.mjs';
+import { DECISIONS_FILE as SHARED_DECISIONS_FILE, PLAN_STAGE, VERIFY_STAGE } from '../../pipeline/lib/decisions.mjs';
 import { matchesAny } from './plan.mjs';
 import { defaultSettings } from '../../pipeline/lib/settings.mjs';
 
 export const DECISIONS_FILE = SHARED_DECISIONS_FILE;
-export const PLAN_STAGE = 'implement-plan';
-export const VERIFY_STAGE = 'implement-verify';
+export { PLAN_STAGE, VERIFY_STAGE };
 export const SUBTASK_RUNS_FILE = 'subtask-runs.jsonl';
 export const OUTCOMES_FILE = 'decision-outcomes.jsonl';
-// The PR check's per-round records (scripts/pr-check/lib/loop.mjs CHECKS_FILE): upheld design findings
+// The PR check's per-round records (written by scripts/pr-check/lib/loop.mjs): upheld design findings
 // there are the ones the UI verifier did not catch.
 export const PR_CHECKS_FILE = 'pr-checks.jsonl';
 
@@ -73,7 +72,9 @@ export function decisionRecord({ ts, key, decisionId, attempt, accepted, errors 
 
 // A plan attempt (from decisionRecord) as a shared decision-log entry: decision plan-written,
 // plan-rejected or blocked; items are the subtasks with the orchestrator's reasons for each choice.
-export function planDecisionLog(rec, { blocked = false } = {}) {
+// `searches`: the graphify and language-server searches of the plan run (GEN-15: the orchestrator searches before it
+// guides).
+export function planDecisionLog(rec, { blocked = false, searches = null } = {}) {
   return {
     stage: PLAN_STAGE,
     story: rec.story,
@@ -89,6 +90,7 @@ export function planDecisionLog(rec, { blocked = false } = {}) {
     split_reason: rec.splitReason,
     rejection_reasons: rec.rejectionReasons,
     orchestrator: { cli: rec.orchestrator.cli, model: rec.orchestrator.model },
+    searches,
     features: rec.features,
     items: rec.subtasks.map((st) => ({ ...st, reason: st.modelReason ?? null })),
   };

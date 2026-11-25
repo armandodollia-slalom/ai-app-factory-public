@@ -47,6 +47,8 @@ before(() => {
     fs.copyFileSync(path.join(source, 'scripts', d, f), path.join(repo, 'scripts', d, f));
   }
   fs.cpSync(path.join(source, 'agents'), path.join(repo, 'agents'), { recursive: true });
+  // The clean-code skill the writers' and orchestrators' prompts are built from (it includes the council skill's lists).
+  for (const skill of ['clean-code', 'council']) fs.cpSync(path.join(source, 'skills', skill), path.join(repo, 'skills', skill), { recursive: true });
   const fvConfig = JSON.parse(fs.readFileSync(path.join(repo, 'scripts/feature-verification/config.json'), 'utf8'));
   fvConfig.featureVerification.precheck.runTests = false;
   write(repo, 'scripts/feature-verification/config.json', JSON.stringify(fvConfig, null, 2));
@@ -128,13 +130,14 @@ test('implement run (orchestrated): plan, pairs, merges, integration, review loo
   assert.deepEqual([story.outcome, story.decisionId, story.reviewBlocks], ['done', decision.decisionId, 1]);
   const run = jsonl(path.join(metrics, 'implement-runs.jsonl'))[0];
   // One more verifier run for the review fix, and the pair verifier's one-seat council pick: the orchestrator is asked
-  // twice (the fake gives no pick, so the harness seats the stage's own verifier).
-  assert.deepEqual([run.mode, run.subtasks, run.agent_runs], ['delegate', 2, 10], 'one more verifier run: the review fix; two council-pick runs');
+  // twice (the fake gives no pick, so the harness seats the stage's own verifier). The clean-code seat sits on each of
+  // the three pair councils (catalog, basket, the review fix).
+  assert.deepEqual([run.mode, run.subtasks, run.agent_runs], ['delegate', 2, 13], 'one more verifier run: the review fix; two council-pick runs; three clean-code seat runs');
   assert.equal(sh(wt, 'git', ['log', '-1', '--format=%s']), 'DEMO-1: Add verified test plan and automated tests');
   assert.match(sh(wt, 'git', ['show', '--stat', '--format=', 'HEAD']), /decision-outcomes\.jsonl/);
 
   const status = pipeline(['implement', 'status']);
-  assert.match(status.stdout, /DEMO-1 +finished +done[\s\S]*delegate \(decision [0-9a-f]{8}\), 10 agent runs[\s\S]*catalog +merged/);
+  assert.match(status.stdout, /DEMO-1 +finished +done[\s\S]*delegate \(decision [0-9a-f]{8}\), 13 agent runs[\s\S]*catalog +merged/);
 
   fs.cpSync(metrics, path.join(repo, '.factory/metrics'), { recursive: true });
   const report = pipeline(['implement', 'decisions', '--story', 'DEMO-1', '--json']);

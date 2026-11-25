@@ -12,17 +12,19 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain } from '../pipeline/lib/util.mjs';
 import { parseArgs, readPayload, requireStory, runMain } from '../pipeline/lib/cli.mjs';
 import { INSTALL_ROOT, isDisabled, loadConfig } from '../pipeline/lib/config.mjs';
 import { git, git as gitIn } from '../pipeline/lib/git.mjs';
-import { lockFile, metricsFile, readMetricsLocal } from '../pipeline/lib/state.mjs';
+import { lockFile, RUN_CONDITIONS_FILE, metricsFile, readMetricsLocal } from '../pipeline/lib/state.mjs';
 import { activeStory } from '../pipeline/lib/stories.mjs';
 import { acquireLock, appendJsonl, log, lockHolder, nowIso, readJson, releaseLock, selfProcess, setLogTag, sha, writeJson } from '../pipeline/lib/util.mjs';
 import { renderMockups } from '../implement/lib/mockups.mjs';
 import { isClean, removeCheckout, resolveTarget } from './lib/context.mjs';
 import { commentOnPullRequest } from './lib/github.mjs';
 import { hookRun, hookStop, recheck, recoverHookRuns, resetPrCheck, sessionContext } from './lib/hooks.mjs';
-import { CHECKS_FILE, LENSES, runPrCheck } from './lib/loop.mjs';
+import { LENSES, runPrCheck } from './lib/loop.mjs';
+import { PR_CHECKS_FILE } from '../implement/lib/decisions.mjs';
 import { renderReport } from './lib/report.mjs';
 import { interruptedRuns, readProgress, resumeRuns, writeProgress } from './lib/runs.mjs';
 import { extractVideoFrames, videoSources } from './lib/video.mjs';
@@ -507,7 +509,7 @@ async function runCheck(config, flags) {
 }
 
 function metrics(config, since) {
-  const records = readMetricsLocal(config, CHECKS_FILE).filter((r) => !since || r.ts >= since);
+  const records = readMetricsLocal(config, PR_CHECKS_FILE).filter((r) => !since || r.ts >= since);
   const targets = new Map();
   for (const r of records) targets.set(r.target, r);
   const finals = [...targets.values()];
@@ -565,7 +567,7 @@ async function main() {
       const base = String(flags.base ?? setting(config, 'baseRef'));
       const { ciFixRounds } = await import('../implement/lib/ci-wait.mjs');
       const ci = await ciGate({ config, ciOptions: { ciSettings: config.implement?.reviewGate?.ci ?? {} }, fixRounds: flags['fix-rounds'] != null ? Number(flags['fix-rounds']) : ciFixRounds(config.implement), repo: config.board?.repo, pr, branch, cwd: config.root, prCheckCli: fileURLToPath(import.meta.url), targetArgs, base, seedFile: path.join(config.root, config.stateDir, 'pr-check', `ci-gate-${String(pr).split('/').pop()}.json`), log });
-      appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: nowIso(), kind: 'ci', pr, state: ci.state, flaky: ci.flaky ?? [], fixed: ci.fixed ?? false, rounds: ci.rounds ?? 0, ...(ci.fixRun ? { fixVerdict: ci.fixRun.verdict } : {}) }]);
+      appendJsonl(metricsFile(config, RUN_CONDITIONS_FILE), [{ ts: nowIso(), kind: 'ci', pr, state: ci.state, flaky: ci.flaky ?? [], fixed: ci.fixed ?? false, rounds: ci.rounds ?? 0, ...(ci.fixRun ? { fixVerdict: ci.fixRun.verdict } : {}) }]);
       // What a person must decide never stays on this disk (council C7): the tickets fail on the board with the options
       // on the ticket and the PR, and the gate holds the merge at any severity.
       const { deliveryDecision } = await import('../implement/lib/ci-wait.mjs');
@@ -707,11 +709,4 @@ export function reverifyAfterFixes(config, ctx, deps = {}, { scoped = false } = 
 }
 
 // Run as a command (not when a test imports reverifyAfterFixes).
-const entry = (() => {
-  try {
-    return fs.realpathSync(process.argv[1] ?? '') === fs.realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-})();
-if (entry) runMain(main, 'pr-check');
+if (isMain(import.meta.url)) runMain(main, 'pr-check');

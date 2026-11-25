@@ -7,7 +7,6 @@ import { writeText } from '../../pipeline/lib/redact.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { INSTALL_ROOT, loadConfig } from '../../pipeline/lib/config.mjs';
-import { git } from '../../pipeline/lib/git.mjs';
 import { changedFiles, lintChanged } from '../../pipeline/lib/lint.mjs';
 import { run as defaultRun, tail } from '../../pipeline/lib/util.mjs';
 
@@ -83,8 +82,6 @@ export function paritySection(results) {
 
 // Parity failures as PR check findings, for the fixing loop (`pr-check run --fix-first`).
 export const parityFindings = (results) => results.filter((r) => !r.ok).map((r, i) => ({ id: `CI-${i + 1}`, lens: 'style', severity: 'major', title: `CI check fails before the PR: ${r.check}`, detail: r.output, evidence: r.output.split('\n')[0] ?? '', requirement: 'The pull request passes every check CI runs on it.', fix: 'Make this check pass: fix the reported lines (formatting, lint, generated files or verified tests) without changing behavior.' }));
-
-export const gitHead = (root) => git(root, ['rev-parse', 'HEAD']).stdout.trim();
 
 // Before a PR opens: every parity check; failures go through the PR check's fixing loop as findings
 // (`pr-check run --fix-first`, one more time at most), then the checks run again. Returns

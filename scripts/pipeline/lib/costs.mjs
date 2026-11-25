@@ -2,8 +2,9 @@
 // itemized by ticket and stage, and the long-term overview by epic, stage, model and month.
 import { listEpics } from './stories.mjs';
 import { loadUsage } from './usage.mjs';
+import { LESSONS_STAGE, VERIFY_STAGE } from './decisions.mjs';
 
-export const STAGE_ORDER = ['implement', 'implement-pair', 'implement-verify', 'implement-ui-verify', 'review', 'plan', 'plan-verify', 'automation', 'automation-verify', 'pr-check', 'lessons'];
+export const STAGE_ORDER = ['implement', 'implement-pair', VERIFY_STAGE, 'implement-ui-verify', 'review', 'plan', 'plan-verify', 'automation', 'automation-verify', 'pr-check', LESSONS_STAGE];
 
 const stageRank = (s) => (STAGE_ORDER.includes(s) ? STAGE_ORDER.indexOf(s) : STAGE_ORDER.length);
 const byStage = (a, b) => stageRank(a.stage) - stageRank(b.stage) || a.stage.localeCompare(b.stage);

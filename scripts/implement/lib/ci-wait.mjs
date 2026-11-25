@@ -291,6 +291,13 @@ export function parseFlaky(log) {
   return [...new Set(out)];
 }
 
+// The retried tests the successful runs' logs name, once each. No successful run for the head yet is not "no retried
+// test": the check has nothing to read (council C9), so null.
+function flakyIn(ci, runs) {
+  const passed = runs.filter((r) => r.conclusion === 'success');
+  return passed.length ? [...new Set(passed.flatMap((r) => parseFlaky(ci.log(r.id))))] : null;
+}
+
 // Null when the logs cannot be read (a gh call failed or timed out after its retries) or the head has no successful run
 // to read yet: the retry check did not run,
 // which is never the same as "no retried test" (council C12: a hung gh call must not end as a silent pass).
@@ -300,12 +307,7 @@ export function ciFlaky(target, repo, pr) {
     if (ci.capabilities?.logs === false) return null;
     const head = host.pr.get(pr)?.headSha;
     if (!head) return null;
-    const runs = ci.runs({ head, limit: 30 });
-    // No run for the head yet is not "no retried test": the check has nothing to read (council C9).
-    if (!runs.some((r) => r.conclusion === 'success')) return null;
-    const out = [];
-    for (const r of runs.filter((x) => x.conclusion === 'success')) out.push(...parseFlaky(ci.log(r.id)));
-    return [...new Set(out)];
+    return flakyIn(ci, ci.runs({ head, limit: 30 }));
   } catch {
     return null;
   }
@@ -380,11 +382,7 @@ export function branchFlaky(where) {
       const { ci } = ciTarget(target, repo);
       if (ci.capabilities?.logs === false) return null;
       const head = where.head();
-      const runs = ci.runs({ head, limit: 30 }).filter((r) => r.sha === head || !r.sha);
-      if (!runs.some((r) => r.conclusion === 'success')) return null;
-      const out = [];
-      for (const r of runs.filter((x) => x.conclusion === 'success')) out.push(...parseFlaky(ci.log(r.id)));
-      return [...new Set(out)];
+      return flakyIn(ci, ci.runs({ head, limit: 30 }).filter((r) => r.sha === head || !r.sha));
     } catch {
       return null;
     }

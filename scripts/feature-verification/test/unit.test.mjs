@@ -396,3 +396,14 @@ test('a plan stamp that is all digits stays a hash: written quoted, read back as
   const { ticketSha } = await import('../../pipeline/lib/stories.mjs');
   assert.ok(storyMatches(parseFrontMatter(`---\nstory-sha: ${ticketSha(story)}\n---\n`).data['story-sha'], story));
 });
+
+// Council r3 (test-value follow-up): a round's guidance is the orchestrator's decision's own only on the first round of
+// the run that made the decision; a resumed run (its decision saved) asks again on its first round, which addresses the
+// saved feedback, and every later round asks again.
+test('test automation: only the deciding run\'s first round takes the decision\'s guidance; a resumed first round asks again', async () => {
+  const { decisionRound } = await import('../lib/workflows.mjs');
+  const saved = { round: 2, orchestrator: { decision: 'delegate', guidance: [{ what: 'round 1 helper' }] } };
+  assert.deepEqual([decisionRound(1, 1, null), decisionRound(2, 1, null)], [true, false], 'a fresh run');
+  assert.deepEqual([decisionRound(2, 2, saved), decisionRound(3, 2, saved)], [false, false], 'a resumed run');
+  assert.equal(decisionRound(2, 2, { round: 2 }), true, 'a resumed run whose decision was not saved decides again');
+});

@@ -1,6 +1,7 @@
 ---
 name: test-automation
 description: Test automation engineer of the feature verification stage. Builds a test stack scenario and automated integration tests that implement a story's verified test plan case by case.
+clean-code: writer
 ---
 
 # Test automation agent

@@ -12,9 +12,15 @@
 //     the next `implement run` re-runs them with the decisions in every agent prompt.
 import fs from 'node:fs';
 import path from 'node:path';
-import { extractResult, nowIso, tail } from '../../pipeline/lib/util.mjs';
+import { escapeRe, extractResult, nowIso, tail } from '../../pipeline/lib/util.mjs';
 import { trackerFor } from './trackers/index.mjs';
 import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
+
+// The id of a question's free-text answer: ticked, its text is the reply that starts with the question's id.
+export const OTHER_ANSWER = 'Other';
+const OTHER_PATTERN = escapeRe(OTHER_ANSWER);
+// An answer line of a question in the escalation comment: `- [x] **A.** text`, or the free-text answer `- [ ] **Other**`.
+const ANSWER_LINE = new RegExp(`^\\s*[-*]\\s+\\[([ xX])\\]\\s+\\*\\*(${OTHER_PATTERN}|[A-Z])\\.?\\*\\*\\s*(.*)$`);
 
 export const resolvedLabel = (config) => setting(config, 'board.resolvedLabel');
 
@@ -139,7 +145,7 @@ export function normalizeQuestions(raw, { max = DEFAULTS.maxQuestions } = {}) {
     const options = (Array.isArray(q?.options) ? q.options : [])
       .map((o) => (typeof o === 'string' ? { text: o } : o))
       .map((o) => ({ text: clean(o?.text ?? o?.label), recommended: Boolean(o?.recommended) }))
-      .filter((o) => o.text && !/^other\b/i.test(o.text))
+      .filter((o) => o.text && !new RegExp(`^${OTHER_PATTERN}\\b`, 'i').test(o.text))
       .slice(0, 3);
     if (!title || options.length < 2) continue;
     const rec = options.findIndex((o) => o.recommended);
@@ -206,7 +212,7 @@ export function renderEscalationComment(config, { key, result = {}, questions = 
   // A ticket skipped because a blocker failed did not run at all: its blocker holds the decision.
   const blocker = result.outcome === 'skipped' ? /^blocker (\S+)/.exec(result.reason ?? '')?.[1] ?? null : null;
   if (blocker) lines.push(`This ticket did not run: its blocker **${blocker}** did not finish. There is nothing to decide here. Resolve ${blocker} first, then tick **Resolved** to re-queue this ticket with it.`, '');
-  else if (questions.length) lines.push(`I need ${questions.length} decision${questions.length > 1 ? 's' : ''} from you. Tick one answer per question; for **Other**, reply in a new comment that starts with \`Qn:\` (for example \`Q1: ...\`).`, '');
+  else if (questions.length) lines.push(`I need ${questions.length} decision${questions.length > 1 ? 's' : ''} from you. Tick one answer per question; for **${OTHER_ANSWER}**, reply in a new comment that starts with \`Qn:\` (for example \`Q1: ...\`).`, '');
   else if (mechanical) lines.push('This looks like a mechanical failure (crash, timeout or agent outage): there is nothing to decide. Fix the cause if there is one, then tick **Resolved** to re-queue the ticket.', '');
   else if (questionsError) lines.push(`I could not prepare questions (${questionsError}). Read the details, fix or decide what is needed (write it in a comment), then tick **Resolved** to re-queue the ticket.`, '');
   else lines.push('No decision is needed from you. Read the details, fix what is needed, then tick **Resolved** to re-queue the ticket.', '');
@@ -214,7 +220,7 @@ export function renderEscalationComment(config, { key, result = {}, questions = 
     lines.push(`### ${q.id}. ${q.title}`, '');
     if (q.context) lines.push(q.context, '');
     for (const o of q.options) lines.push(`- [ ] **${o.id}.** ${o.text}${o.recommended ? ' _(recommended)_' : ''}`);
-    lines.push(`- [ ] **Other** (reply in a new comment that starts with \`${q.id}:\`)`, '');
+    lines.push(`- [ ] **${OTHER_ANSWER}** (reply in a new comment that starts with \`${q.id}:\`)`, '');
   }
   const details = failureDetails(result, { host });
   const count = Array.isArray(result.findings) ? result.findings.length : 0;
@@ -264,7 +270,7 @@ export function parseAnswers(body) {
       q = null;
       continue;
     }
-    const o = /^\s*[-*]\s+\[([ xX])\]\s+\*\*(Other|[A-Z])\.?\*\*\s*(.*)$/.exec(line);
+    const o = ANSWER_LINE.exec(line);
     if (o && q) out.questions[q].options.push({ id: o[2], checked: o[1] !== ' ', text: o[3].replace(/\s*_\(recommended\)_\s*$/, '').trim() });
   }
   return out;
@@ -309,13 +315,13 @@ export function evaluateAnswers(marker, body, later = []) {
       continue;
     }
     const [o] = ticked;
-    if (o.id === 'Other') {
+    if (o.id === OTHER_ANSWER) {
       const reply = replies[mq.id];
       if (!reply?.text) {
-        missing.push(`${mq.id} has "Other" ticked but no \`${mq.id}:\` reply.`);
+        missing.push(`${mq.id} has "${OTHER_ANSWER}" ticked but no \`${mq.id}:\` reply.`);
         continue;
       }
-      answers.push({ id: mq.id, title: q.title, choice: 'Other', text: reply.text, other: true });
+      answers.push({ id: mq.id, title: q.title, choice: OTHER_ANSWER, text: reply.text, other: true });
     } else answers.push({ id: mq.id, title: q.title, choice: o.id, text: o.text, other: false });
   }
   return { complete: !missing.length, missing, answers, resolved: parsed.resolved };
@@ -332,7 +338,7 @@ const D_END = '<!-- pipeline-decisions:end -->';
 const D_INTRO = "A human's answers to the pipeline's escalation questions. Later runs give them to every agent as binding requirements.";
 
 const oneLine = (s) => String(s).replace(/\s+/g, ' ').trim();
-const answerLine = (a) => `- **${a.id}. ${oneLine(a.title)}** ${a.other ? `Other: ${oneLine(a.text)}` : `${a.choice}. ${oneLine(a.text)}`}`;
+const answerLine = (a) => `- **${a.id}. ${oneLine(a.title)}** ${a.other ? `${OTHER_ANSWER}: ${oneLine(a.text)}` : `${a.choice}. ${oneLine(a.text)}`}`;
 
 function parseRounds(inner) {
   const rounds = new Map();

@@ -12,6 +12,7 @@ import { isResolvesQuestion, RESOLVES_ANSWER } from '../../pipeline/test/fixture
 import { loadConfig } from '../../pipeline/lib/config.mjs';
 import { readJsonl } from '../../pipeline/lib/util.mjs';
 import { createContext, orchestrate, runChecks, unitTestRuns } from '../lib/orchestrate.mjs';
+import { cleanCodeSeatAnswer } from '../../pipeline/test/fixtures/clean-code-seat.mjs';
 
 const sh = (cwd, ...args) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -74,6 +75,8 @@ function fakeAgents(script) {
     // Every verifier is a council member: the harness's follow-up question for a missing `resolves` is answered
     // outside the script, so the scripted steps stay the verifier's review rounds.
     if (isResolvesQuestion(opts.task)) return { ok: true, status: 0, timedOut: false, output: RESOLVES_ANSWER, version: 'v1', seconds: 0 };
+    const seat = cleanCodeSeatAnswer(opts, script);
+    if (seat) return seat;
     calls.push(opts);
     const steps = script[opts.name] ?? [];
     const n = calls.filter((c) => c.name === opts.name).length - 1;
@@ -655,4 +658,26 @@ test('a resumed run finds the subtasks already merged into the story branch', as
   for (const m of ['PRICE-1: filter in API v2', 'PRICE-1: Merge subtask api', 'PRICE-1: price range UI', 'PRICE-1: Merge subtask webapp', 'PRICE-1: review-fix-5 (round 3)', 'OTHER-2: Merge subtask api']) g('commit', '-q', '--allow-empty', '-m', m);
   assert.deepEqual([...mergedSubtaskIds(dir, 'PRICE-1', 'base')].sort(), ['api', 'webapp']);
   assert.deepEqual([...mergedSubtaskIds(dir, 'PRICE-1', 'HEAD')], [], 'nothing since the base');
+});
+
+// Council r1 (opus F7): the plan run's own searches are counted on its decision record, as a stage orchestrator's are.
+test('F7: the plan record counts the graphify and language-server searches of the plan run', async () => {
+  const env = makeRepo();
+  const lspDir = path.join(env.repo, '.git/lsp');
+  const search = (tool) => fs.appendFileSync(path.join(lspDir, 'calls.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), agent: 'implementer', member: null, tool })}\n`);
+  fs.mkdirSync(lspDir, { recursive: true });
+  search('lsp_find_references'); // before the plan run: not its own
+  await sleep(1200);
+  const agents = fakeAgents({
+    implementer: [async () => {
+      search('lsp_workspace_symbols');
+      search('lsp_goto_definition');
+      return plan([sub('a', ['src/A/**'])]);
+    }, writeIn('src/A/a.cs', '// a\n')],
+    'pair-implementer': [writeIn('src/A/a.cs', '// a\n')],
+    'pair-verifier': [async () => approve()],
+  });
+  await orchestrate(context(env, makeConfig(env.repo), agents));
+  const decisions = readJsonl(path.join(env.repo, '.factory/metrics/decisions.jsonl')).filter((d) => d.stage === 'implement-plan');
+  assert.deepEqual(decisions.map((d) => [d.decision, d.searches]), [['plan-written', 2]]);
 });

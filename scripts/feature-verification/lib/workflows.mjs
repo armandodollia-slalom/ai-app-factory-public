@@ -27,17 +27,19 @@ import {
 } from './plans.mjs';
 import { clearEscalation, escalate, lockFile, logFile, loadState, metricsFile, updateState } from '../../pipeline/lib/state.mjs';
 import { RECOVERY_DONE, nextAttempt, runDied } from '../../pipeline/lib/recovery.mjs';
-import { caseIdsIn, casePrefix, storyMatches, storySha } from '../../pipeline/lib/stories.mjs';
+import { caseIdsIn, casePrefix, storyMatches } from '../../pipeline/lib/stories.mjs';
 import { storyVersion } from '../../board/lib/source.mjs';
 import { acquireLock, appendJsonl, extractResult, lockHolder, log, nowIso, releaseLock, run, runAsync, selfProcess, sleep, tail } from '../../pipeline/lib/util.mjs';
 import { coveringUnits, expandArgv as expand, fenceLang, planRuns, runnerFor, sharedFixtureErrors, tagError, taggingLines, testRunners } from './runners.mjs';
 import { servicesOfFile } from '../../implement/lib/project.mjs';
 import { PRODUCER, formatGaps, stagePassScore, verifyRound } from './verify.mjs';
 import { ownerQuestionsText } from '../../pipeline/lib/intercom.mjs';
-import { decide, producerRun } from '../../pipeline/lib/orchestrator.mjs';
+import { decide, guide, producerRun } from '../../pipeline/lib/orchestrator.mjs';
 import { addRequired, requiredFor, requiredProducerText, unmetRequired } from './required.mjs';
 import { resolvesGiven, routeToRole } from '../../pipeline/lib/finding-route.mjs';
 import { councilActionsText, councilFor, councilRounds, fixDeclarationText, fixesFile, guardProtectedTests, lateBox, planCases, protectedTestFinding } from '../../pipeline/lib/council.mjs';
+import { guidanceText, reviewerGuidance } from '../../pipeline/lib/clean-code.mjs';
+import { cleanCodeEvidence } from '../../pipeline/lib/analysis/report.mjs';
 
 // A contradiction between council members (verdict.council.contradictions) that the round before also had: no evidence
 // settled it, so it is a question for the ticket's owner (escalated like a loop that cannot finish). Updates `seen`.
@@ -445,6 +447,18 @@ export function supportFiles(config, testFiles, scenarioDir, base) {
   return [...new Set(changed)].filter((f) => !testFiles.includes(f) && !harness.some((h) => f.startsWith(h)) && !f.split('/').includes('graphify-out') && fs.existsSync(path.join(config.root, f)));
 }
 
+// Static analysis of the tests the automation wrote (opt-in, slot featureVerification): blocking findings the change
+// introduced go back to the agent like lint errors; the report of the head is reused when one exists. The clean-code
+// tools' reports on the tests are evidence for the verifier council's clean-code member (GEN-17).
+async function testsAnalysis(config, base, testFiles) {
+  const report = await reportFor(config, 'featureVerification', { cwd: config.root, base });
+  const ofTests = (list) => (list ?? []).filter((x) => testFiles.includes(x.file));
+  return {
+    errors: ofTests(report?.findings).filter((f) => f.severity === 'blocking').map((f) => `${f.tool} ${f.rule} at ${f.file}${f.line ? `:${f.line}` : ''}: ${f.message} (static analysis; blocking)`),
+    cleanCode: cleanCodeEvidence({ cleanCode: ofTests(report?.cleanCode) }),
+  };
+}
+
 // `fullProjects`: also run each affected test project whole, as CI does (after the story's own tests pass). `e2e`: run the
 // story's end-to-end specs on the stack. The automation loop runs rounds without the whole projects and runs them once
 // when the verifier approves (wall-clock, council C4: they ran in every round).
@@ -485,19 +499,16 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
     errors.push(...lintChanged(config, testFiles.filter((f) => !created.includes(f)), { base, skipped }));
     errors.push(...skipped.map((sk) => `precheck.lint: ${sk}`));
   }
-  // Static analysis of the tests the automation wrote (opt-in, slot featureVerification): blocking findings the change
-  // introduced go back to the agent like lint errors; the report of the head is reused when one exists.
-  if (base && !errors.length) {
-    const report = await reportFor(config, 'featureVerification', { cwd: config.root, base });
-    for (const f of (report?.findings ?? []).filter((x) => x.severity === 'blocking' && testFiles.includes(x.file))) errors.push(`${f.tool} ${f.rule} at ${f.file}${f.line ? `:${f.line}` : ''}: ${f.message} (static analysis; blocking)`);
-  }
+  const analysis = base && !errors.length ? await testsAnalysis(config, base, testFiles) : { errors: [], cleanCode: '' };
+  errors.push(...analysis.errors);
+  const { cleanCode } = analysis;
 
   const validate = config.featureVerification.precheck.validateScenario;
   if (validate?.length && (!validate[0].includes('/') || fs.existsSync(path.join(config.root, validate[0])))) {
     const result = run(validate[0], expand(validate.slice(1), { scenario: story.scenario }), { cwd: config.root, timeoutSec: 600 });
     if (result.status !== 0 && result.status !== 127) errors.push(`Scenario validation failed:\n${tail(result.stdout + result.stderr, 3000)}`);
   }
-  if (skipTests || !config.featureVerification.precheck.runTests || errors.length) return { errors, tests };
+  if (skipTests || !config.featureVerification.precheck.runTests || errors.length) return { errors, tests, cleanCode };
 
   // Which runner runs which files (precheck.testRunners, lib/runners.mjs). Nothing configured, or a file
   // no runner takes, is a logged note, not a failure: the verifier still reads the tests.
@@ -618,7 +629,7 @@ export async function precheckAutomation(config, story, { skipTests = false, fix
   })();
 
   for (const list of await Promise.all([e2e, local])) errors.push(...list);
-  return { errors, tests, evidence };
+  return { errors, tests, evidence, cleanCode };
 }
 
 // Whole test projects in every automation round (the old behaviour), or once after the verifier approves (default).
@@ -662,7 +673,8 @@ function automationTask(config, story, { mode, feedback, implFiles }) {
   return lines.join('\n');
 }
 
-function automationVerifierTask(config, story, tests, evidence = []) {
+// `guidance`: what the stage's orchestrator told the writer of the tests (reviewerGuidance).
+function automationVerifierTask(config, story, tests, evidence = [], cleanCode = '', guidance = []) {
   const plan = readPlan(config, story);
   const { scenario } = automationFiles(config, story);
   const lines = [
@@ -693,6 +705,8 @@ function automationVerifierTask(config, story, tests, evidence = []) {
       formatEvidence(evidence),
     );
   }
+  if (cleanCode) lines.push('', cleanCode);
+  lines.push(...reviewerGuidance(guidance));
   return lines.join('\n');
 }
 
@@ -743,6 +757,41 @@ export async function automationLoop(config, story, { implHash = null, skipTests
   }
 }
 
+// The tests verified: the plan's index records what was verified (the tests' and the plan's hashes), the score and when,
+// and any automation escalation is cleared.
+function markAutomationVerified(config, story, score) {
+  stampIndex(config, story, {
+    'automation-sha': automationSha(config, story),
+    'automation-plan-sha': readPlan(config, story).index.data['plan-sha'],
+    'automation-score': score,
+    'automation-verified-at': nowIso(),
+  });
+  clearEscalation(config, story, 'automation');
+}
+
+// What the stage's orchestrator is asked about the tests' work: the story, its cases, the tests so far and what they must
+// address now.
+const automationAsk = (config, story, feedback) => ({
+  section: 'testAutomation',
+  stage: 'test automation',
+  story: story.key,
+  work: 'the automated tests of the verified test plan, one test per case, and the scenario they load',
+  context: `Story ${story.key}: ${story.file}. Cases: ${planCases(config.root, config.featureVerification.plansDir, story.key).length}; tests so far: ${automationFiles(config, story).tests.size} file(s).${feedback ? `\n\nWhat the tests must address:\n${feedback}` : ''}`,
+  run: (o) => runAgent(config, { ...o, timeoutSec: config.featureVerification.timeoutsSec.automation }),
+});
+
+// The stage's orchestrator decides who writes the tests: the test automation agent, or itself (kept on resume), with
+// its guidance for whoever writes them.
+const automationLead = (config, story, feedback) => decide(config, { ...automationAsk(config, story, feedback), delegateTo: 'the test automation agent (`test-automation`)', guidance: true });
+
+// A round's guidance for the writer of the tests: the decision's own on the round it was made, else asked again for what
+// this round must address (other gaps name other code); the round's verifier checks the tests against it.
+const roundGuidance = async (config, story, led, { fresh, feedback }) => (fresh ? led.guidance : (await guide(config, automationAsk(config, story, feedback))).guidance) ?? [];
+
+// Whether a round's guidance is the decision's own: only the first round of the run that made the decision. A resumed
+// run (its decision saved) asks again on its first round too: that round addresses the saved feedback, not the decision's.
+export const decisionRound = (round, first, saved) => round === first && !saved?.orchestrator;
+
 async function automationPass(config, story, { skipTests, maxRounds, targetHash, resume = false, verifyFirst = false, scoped = false, saved = null }) {
   const status = planStatus(config, story);
   const planRequired = unmetRequired(config, story, 'plan');
@@ -777,15 +826,9 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
   if (verifyFirst && !resume && automationFiles(config, story).tests.size) {
     const pre = await precheckAutomation(config, story, { skipTests, fullProjects: !scoped });
     if (!pre.errors.length) {
-      const verdict = await verifyRound(config, { stage: 'automation', story, round: 0, producerVersion: 'unchanged', task: automationVerifierTask(config, story, pre.tests, pre.evidence), uiCases: uiCaseIds(pre.evidence, story.key), late });
+      const verdict = await verifyRound(config, { stage: 'automation', story, round: 0, producerVersion: 'unchanged', task: automationVerifierTask(config, story, pre.tests, pre.evidence, pre.cleanCode), uiCases: uiCaseIds(pre.evidence, story.key), late });
       if (verdict.passed) {
-        stampIndex(config, story, {
-          'automation-sha': automationSha(config, story),
-          'automation-plan-sha': readPlan(config, story).index.data['plan-sha'],
-          'automation-score': verdict.score,
-          'automation-verified-at': nowIso(),
-        });
-        clearEscalation(config, story, 'automation');
+        markAutomationVerified(config, story, verdict.score);
         log(`${story.key}: the changed tests verified ${verdict.score}/10 as they are (no automation agent run).`);
         return { status: 'verified', rounds: 0 };
       }
@@ -801,18 +844,12 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       feedback = `The tests were changed after verification; deterministic checks fail:\n${pre.errors.map((e) => `- ${e}`).join('\n')}`;
     }
   }
-  // The stage's orchestrator decides who writes the tests: the test automation agent, or itself (kept on resume).
-  const led = saved?.orchestrator ?? await decide(config, {
-    section: 'testAutomation',
-    stage: 'test automation',
-    story: story.key,
-    work: 'the automated tests of the verified test plan, one test per case, and the scenario they load',
-    delegateTo: 'the test automation agent (`test-automation`)',
-    context: `Story ${story.key}: ${story.file}. Cases: ${planCases(config.root, config.featureVerification.plansDir, story.key).length}; tests so far: ${automationFiles(config, story).tests.size} file(s).${feedback ? `\n\nWhat the tests must address:\n${feedback}` : ''}`,
-    run: (o) => runAgent(config, { ...o, timeoutSec: config.featureVerification.timeoutsSec.automation }),
-  });
+  const led = saved?.orchestrator ?? await automationLead(config, story, feedback);
   const selfDo = led.decision === 'self' ? led : null;
-  for (let round = Math.min(saved?.round ?? 1, maxRounds); round <= maxRounds; round++) {
+  const first = Math.min(saved?.round ?? 1, maxRounds);
+  for (let round = first; round <= maxRounds; round++) {
+    const given = await roundGuidance(config, story, led, { fresh: decisionRound(round, first, saved), feedback });
+    const guidance = guidanceText(given);
     updateState(config, story.key, (s) => (s.automation.progress = { hash: targetHash, round, feedback, orchestrator: led }));
     const mode = automationFiles(config, story).tests.size ? 'update' : 'create';
     log(`${story.key}: automation round ${round}/${maxRounds} (${mode})${selfDo ? ', written by the orchestrator' : ''}`);
@@ -822,7 +859,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       timeoutSec: config.featureVerification.timeoutsSec.automation,
       usage: { stage: 'automation', story: story.key, round },
       extraEnv: slotEnv,
-      ...producerRun(config, { agent: PRODUCER.automation, selfDo, task: automationTask(config, story, { mode, feedback, implFiles }) + (council ? `\n\n${councilActionsText({ refuse: 'say so in your result', owns: false })}` : '') + declareFixes(config, story, 'testAutomation', lastGaps) }),
+      ...producerRun(config, { agent: PRODUCER.automation, selfDo, task: automationTask(config, story, { mode, feedback, implFiles }) + (guidance ? `\n\n${guidance}` : '') + (council ? `\n\n${councilActionsText({ refuse: 'say so in your result', owns: false })}` : '') + declareFixes(config, story, 'testAutomation', lastGaps) }),
     }));
     // No stack slot came free in time: the stage stops and says why rather than test against another checkout's stack.
     if (producer?.noSlot) {
@@ -882,7 +919,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       continue;
     }
     // One council sitting a round: a council that passes once verifies the tests.
-    const verdict = await verifyRound(config, { stage: 'automation', story, round, producerVersion: producer.version, task: automationVerifierTask(config, story, pre.tests, pre.evidence), uiCases: uiCaseIds(pre.evidence, story.key), late });
+    const verdict = await verifyRound(config, { stage: 'automation', story, round, producerVersion: producer.version, task: automationVerifierTask(config, story, pre.tests, pre.evidence, pre.cleanCode, given), uiCases: uiCaseIds(pre.evidence, story.key), late });
     if (verdict.error) continue;
     const owner = ownerEscalation(config, story, 'automation', verdict);
     if (owner) return owner;
@@ -896,13 +933,7 @@ async function automationPass(config, story, { skipTests, maxRounds, targetHash,
       }
     }
     if (verdict.passed) {
-      stampIndex(config, story, {
-        'automation-sha': automationSha(config, story),
-        'automation-plan-sha': readPlan(config, story).index.data['plan-sha'],
-        'automation-score': verdict.score,
-        'automation-verified-at': nowIso(),
-      });
-      clearEscalation(config, story, 'automation');
+      markAutomationVerified(config, story, verdict.score);
       log(`${story.key}: automated tests verified ${verdict.score}/10 after ${round} round(s).`);
       return { status: 'verified', rounds: round };
     }

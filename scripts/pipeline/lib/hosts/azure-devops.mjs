@@ -10,8 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { HostError, UnsupportedError } from './errors.mjs';
 import { createHttp } from './http.mjs';
+import { DEFAULT_URLS, defaultMergeMethod } from '../products.mjs';
 
-export const DEFAULT_URL = 'https://dev.azure.com';
+export const DEFAULT_URL = DEFAULT_URLS['azure-devops'];
 const NO_ONE = '00000000-0000-0000-0000-000000000000';
 
 const STATUS = { active: 'open', completed: 'merged', abandoned: 'closed' };
@@ -48,6 +49,10 @@ export function statusState(s) {
 // What Azure Repos can do for the harness (providers/contracts.mjs CAPABILITIES.host). No CODEOWNERS: required
 // reviewers per path are a branch policy a person adds; no labels on the gate's terms (PR tags, partial).
 export const CAPABILITIES = { requiredChecks: true, codeOwners: 'partial', autoMerge: true, mergeHeadGuard: true, cancelAutoMerge: true, drafts: true, labels: 'partial', checkAnnotations: false, commitStatus: true, attachments: true, botIdentity: true, diff: false, reviewCommentThreads: true, stateEvents: false };
+
+// Azure DevOps' completion strategy for a merge method; a method it has none for gets the default method's.
+const STRATEGY = { squash: 'squash', merge: 'noFastForward', rebase: 'rebase' };
+const mergeStrategy = (m) => STRATEGY[m] ?? STRATEGY[defaultMergeMethod()];
 
 export function createAzureDevopsHost(settings, deps = {}) {
   const url = String(settings.url ?? DEFAULT_URL).replace(/\/+$/, '');
@@ -110,7 +115,6 @@ export function createAzureDevopsHost(settings, deps = {}) {
   };
   const threads = async (pr) => (await api('GET', `${PR(pr)}/threads`))?.value ?? [];
   const textComments = (list) => list.flatMap((t) => (t.comments ?? []).filter((c) => c.commentType !== 'system' && !c.isDeleted).map((c) => ({ thread: t, c })));
-  const mergeStrategy = (m) => ({ squash: 'squash', merge: 'noFastForward', rebase: 'rebase' })[m] ?? 'squash';
 
   const host = {
     type: 'azure-devops',
@@ -263,7 +267,7 @@ export function createAzureDevopsHost(settings, deps = {}) {
       },
       // Completes the pull request, bound to `headSha`: Azure DevOps completes only the source commit it is given
       // (lastMergeSourceCommit), and the head is checked first so a moved branch is refused. `auto`: auto-complete.
-      async merge(pr, { method = 'squash', auto = false, headSha = null, deleteBranch = false } = {}) {
+      async merge(pr, { method = defaultMergeMethod(), auto = false, headSha = null, deleteBranch = false } = {}) {
         const completionOptions = { mergeStrategy: mergeStrategy(method), deleteSourceBranch: Boolean(deleteBranch) };
         const p = await rawPr(pr);
         const current = p?.lastMergeSourceCommit?.commitId ?? null;

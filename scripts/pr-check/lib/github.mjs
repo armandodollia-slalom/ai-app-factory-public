@@ -3,15 +3,6 @@
 import { writeFile } from 'node:fs/promises';
 import { fetchWithTimeout } from '../../pipeline/lib/external.mjs';
 import { ATTACHMENT_PATTERNS, downloadHeaders, hostFor, rawFileUrl } from '../../pipeline/lib/hosts/index.mjs';
-import { originRepo } from '../../pipeline/lib/products.mjs';
-
-// The repository of the checkout: the CI system's own variable first (GITHUB_REPOSITORY), else the origin remote.
-export function repoSlug(root) {
-  if (process.env.GITHUB_REPOSITORY) return process.env.GITHUB_REPOSITORY;
-  const repo = originRepo(root);
-  if (!repo) throw new Error('cannot work out the repository from the origin remote');
-  return repo;
-}
 
 // The code host of a config (or of a checkout root, for older callers).
 const hostOf = (target) => {

@@ -117,33 +117,41 @@ export function expectedWorkflows(files, { base, changed = [], settings = {}, ac
   return out;
 }
 
-// The CI checks a host should require next to review-quorum (council C9): the jobs of every pull-request workflow that
-// runs for EVERY pull request of the default branch (no paths or branches filter, `opened` among its types): a check
-// that does not run for some PR (a docs-only change skips a paths-ignore workflow) can never be required, or GitHub would
-// block that PR forever. A job whose condition is for closing the PR (`github.event.action == 'closed'`) and matrix jobs
-// are left out; a reusable workflow's jobs are named "<caller job> / <job>", as GitHub reports them.
 // The job the factory renders first into a workflow that also runs on story-branch pushes (factory/lib/pre-open-ci.mjs):
 // on a PR event it only decides whether the push run on the same head already passed. It is not a check to require:
 // the workflow's own jobs carry the required names, and several workflows share the job's name.
 const isReuseJob = (id, job) => id === 'reuse' && /event_name\s*==\s*'pull_request'/.test(String(job?.if ?? ''));
 
-export function defaultRequiredChecks(root) {
+// A YAML file parsed, or null when it does not parse.
+const readYaml = (file) => {
+  try {
+    return YAML.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+// The checkout's GitHub Actions workflows that parse, in file-name order: [{ file, doc }] (none without the folder).
+function workflowDocs(root) {
   const dir = path.join(root, '.github', 'workflows');
   if (!fs.existsSync(dir)) return [];
-  const read = (f) => {
-    try {
-      return YAML.parse(fs.readFileSync(f, 'utf8'));
-    } catch {
-      return null;
-    }
-  };
+  return fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort().map((file) => ({ file, doc: readYaml(path.join(dir, file)) })).filter((w) => w.doc);
+}
+
+// The workflows a pull request runs (a `pull_request` trigger; `cfg` is its settings), the review quorum's aside.
+const pullRequestWorkflows = (root) =>
+  workflowDocs(root)
+    .filter(({ doc }) => doc.name !== 'review-quorum' && Object.hasOwn(triggers(doc), 'pull_request'))
+    .map((w) => ({ ...w, cfg: triggers(w.doc).pull_request ?? {} }));
+
+// The CI checks a host should require next to review-quorum (council C9): the jobs of every pull-request workflow that
+// runs for EVERY pull request of the default branch (no paths or branches filter, `opened` among its types): a check
+// that does not run for some PR (a docs-only change skips a paths-ignore workflow) can never be required, or GitHub would
+// block that PR forever. A job whose condition is for closing the PR (`github.event.action == 'closed'`) and matrix jobs
+// are left out; a reusable workflow's jobs are named "<caller job> / <job>", as GitHub reports them.
+export function defaultRequiredChecks(root) {
   const out = new Set();
-  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort()) {
-    const doc = read(path.join(dir, f));
-    if (!doc || doc.name === 'review-quorum') continue;
-    const on = triggers(doc);
-    if (!Object.hasOwn(on, 'pull_request')) continue;
-    const cfg = on.pull_request ?? {};
+  for (const { doc, cfg } of pullRequestWorkflows(root)) {
     if (cfg.paths || cfg['paths-ignore'] || cfg['branches-ignore']) continue;
     if (cfg.branches && !(Array.isArray(cfg.branches) ? cfg.branches : [cfg.branches]).some((b) => ['**', '*'].includes(b))) continue;
     const types = cfg.types ? (Array.isArray(cfg.types) ? cfg.types : [cfg.types]) : ['opened'];
@@ -154,7 +162,7 @@ export function defaultRequiredChecks(root) {
       if (isReuseJob(id, job)) continue;
       const name = job.name ?? id;
       if (typeof job.uses === 'string' && job.uses.startsWith('./')) {
-        const called = read(path.join(root, job.uses));
+        const called = readYaml(path.join(root, job.uses));
         for (const [cid, cjob] of Object.entries(called?.jobs ?? {})) if (cjob && !cjob.strategy?.matrix) out.add(`${name} / ${cjob.name ?? cid}`);
       } else out.add(name);
     }
@@ -166,19 +174,8 @@ export function defaultRequiredChecks(root) {
 // trigger, the jobs of reusable workflows it calls as "<job> / <called job>"; a matrix job as "<name> (" prefixes).
 // A host rule that requires a name not in this list waits for a check that never runs.
 export function providedChecks(root) {
-  const dir = path.join(root, '.github', 'workflows');
-  if (!fs.existsSync(dir)) return [];
-  const read = (f) => {
-    try {
-      return YAML.parse(fs.readFileSync(f, 'utf8'));
-    } catch {
-      return null;
-    }
-  };
   const out = new Set();
-  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort()) {
-    const doc = read(path.join(dir, f));
-    if (!doc) continue;
+  for (const { doc } of workflowDocs(root)) {
     const on = triggers(doc);
     if (!Object.hasOwn(on, 'pull_request') && !Object.hasOwn(on, 'pull_request_target') && !Object.hasOwn(on, 'pull_request_review')) continue;
     for (const [id, job] of Object.entries(doc.jobs ?? {})) {
@@ -186,7 +183,7 @@ export function providedChecks(root) {
       const name = job.name ?? id;
       out.add(name);
       if (typeof job.uses === 'string' && job.uses.startsWith('./')) {
-        const called = read(path.join(root, job.uses));
+        const called = readYaml(path.join(root, job.uses));
         for (const [cid, cjob] of Object.entries(called?.jobs ?? {})) if (cjob) out.add(`${name} / ${cjob.name ?? cid}`);
       }
     }
@@ -198,23 +195,9 @@ export function providedChecks(root) {
 // application's own test jobs were not required, both named "test", so a person merging by hand was not stopped). The
 // factory's own workflows (factory-*) are left out: enforce requires those. [{ workflow, job, name, reason }]
 export function uncoveredChecks(root) {
-  const dir = path.join(root, '.github', 'workflows');
-  if (!fs.existsSync(dir)) return [];
   const required = new Set(defaultRequiredChecks(root));
-  const read = (f) => {
-    try {
-      return YAML.parse(fs.readFileSync(f, 'utf8'));
-    } catch {
-      return null;
-    }
-  };
   const jobs = [];
-  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x)).sort()) {
-    const doc = read(path.join(dir, f));
-    if (!doc || doc.name === 'review-quorum') continue;
-    const on = triggers(doc);
-    if (!Object.hasOwn(on, 'pull_request')) continue;
-    const cfg = on.pull_request ?? {};
+  for (const { file: f, doc, cfg } of pullRequestWorkflows(root)) {
     for (const [id, job] of Object.entries(doc.jobs ?? {})) {
       if (!job || /github\.event\.action\s*==\s*'closed'/.test(String(job.if ?? ''))) continue;
       jobs.push({ workflow: `.github/workflows/${f}`, own: !f.startsWith('factory-'), job: id, name: job.name ?? id, cfg, matrix: Boolean(job.strategy?.matrix) });

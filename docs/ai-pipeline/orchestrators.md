@@ -23,6 +23,14 @@ not. Its runs are agent runs like any other:
 they count toward the ticket's budgets and are in its usage. The orchestrator also picks the stage's council, one seat too ([seats](council.md#seats)), and rules on a
 split in a council discussion (`council.intercom.onSplit: orchestrator`).
 
+Orchestrators know every rule of the [`clean-code`](../../skills/clean-code/SKILL.md) skill and guide the writers
+([agents.md](agents.md#clean-code)). When the work goes to a writer (the implement stage's subtasks, test automation,
+the PR check fixer), the orchestrator first searches the codebase with graphify and the language-server tools for what
+the work touches that already exists, then returns `guidance`: each item a `what`, a `where` (`file:line`) and `do`
+(`reuse`: read it from there and never redefine it; `change`: the change goes there). The writer's task shows it, the
+decision record keeps it with the number of searches the orchestrator made (`searches`), and the clean-code reviewer
+holds the writer to it.
+
 ## Settings
 
 | Setting | Meaning |

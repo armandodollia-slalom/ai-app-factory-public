@@ -1,6 +1,7 @@
 // Task prompts the orchestrated implement flow gives its agents. Each agent's standing instructions are in
 // agents/<name>.agent.md; these add the run-specific facts and the exact result line to end with.
 import path from 'node:path';
+import { GUIDANCE_SHAPE, guidanceAsk, guidanceText } from '../../pipeline/lib/clean-code.mjs';
 import { decisionsBlock } from '../../pipeline/lib/human-decisions.mjs';
 import { formatFindings, uiStoryHint } from './plan.mjs';
 
@@ -14,6 +15,7 @@ const specBlock = (st) =>
     `- owns (the only paths you may change): ${st.owns.join(', ')}`,
     `- verify: ${st.verify}${st.scenario ? ` (app-stack scenario: ${st.scenario})` : ''}`,
     st.dependsOn?.length ? `- builds on (already merged into the story branch): ${st.dependsOn.join(', ')}` : null,
+    guidanceText(st.guidance) ? `\n${guidanceText(st.guidance)}` : null,
   ]
     .filter(Boolean)
     .join('\n');
@@ -51,6 +53,7 @@ export const planSchema = (project = null) => {
       "verify": "code" | "ui",                  // ui only for UI stories
       "verifyReason": "<one short sentence>",
       "scenario": "<optional: the NAME of an existing app-stack scenario the ui verifier loads (listed in the task); leave it out when none fits and say in the goal what data the verifier must set up>",
+      ${GUIDANCE_SHAPE},  // what the work touches that exists: reuse it, or change it there
       "expectedFiles": 3,                       // files you expect it to change
       "expectedLoc": 120,                       // lines added plus removed you expect
       "confidence": 0.8,                        // 0-1: how sure you are this subtask passes first time
@@ -94,6 +97,7 @@ export function planTask({ key, storyFile, worktree, uiStory, limits, errors = n
     `- verify "ui" makes a verifier drive the running app and take screenshots. ${uiStory ? 'This IS a UI story: use verify "ui" for subtasks that change pages or components.' : `This is NOT a UI story (${uiStoryHint(limits.ui)}): use verify "code" only and uiStory false.`}`,
     ...(uiStory ? [`- \`scenario\` names an existing app-stack scenario the ui verifier loads: ${limits.scenarios?.length ? limits.scenarios.join(', ') : 'this repository has none'}. Nothing else is a scenario; when none fits, leave it out and say in the goal or acceptance what data the verifier must set up itself.`] : []),
     '- Tests are not yours (feature verification writes them later); do not plan test subtasks.',
+    `- Clean code: ${guidanceAsk().replace(/\n\n/g, ' ')} Give each subtask the \`guidance\` its work needs.`,
     '- The reason, expectation and confidence fields are required and short. They go to the decision log (to learn which plans work), never to the verifiers. In self mode give `modeReason`, `features`, and for the one subtask entry the same reason/expectation fields.',
     ...mockupBlock(mockups, { plan: true }),
     '',
@@ -193,25 +197,30 @@ function judgingBlock(disputes) {
   return lines;
 }
 
+// What a verifier judges a subtask on, as the harness collected it: the spec, the checks, the diagnostics and the diff.
+const evidenceBlock = ({ st, checks, diagnostics, diff }) => [
+  '### Subtask',
+  '',
+  specBlock(st),
+  '',
+  '### Build and test output collected by the harness',
+  '',
+  fence(checks || '(no checks configured)'),
+  '',
+  '### Language server diagnostics on the changed files',
+  '',
+  fence(diagnostics || '(unavailable)'),
+  '',
+  '### Diff against the story branch',
+  '',
+  fence(diff, 'diff'),
+];
+
 export function codeVerifierTask({ key, st, round, maxRounds, diff, checks, diagnostics, disputes = null, decisions = null, signatures = [] }) {
   return [
     `Verify subtask "${st.id}" of story ${key}, round ${round} of ${maxRounds}. You have a fresh context: judge only the subtask spec, the diff and the outputs below. You may read files and query graphify; you do not edit anything.`,
     '',
-    '### Subtask',
-    '',
-    specBlock(st),
-    '',
-    '### Build and test output collected by the harness',
-    '',
-    fence(checks || '(no checks configured)'),
-    '',
-    '### Language server diagnostics on the changed files',
-    '',
-    fence(diagnostics || '(unavailable)'),
-    '',
-    '### Diff against the story branch',
-    '',
-    fence(diff, 'diff'),
+    ...evidenceBlock({ st, checks, diagnostics, diff }),
     ...(signatures.length
       ? ['', '### Signatures this diff adds or changes (the harness found them)', '', 'Run `lsp_find_references` on each existing one before you approve, and report every caller that was not updated as a blocking finding at the caller\'s file and line. A new member has no callers to check; say so in your summary.', '', fence(signatures.slice(0, 40).join('\n'))]
       : []),
@@ -245,21 +254,7 @@ export function uiVerifierTask({ key, st, round, maxRounds, diff, checks, diagno
     '',
     `The app built from this subtask's worktree (${worktree}) is running at ${webappUrl}${slot != null ? ` (test stack slot ${slot}: \`node .factory/bin/factory.mjs teststack --slot ${slot} <command>\`)` : ''}. ${st.scenario ? `The scenario "${st.scenario}" is loaded.` : 'No scenario beyond the base data is loaded: set up the data the criteria need yourself (see Driving the app).'} Save every screenshot under ${screenshotsDir} (it exists; nowhere else). Do not edit source files; the harness discards any change you leave in the worktree.`,
     '',
-    '### Subtask',
-    '',
-    specBlock(st),
-    '',
-    '### Build and test output collected by the harness',
-    '',
-    fence(checks || '(no checks configured)'),
-    '',
-    '### Language server diagnostics on the changed files',
-    '',
-    fence(diagnostics || '(unavailable)'),
-    '',
-    '### Diff against the story branch',
-    '',
-    fence(diff, 'diff'),
+    ...evidenceBlock({ st, checks, diagnostics, diff }),
     ...decisionsBlock(decisions, 'verify'),
     '',
     ...designBlock({ mockups, renders, screenshotsDir, implementerScreens }),

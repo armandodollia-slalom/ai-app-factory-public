@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { APP_FILE, INSTALL_ROOT, loadConfig, repoOverlay, repoRoot, splitTopology } from '../pipeline/lib/config.mjs';
+import { APP_FILE, INSTALL_ROOT, loadConfig, OVERLAY_FILE, repoOverlay, repoRoot, splitTopology } from '../pipeline/lib/config.mjs';
 import { setting, settingsProblems } from '../pipeline/lib/settings.mjs';
 import { agentTextProblems } from '../pipeline/lib/instruction-check.mjs';
 import { lintable } from '../pipeline/lib/lint.mjs';
@@ -127,7 +127,7 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
   const pin = readPin(root);
   // config.json with app.json (the application's topology) on top, as the engine reads them.
   // Read without refusing a settings problem: each is a row below (doctor never aborts on one).
-  const config = fs.existsSync(path.join(root, '.factory/config.json')) ? repoOverlay(root, { check: false }) : null;
+  const config = fs.existsSync(path.join(root, OVERLAY_FILE)) ? repoOverlay(root, { check: false }) : null;
   const used = products(root, { config: config ?? {} });
   // Products that authenticate through a signed-in CLI (GitHub's gh) say so; the REST ones are checked by productRows.
   const cliAuth = (() => {
@@ -308,6 +308,15 @@ async function doctor(root, { load = (kind) => loadAdapter(kind, INSTALL_ROOT) }
   return rows.every(([, ok]) => ok) ? 0 : 1;
 }
 
+// What init says it left to the user: configuration sources it could not find, the starter content it copied and the
+// placeholders it could not fill.
+function initNotes(config, copied, packs) {
+  if (!(config.project?.configSources ?? []).length) console.log('Configuration sources: none found (project.configSources). Name the files where the defaults live with `factory init --set project.configSources=<globs>`, or let the onboard-codebase skill ask; the repeated-values check has none to compare with until then.');
+  if (copied.length) console.log(`Starter content: ${copied.join(', ')}.`);
+  const left = unfilledPlaceholders(config, packs);
+  if (left.length) console.log(`Fill in .factory/config.json: ${left.map((k) => `{${k}}`).join(', ')} (several candidates and none named by CI; the language pack's commands.json says what each one is).`);
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const { flags, positional } = parse(rest);
@@ -392,9 +401,7 @@ async function main() {
       // external-call: local (a local git write is never killed or repeated)
       if (features.gitHooks && !hooksPath) spawnSync('git', ['config', 'core.hooksPath', '.factory/githooks'], { cwd: root });
       console.log(`${existed && !flags.force ? 'Kept' : 'Wrote'} .factory/config.json (${found.languages.map((l) => l.name).join(', ') || 'no language pack matched'}; ${found.units.filter((u) => u.kind === 'backend' || u.kind === 'frontend').length} service(s) drafted).`);
-      if (copied.length) console.log(`Starter content: ${copied.join(', ')}.`);
-      const left = unfilledPlaceholders(JSON.parse(fs.readFileSync(configFile, 'utf8')), packs);
-      if (left.length) console.log(`Fill in .factory/config.json: ${left.map((k) => `{${k}}`).join(', ')} (several candidates and none named by CI; the language pack's commands.json says what each one is).`);
+      initNotes(JSON.parse(fs.readFileSync(configFile, 'utf8')), copied, packs);
       console.log(`Rendered ${result.total} output(s), ${result.written.length} written. They are listed in ${MANIFEST}.`);
       console.log(`Code host ${used.host.type}${used.host.repo ? ` (${used.host.repo})` : ''}, tracker ${used.tracker.type ?? 'not set'}, CI ${used.ci.provider}.${used.tracker.type ? '' : ' Set tracker in .factory/config.json (jira or github; the setup-board skill), then render again.'}`);
       if (CI_INFO[used.ci.provider]?.afterRender) console.log(CI_INFO[used.ci.provider].afterRender);

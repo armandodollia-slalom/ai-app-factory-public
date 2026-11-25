@@ -103,8 +103,6 @@ export function withRefusalFallback(tracker) {
   return tracker;
 }
 
-export const isGithub = (config) => trackerType(config) === 'github';
-
 // Forgets cached state (GitHub's project ids and the active-board check); tests call it between runs.
 export function resetTrackers() {
   resetGithubMemo();

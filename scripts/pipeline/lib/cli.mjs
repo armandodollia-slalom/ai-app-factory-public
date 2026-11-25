@@ -1,5 +1,5 @@
-import fs from 'node:fs';
 import { activeStory, resolveStory } from './stories.mjs';
+import { setting } from './settings.mjs';
 
 export function parseArgs(argv, valueFlags = new Set()) {
   const positional = [];
@@ -50,6 +50,14 @@ export async function readPayloadStrict(stream = process.stdin) {
 }
 
 // For events that only inform (stop, session start): a payload that cannot be read is an empty one.
+// Only code agents' stops are reviewed and checked: the main session (Stop) or a subagent whose type is listed in
+// hooks.codeAgents (SubagentStop), for the architecture review and the automatic PR check alike. Pipeline child agents
+// never reach the hooks (PIPELINE_CHILD).
+export function isCodeAgentStop(config, payload = {}) {
+  if (payload.hook_event_name !== 'SubagentStop' || !payload.agent_type) return true;
+  return setting(config, 'hooks.codeAgents').includes(payload.agent_type);
+}
+
 export async function readPayload() {
   const r = await readPayloadStrict();
   return r.payload ?? {};

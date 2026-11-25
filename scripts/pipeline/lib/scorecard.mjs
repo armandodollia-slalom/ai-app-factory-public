@@ -20,33 +20,34 @@
 //
 // The file holds no timestamp: the same records give the same file. Its `version` is a hash of its content, and its
 // `inputs` a hash of the records it was computed from, so the pre-push check (checkScorecardPush) refuses a hand edit.
-import crypto from 'node:crypto';
-import fs from 'node:fs';
+import { sha } from './util.mjs';
 import path from 'node:path';
 import { COUNCIL_FILE } from './council.mjs';
+import { SOLE_LENS } from './council-config.mjs';
+import { FINDINGS_FILE } from './findings.mjs';
+import { VERIFY_STAGE } from './decisions.mjs';
 import { git } from './git.mjs';
 import { poolEntry } from './pool.mjs';
-import { writeText } from './redact.mjs';
+import { writeTextIfChanged } from './redact.mjs';
 import { setting } from './settings.mjs';
 import { sinkSettings } from './sink.mjs';
 import { readMetrics } from './state.mjs';
 import { USAGE_FILE } from './usage.mjs';
 
 export const SCORECARD_FILE = 'scorecard.json';
-const FINDINGS_FILE = 'council-findings.jsonl';
 // token-usage.jsonl names a member run's stage by the stage's own usage tag.
-const USAGE_STAGE = { review: 'architectureReview', 'pr-check': 'prCheck', 'plan-verify': 'testPlan', 'automation-verify': 'testAutomation', 'implement-verify': 'pairVerify', 'implement-ui-verify': 'pairUiVerify' };
-const UPHELD = new Set(['upheld', 'led-to-change']);
+const USAGE_STAGE = { review: 'architectureReview', 'pr-check': 'prCheck', 'plan-verify': 'testPlan', 'automation-verify': 'testAutomation', [VERIFY_STAGE]: 'pairVerify', 'implement-ui-verify': 'pairUiVerify' };
+// The outcomes of a council finding that count as upheld.
+export const UPHELD_OUTCOMES = new Set(['upheld', 'led-to-change']);
 
 export const scorecardPath = (config, root = config.root) => path.join(root, setting(config, 'lessonsDir'), SCORECARD_FILE);
-const hash = (text) => crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
 const round3 = (n) => (n === null || !Number.isFinite(n) ? null : Math.round(n * 1000) / 1000);
 const ratio = (a, b) => (b ? round3(a / b) : null);
 // A record without its envelope (the store's _id, _project, _host) and its timestamp: what it says, not when or where.
 const bare = (r) => Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('_')));
 
 // The version of a scorecard: a hash of everything in it but the version itself.
-export const scorecardVersion = (doc) => hash(JSON.stringify({ ...doc, version: undefined }));
+export const scorecardVersion = (doc) => sha(JSON.stringify({ ...doc, version: undefined }));
 
 // The records the scorecard is computed from, this repository's only (a store with scope "all" returns others' too).
 export function scorecardRecords(config) {
@@ -72,11 +73,11 @@ export function computeScorecard(config, { rounds = [], findings = [], usage = [
   const weights = Object.fromEntries(['prCheckRuling', 'miss', 'ledToChange', 'lowWeightMiss'].map((w) => [w, setting(config, `council.scorecard.weights.${w}`)]));
   const modelOf = (m) => m.model ?? (m.entry ? poolEntry(config, m.entry)?.model : null) ?? m.entry ?? m.name ?? 'unknown';
   const council = (r) => `${r.story}|${r.stage}|${r.step ?? ''}`;
-  const rowKey = (model, lens, stage) => `${model}|${lens ?? 'all'}|${stage}`;
+  const rowKey = (model, lens, stage) => `${model}|${lens ?? SOLE_LENS}|${stage}`;
   const rows = new Map();
   const rowOf = (model, lens, stage) => {
     const k = rowKey(model, lens, stage);
-    if (!rows.has(k)) rows.set(k, { model, lens: lens ?? 'all', stage, seats: new Set(), judged: 0, upheld: 0, unique: 0, misses: 0, lowWeightMisses: 0, tokens: 0, runs: new Map() });
+    if (!rows.has(k)) rows.set(k, { model, lens: lens ?? SOLE_LENS, stage, seats: new Set(), judged: 0, upheld: 0, unique: 0, misses: 0, lowWeightMisses: 0, tokens: 0, runs: new Map() });
     return rows.get(k);
   };
   // Seats: each council a member sat on, once however many rounds it took. A seat is known by its council and name.
@@ -109,7 +110,7 @@ export function computeScorecard(config, { rounds = [], findings = [], usage = [
       // A non-blocking member's (feedback) row shares the finding, so the finding is unique to nobody else, but the
       // outcome was ruled on the deciding member's finding: it earns its raiser nothing (council r5, sol-26).
       if (!outcome || f.feedback) continue;
-      const up = UPHELD.has(outcome.outcome);
+      const up = UPHELD_OUTCOMES.has(outcome.outcome);
       row.judged += 1;
       if (up) row.upheld += 1;
       if (up && seats.size === 1) row.unique += 1;
@@ -138,7 +139,7 @@ export function computeScorecard(config, { rounds = [], findings = [], usage = [
   for (const u of usage) {
     const stage = USAGE_STAGE[u.stage] ?? u.stage;
     const models = new Set([u.requested_model, u.entry ? poolEntry(config, u.entry)?.model : null, u.entry].filter(Boolean));
-    const row = sittings.find((x) => x.story === u.story && x.stage === stage && x.seat === u.seat && x.row.lens === (u.lens ?? 'all') && (!u.check || !x.check || x.check === u.check) && models.has(x.row.model))?.row;
+    const row = sittings.find((x) => x.story === u.story && x.stage === stage && x.seat === u.seat && x.row.lens === (u.lens ?? SOLE_LENS) && (!u.check || !x.check || x.check === u.check) && models.has(x.row.model))?.row;
     if (!row) continue;
     const t = u.tokens ?? {};
     row.tokens += (t.input ?? 0) + (t.output ?? 0) + (t.cache_read ?? 0) + (t.cache_write_5m ?? 0) + (t.cache_write_1h ?? 0);
@@ -158,7 +159,7 @@ export function computeScorecard(config, { rounds = [], findings = [], usage = [
   const biasRows = [...bias.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([judgeFamily, s]) => ({ judgeFamily, sameFamily: { ...s.same, upheldRate: ratio(s.same.upheld, s.same.judged) }, otherFamilies: { ...s.other, upheldRate: ratio(s.other.upheld, s.other.judged) } }));
-  const inputs = { records: rounds.length + findings.length + usage.length, hash: hash([...rounds, ...findings, ...usage].map((r) => JSON.stringify(r)).sort().join('\n')) };
+  const inputs = { records: rounds.length + findings.length + usage.length, hash: sha([...rounds, ...findings, ...usage].map((r) => JSON.stringify(r)).sort().join('\n')) };
   const doc = { version: null, inputs, minSeats, weights, rows: out, bias: biasRows };
   doc.version = scorecardVersion(doc);
   return doc;
@@ -170,14 +171,7 @@ export const scorecardText = (doc) => `${JSON.stringify(doc, null, 2)}\n`;
 // Returns { doc, changed }.
 export function writeScorecard(config, root = config.root) {
   const doc = computeScorecard(config, scorecardRecords(config));
-  const file = scorecardPath(config, root);
-  const text = scorecardText(doc);
-  const changed = !fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text;
-  if (changed) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    writeText(file, text);
-  }
-  return { doc, changed };
+  return { doc, changed: writeTextIfChanged(scorecardPath(config, root), scorecardText(doc)) };
 }
 
 // Why a scorecard text is not the pipeline's own (empty: it is). Its version must match its content; when this

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { INSTALL_ROOT } from '../../pipeline/lib/config.mjs';
 import { appendJsonl, log, nowIso, run, runAsync } from '../../pipeline/lib/util.mjs';
-import { metricsFile } from '../../pipeline/lib/state.mjs';
+import { RUN_CONDITIONS_FILE, metricsFile } from '../../pipeline/lib/state.mjs';
 import { loadConfig, slotPorts } from '../../stack/lib/ports.mjs';
 import { setting } from '../../pipeline/lib/settings.mjs';
 
@@ -69,7 +69,7 @@ function stackDownMessage(slot, up) {
 // One record per lease attempt (run-conditions.jsonl), for the PR body and the retro.
 function recordSlot(config, key, stage, startedMs, lease, extra = {}) {
   try {
-    appendJsonl(metricsFile(config, 'run-conditions.jsonl'), [{ ts: nowIso(), story: key, kind: 'stack-slot', stage, slot: lease?.ok ? lease.slot : null, waitedSec: Math.round((Date.now() - startedMs) / 1000), outcome: lease?.ok ? 'leased' : 'none', poolSize: lease?.poolSize ?? null, ...extra }]);
+    appendJsonl(metricsFile(config, RUN_CONDITIONS_FILE), [{ ts: nowIso(), story: key, kind: 'stack-slot', stage, slot: lease?.ok ? lease.slot : null, waitedSec: Math.round((Date.now() - startedMs) / 1000), outcome: lease?.ok ? 'leased' : 'none', poolSize: lease?.poolSize ?? null, ...extra }]);
   } catch {
     /* records are best effort */
   }
@@ -81,7 +81,6 @@ function recordSlot(config, key, stage, startedMs, lease, extra = {}) {
 // and took it down again. A precheck round on the held slot rebuilds only the services the change touched since the
 // slot's last build (`teststack rebuild-changed`), and the slot is taken down once, when the pass ends.
 const held = new Map();
-export const heldSlot = (key) => held.get(key) ?? null;
 
 export async function holdStorySlot(config, key, fn, deps = defaultSlotDeps) {
   if (!wantsSlot(config) || held.has(key)) return fn();

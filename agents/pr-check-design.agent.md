@@ -30,18 +30,12 @@ When the check rendered the mockups, the round header's **Mockup renders** line 
 
 Only differences a user or designer would notice are findings; pixel-level noise is not.
 
-## Debate
-
-When the task says **Rejoinder**, answer each defender response with `maintain` (new evidence), `amend` (corrected finding) or `withdraw`.
+<!-- include: shared/pr-check-critic-debate.md -->
 
 ## Output
 
 End your final message with one line (valid JSON, no code fence). First pass:
 
 `AGENT_RESULT: {"lens": "design", "score": <0-10>, "summary": "<one sentence>", "coverage": [{"ref": "<screen, state or element>", "status": "met|partial|unmet|unverifiable", "evidence": "<file:line or frame>"}], "findings": [{"id": "<earlier id when re-raising, else empty>", "severity": "blocking|major|minor", "title": "<short>", "detail": "<the difference>", "evidence": "<file:line or frame@time>", "requirement": "<mockup screen or story text>", "fix": "<what to change>"}]}`
-
-Rejoinder:
-
-`AGENT_RESULT: {"responses": [{"id": "<finding id>", "action": "maintain|amend|withdraw", "argument": "<why, with evidence>", "finding": {<amended finding, only for amend>}}]}`
 
 Score 10 only when every screen and state matches and there are no findings.

@@ -12,7 +12,8 @@ import { readJson, setLogTag } from '../pipeline/lib/util.mjs';
 import { spawnBackground } from '../pipeline/lib/background.mjs';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { calibrateCommand, factorySource, formatLessonsRecovery, lessonsCommand, lessonsRunFile, recoverLessons } from './lib/lessons.mjs';
+import { LESSONS_KEY, calibrateCommand, factorySource, formatLessonsRecovery, lessonsCommand, lessonsRunFile, recoverLessons } from './lib/lessons.mjs';
+import { LESSONS_STAGE } from '../pipeline/lib/decisions.mjs';
 
 setLogTag('retro');
 
@@ -114,7 +115,7 @@ async function main() {
       if (isDisabled() || lessonsDisabled() || positional[0] !== 'post-merge') return 0;
       const on = (key) => git(config.root, ['config', '--bool', key]).stdout.trim() === 'true';
       // fv.autoLessons is the name this switch had while the retro lived in the feature verification stage.
-      if (on('retro.auto') || on('fv.autoLessons')) spawnBackground(config, { script: SELF, key: 'lessons', stage: 'lessons', args: ['run', '--if-due'] });
+      if (on('retro.auto') || on('fv.autoLessons')) spawnBackground(config, { script: SELF, key: LESSONS_KEY, stage: LESSONS_STAGE, args: ['run', '--if-due'] });
       return 0;
     }
     default:

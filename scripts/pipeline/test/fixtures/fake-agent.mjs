@@ -2,6 +2,7 @@
 // Scripted stand-in for an agent CLI, used by the end-to-end tests through PIPELINE_AGENT_CMD.
 // Behavior per agent comes from PIPELINE_FAKE_SCRIPT (JSON: { "<agent>": [response, response, ...] });
 // each call consumes the next response for that agent (the last one repeats).
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isResolvesQuestion, RESOLVES_ANSWER } from './resolves-question.mjs';
@@ -54,6 +55,13 @@ if (['pair-verifier', 'pair-ui-verifier'].includes(agentName) && !script[agentNa
 }
 // A council member (PIPELINE_COUNCIL_MEMBER) answers from `<agent>@<member>` when the script has that key.
 const member = process.env.PIPELINE_COUNCIL_MEMBER;
+// The clean-code seat (GEN-16) sits on every council: unscripted (no `pr-check-clean-code` key, no `<agent>@<seat>` key),
+// it finds nothing and is not counted, like an unscripted pair verifier.
+const cleanCodeKey = agentName === 'pr-check-clean-code' ? agentName : process.env.PIPELINE_COUNCIL_LENS === 'clean-code' ? `${agentName}@${member}` : null;
+if (cleanCodeKey && !script[cleanCodeKey]) {
+  process.stdout.write(`AGENT_RESULT: ${JSON.stringify({ lens: 'clean-code', verdict: 'APPROVED', score: 10, summary: 'nothing breaks the clean-code rules', coverage: [], findings: [], gaps: [] })}\n`);
+  process.exit(0);
+}
 const agent = member && script[`${process.env.PIPELINE_AGENT_NAME}@${member}`] ? `${process.env.PIPELINE_AGENT_NAME}@${member}` : process.env.PIPELINE_AGENT_NAME;
 const counterFile = `${process.env.PIPELINE_FAKE_SCRIPT}.calls.json`;
 // Agents can run in parallel (the PR check's critics), so the shared counter update is locked.
@@ -121,6 +129,12 @@ for (const [file, content] of Object.entries(step.writeFiles ?? {})) {
   fs.writeFileSync(file, content);
 }
 for (const file of step.deleteFiles ?? []) fs.rmSync(file, { force: true });
+// Language-server searches, logged as the lsp MCP server logs them: <git-dir>/lsp/calls.jsonl, with this run's agent and seat.
+if (step.search?.length) {
+  const dir = path.join(path.resolve(spawnSync('git', ['rev-parse', '--git-dir'], { encoding: 'utf8' }).stdout.trim()), 'lsp');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const tool of step.search) fs.appendFileSync(path.join(dir, 'calls.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), agent: process.env.PIPELINE_AGENT_NAME ?? null, member: process.env.PIPELINE_COUNCIL_MEMBER ?? null, tool })}\n`);
+}
 
 if (step.screenshot) {
   const dir = /Save every screenshot under (\S+?) \(/.exec(prompt)?.[1];

@@ -66,6 +66,14 @@ export const describeWorkflows = (w) =>
 
 const expectedCache = new Map();
 
+// The pipelines a head owes, without those the settings ignore (`ignore`: ids or paths; `ignoreNames`: names, the
+// review quorum's by default).
+function notIgnored(expected, settings) {
+  const ignore = new Set(settings.ignore ?? []);
+  const ignoreNames = settings.ignoreNames ?? ['review-quorum'];
+  return expected.filter((w) => !ignore.has(w.id ?? w.path) && !ignoreNames.includes(w.name));
+}
+
 // The head's CI as the CI system defines it. Every read goes through the adapters (each bounded by the
 // external-call policy); a read that fails makes the state `unknown`, which is never green.
 // `activities`: the pull_request activities the head went through (opened, synchronize, reopened, ready_for_review,
@@ -103,9 +111,7 @@ export function headPipelines(target, pr, { settings = {}, head = null, activiti
         if (error?.name === 'UnsupportedError') return fail(`${ci.type} cannot derive the pipelines a head must run; set ci.expected in .factory/config.json`, error);
         return fail('the CI definitions could not be read', error);
       }
-      const ignore = new Set(settings.ignore ?? []);
-      const ignoreNames = settings.ignoreNames ?? ['review-quorum'];
-      expected = expected.filter((w) => !ignore.has(w.id ?? w.path) && !ignoreNames.includes(w.name));
+      expected = notIgnored(expected, settings);
     }
     expectedCache.set(key, expected);
   }
@@ -136,9 +142,7 @@ export function branchPipelines(target, { branch, head, base, changed = [], sett
       if (error?.name === 'UnsupportedError') return fail(`${ci.type} cannot say which pipelines a branch push runs`, error);
       return fail('the CI definitions could not be read', error);
     }
-    const ignore = new Set(settings.ignore ?? []);
-    const ignoreNames = settings.ignoreNames ?? ['review-quorum'];
-    expected = expected.filter((w) => !ignore.has(w.id ?? w.path) && !ignoreNames.includes(w.name));
+    expected = notIgnored(expected, settings);
     expectedCache.set(key, expected);
   }
   const owed = expected.filter((w) => !w.prOnly);

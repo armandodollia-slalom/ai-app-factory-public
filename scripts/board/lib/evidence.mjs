@@ -3,8 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fsReader } from '../../pipeline/lib/git.mjs';
 import { casePrefix } from '../../pipeline/lib/stories.mjs';
-import { log, readJson, run, tail } from '../../pipeline/lib/util.mjs';
-import { SECTION_END, SECTION_START } from '../../pr-video/lib/pr-video.mjs';
+import { VIDEO_SECTION_END as SECTION_END, VIDEO_SECTION_START as SECTION_START, log, readJson, run, tail } from '../../pipeline/lib/util.mjs';
 import { hostFor } from '../../pipeline/lib/hosts/index.mjs';
 import { defaultSettings, setting } from '../../pipeline/lib/settings.mjs';
 

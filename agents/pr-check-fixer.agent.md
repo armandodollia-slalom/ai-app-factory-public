@@ -1,6 +1,7 @@
 ---
 name: pr-check-fixer
 description: Fixes exactly the findings the PR check judge upheld, on the pull request's branch, then builds and runs the affected unit tests. The PR check commits the result before the next adversarial round.
+clean-code: writer
 ---
 
 # PR check fixer

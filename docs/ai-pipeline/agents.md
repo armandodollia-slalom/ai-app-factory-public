@@ -1,6 +1,6 @@
 # Agent catalog
 
-**Who reads this:** C (operators) and D. All 24 agents: what starts each one, what it sees and may touch, and where its prompt comes from. Each pipeline call starts a fresh headless process, so no agent sees another's reasoning, and every agent ends with an `AGENT_RESULT: {json}` line the stage parses.
+**Who reads this:** C (operators) and D. All 25 agents: what starts each one, what it sees and may touch, and where its prompt comes from. Each pipeline call starts a fresh headless process, so no agent sees another's reasoning, and every agent ends with an `AGENT_RESULT: {json}` line the stage parses.
 
 ## Where an agent's prompt comes from
 
@@ -14,6 +14,7 @@ An agent's prompt is built from three files, and only the first ships with the f
 
 - The base definitions say "the Project context" wherever a codebase-specific answer is needed. An agent without an addendum still runs: it falls back to `AGENTS.md`, `CONTRIBUTING.md`, the build files and the nearest existing code, and reports what it assumed.
 - The **prompt version** recorded in the metrics is the hash of all three files, so a change to the base, the addendum or the lessons starts a new version and `factory metrics` shows whether it helped.
+- A rule several agents follow is written once, in `agents/shared/<name>.md`, and each definition that needs it has an `<!-- include: shared/<name>.md -->` line: the PR check critics' debate rules, the pair verifiers' judging rules, the feature verification verifiers' decision-log output. The pipeline's prompts and the files `factory render` writes carry the section in its place.
 - `.factory/agents/<name>.agent.md` (note the `.agent.md`) replaces the base definition outright in that repository. Use it only as a stopgap for a fix that is waiting for a factory release.
 - Skeletons for the addenda are in `templates/agents/`; the [`write-agent-addenda`](../../skills/write-agent-addenda/SKILL.md) skill describes how to fill them in for any codebase and what belongs in an addendum, in `.factory/config.json` or in a lesson. `examples/eshop/.factory/agents/` is a complete set for a .NET application.
 - `factory render` renders every agent to `.claude/agents/` and `.github/agents/` so the same agents can be run from Claude Code and Copilot (see [Agent definitions](../internals.md#agent-definitions)).
@@ -41,6 +42,7 @@ An agent's prompt is built from three files, and only the first ships with the f
 | `pr-check-flow` | [pr-check](pr-check.md) | PR check round | read-only | story, diff | lens score and findings |
 | `pr-check-design` | [pr-check](pr-check.md) | PR check round, frontend stories only | read-only | story (or every ticket of an epic check), diff, mockups and their renders, frames | lens score and findings |
 | `pr-check-style` | [pr-check](pr-check.md) | PR check round | read-only | diff, repo conventions | lens score and findings |
+| `pr-check-clean-code` | [pr-check](pr-check.md) | PR check round (the [clean-code seat](council.md#the-clean-code-seat): always) | read-only | diff, the full clean-code rules, tool evidence | lens score and blocking findings with their rule ids |
 | `pr-check-video` | [pr-check](pr-check.md) | PR check round, when a video exists | read-only | video frames, story | lens score and findings |
 | `pr-check-defender` | [pr-check](pr-check.md) | PR check round | read-only | the round's findings, story, diff | concede, rebut or partial per finding |
 | `pr-check-judge` | [pr-check](pr-check.md) | PR check round | read-only | the full debate | upheld or dismissed per finding |
@@ -102,6 +104,34 @@ The pipeline appends `.factory/lessons/<name>.md` to an agent's prompt when that
 | `test-plan-verifier.md`, `test-automation-verifier.md` | gaps the calibration audit found that the verifier missed |
 | `pr-check-<lens>.md` | that critic's findings the judge dismissed |
 | `pr-check-fixer.md` | findings upheld again after a fix round |
+
+## Clean code
+
+Every agent that writes code or tests follows the [`clean-code`](../../skills/clean-code/SKILL.md) skill: rules with ids
+`CC-<n>` (one source of truth, no copied logic, names, functions, comments, dead code, tests), the fixed scope rule
+`SCOPE`, and a search step (graphify, then the language-server tools) before anything is added. The skill is
+language-neutral; its examples come from the language packs (`packs/<id>/clean-code.md`, today C#, TypeScript and
+JavaScript, and Python), and `factory render` installs it in the repository (`.claude/skills/`, `.github/skills/`,
+`.agents/skills/`, by the tools the pin lists) with the examples of the packs `project.languages` names only.
+
+An agent reads it at the depth its definition's `clean-code` front matter gives:
+
+| Depth | Agents | Gets |
+| --- | --- | --- |
+| `full` | `stage-orchestrator`; the `implementer` when it plans (the implement orchestrator); the clean-code council seat (`pr-check-clean-code`, and every stage's verifier on that seat) | every rule, with this repository's examples |
+| `writer` | `implementer` (when it writes), `pair-implementer`, `test-automation`, `pr-check-fixer` (also the CI fixer) | the skill's short core and the writer rule set |
+
+The writer rule set is data: `.factory/lessons/clean-code-writers.json` lists rule ids (the starting set, shipped as
+`skills/clean-code/writer-rules.json`, is `SCOPE`, `CC-1` and `CC-2`). The pipeline owns it like the lessons and the
+scorecard; the next writer task carries exactly the rules it lists, with no change to any agent definition. The
+set and the clean-code text are part of the prompt version.
+
+Orchestrators guide the writers: the implement orchestrator gives each subtask `guidance` (`what`, `where` as
+`file:line`, `do`: `reuse` or `change`), and the test automation and PR check orchestrators return the same field
+with their decision. The writer's task shows it under "Where to change and what to reuse", and the clean-code
+reviewer holds the writer to it. The harness records every graphify search a pipeline agent makes
+(`<git-dir>/lsp/graphify-calls.jsonl`, beside the language-server calls), and a stage orchestrator's decision record
+counts the searches it made (`searches`).
 
 ## Changing an agent
 

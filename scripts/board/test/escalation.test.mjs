@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { resetMemo } from '../lib/board.mjs';
 import {
+  OTHER_ANSWER,
   evaluateAnswers,
   extractDecisions,
   failureComment,
@@ -64,7 +65,7 @@ const tick = (body, ...ids) => {
   for (const id of ids) {
     const [q, o] = id.split('-');
     const at = b.indexOf(`### ${q}.`);
-    const line = o === 'Other' ? '- [ ] **Other**' : `- [ ] **${o}.**`;
+    const line = o === OTHER_ANSWER ? `- [ ] **${OTHER_ANSWER}**` : `- [ ] **${o}.**`;
     const i = b.indexOf(line, at);
     b = `${b.slice(0, i)}${line.replace('[ ]', '[x]')}${b.slice(i + line.length)}`;
   }
@@ -91,7 +92,7 @@ test('the questions step asks Sonnet with the notes, findings and log, and falls
   const calls = [];
   const ok = (opts) => {
     calls.push(opts);
-    return { ok: true, output: `thinking...\nAGENT_RESULT: ${JSON.stringify({ questions: [{ title: 'Q?', context: 'c', options: [{ text: 'a' }, { text: 'b', recommended: true }, { text: 'Other' }] }] })}` };
+    return { ok: true, output: `thinking...\nAGENT_RESULT: ${JSON.stringify({ questions: [{ title: 'Q?', context: 'c', options: [{ text: 'a' }, { text: 'b', recommended: true }, { text: OTHER_ANSWER }] }] })}` };
   };
   const result = { outcome: 'fv-escalated', reason: 'Feature verification ended escalated', findings: ['TC-03 expects 0'] };
   const r = generateQuestions(baseConfig, 'DEMO-1', result, { runAgent: (_c, o) => ok(o), notes: [{ stage: 'feature-verification', text: 'the plan and the story disagree' }], story: '# DEMO-1 Cart' });
@@ -134,7 +135,7 @@ test('the failure comment: summary, questions as task lists, details collapsed, 
   assert.match(body, /I need 2 decisions from you/);
   assert.match(body, /### Q1\. What should the cart show/);
   assert.match(body, /- \[ \] \*\*A\.\*\* Recalculate from the catalog price _\(recommended\)_/);
-  assert.match(body, /- \[ \] \*\*Other\*\* \(reply in a new comment that starts with `Q2:`\)/);
+  assert.ok(body.includes(`- [ ] **${OTHER_ANSWER}** (reply in a new comment that starts with \`Q2:\`)`));
   assert.match(body, /<details><summary>Details: 1 escalation note, 1 finding, branch, log<\/summary>/);
   assert.match(body, /`src\/A\.cs:3` wrong total/);
   assert.match(body, /Branch: `fix\/g1`\. Log on `box`/);
@@ -181,29 +182,29 @@ test('answers: complete, missing option, two ticked, Other without a reply, bot 
   const marker = parseEscalationMarker(body);
   const human = (text) => ({ author: 'armando', body: text });
 
-  const done = evaluateAnswers(marker, tickResolved(tick(body, 'Q1-A', 'Q2-Other')), [human('Q2: Fix it in Basket.API, but in a separate PR.\nLink the follow-up.')]);
+  const done = evaluateAnswers(marker, tickResolved(tick(body, 'Q1-A', `Q2-${OTHER_ANSWER}`)), [human('Q2: Fix it in Basket.API, but in a separate PR.\nLink the follow-up.')]);
   assert.equal(done.complete, true);
   assert.equal(done.resolved, true);
-  assert.deepEqual(done.answers.map((a) => [a.id, a.choice, a.text]), [['Q1', 'A', 'Recalculate from the catalog price'], ['Q2', 'Other', 'Fix it in Basket.API, but in a separate PR.\nLink the follow-up.']]);
+  assert.deepEqual(done.answers.map((a) => [a.id, a.choice, a.text]), [['Q1', 'A', 'Recalculate from the catalog price'], ['Q2', OTHER_ANSWER, 'Fix it in Basket.API, but in a separate PR.\nLink the follow-up.']]);
 
   assert.deepEqual(evaluateAnswers(marker, tick(body, 'Q1-A'), []).missing, ['Q2 has no answer ticked.']);
   assert.match(evaluateAnswers(marker, tick(body, 'Q1-A', 'Q1-B', 'Q2-A'), []).missing[0], /Q1 has 2 answers ticked \(A, B\)/);
-  assert.deepEqual(evaluateAnswers(marker, tick(body, 'Q1-A', 'Q2-Other'), []).missing, ['Q2 has "Other" ticked but no `Q2:` reply.']);
+  assert.deepEqual(evaluateAnswers(marker, tick(body, 'Q1-A', `Q2-${OTHER_ANSWER}`), []).missing, [`Q2 has "${OTHER_ANSWER}" ticked but no \`Q2:\` reply.`]);
   const bots = [{ author: 'github-actions', body: 'Q2: from a bot' }, { author: 'renovate[bot]', body: 'Q2: x' }, { author: 'armando', body: 'Q2: quoted <!-- pipeline-board:{} -->' }];
-  assert.equal(evaluateAnswers(marker, tick(body, 'Q1-A', 'Q2-Other'), bots).complete, false, 'bot and pipeline comments never answer');
+  assert.equal(evaluateAnswers(marker, tick(body, 'Q1-A', `Q2-${OTHER_ANSWER}`), bots).complete, false, 'bot and pipeline comments never answer');
   assert.equal(evaluateAnswers(marker, tick(body, 'Q1-B', 'Q2-B'), []).complete, true);
   assert.equal(untickResolved(tickResolved(body)), body);
 });
 
 test('the Decisions section: added after the source, rounds replaced in place, idempotent, kept on publish', () => {
   const issue = '<!-- board-ticket:v1\n{}\n-->\n> header\n\n<!-- board-ticket:source:begin -->\n# BUG-1\n<!-- board-ticket:source:end -->\n';
-  const answers = [{ id: 'Q1', title: 'What should the cart show?', choice: 'A', text: 'Recalculate', other: false }, { id: 'Q2', title: 'In scope?', choice: 'Other', text: 'Separate PR\nfor the API', other: true }];
+  const answers = [{ id: 'Q1', title: 'What should the cart show?', choice: 'A', text: 'Recalculate', other: false }, { id: 'Q2', title: 'In scope?', choice: OTHER_ANSWER, text: 'Separate PR\nfor the API', other: true }];
   const once = upsertDecisions(issue, { round: 1, by: 'armando', at: '2026-11-11T10:21:00Z', answers });
   assert.ok(once.startsWith(issue.trimEnd()), 'the source block is untouched');
   assert.match(once, /## Decisions/);
   assert.match(once, /### Round 1 \(resolved by @armando, 2026-11-11T10:21:00Z\)/);
   assert.match(once, /- \*\*Q1\. What should the cart show\?\*\* A\. Recalculate/);
-  assert.match(once, /- \*\*Q2\. In scope\?\*\* Other: Separate PR for the API/);
+  assert.ok(once.includes(`- **Q2. In scope?** ${OTHER_ANSWER}: Separate PR for the API`));
   assert.equal(upsertDecisions(once, { round: 1, by: 'someone', at: '2026-11-12T00:00:00Z', answers }), once, 'same answers: unchanged');
   const changed = upsertDecisions(once, { round: 1, by: 'armando', at: '2026-11-12T00:00:00Z', answers: [answers[0]] });
   assert.equal((changed.match(/### Round 1/g) ?? []).length, 1, 'a round is replaced, never duplicated');
@@ -228,14 +229,14 @@ test('the Decisions section: added after the source, rounds replaced in place, i
 
 test('resolve-check: incomplete answers untick Resolved and reply with what is missing', () => {
   const body = renderEscalationComment(baseConfig, { key: 'BUG-1', questions: QUESTIONS, round: 1 });
-  const f = fixture({ 43: { title: 'BUG-1: Cart', labels: ['story', 'needs-human'], body: 'issue body', comments: [{ id: 501, body: tickResolved(tick(body, 'Q1-A', 'Q2-Other')) }] } });
+  const f = fixture({ 43: { title: 'BUG-1: Cart', labels: ['story', 'needs-human'], body: 'issue body', comments: [{ id: 501, body: tickResolved(tick(body, 'Q1-A', `Q2-${OTHER_ANSWER}`)) }] } });
   try {
     const r = resolveCheck(f.config, 43, { actor: 'armando', comment: '501' });
     assert.equal(r.status, 'incomplete');
     const i = f.gh().issues['43'];
     assert.match(i.comments[0].body, /- \[ \] \*\*Resolved\*\*/, 'Resolved is unticked');
     assert.match(i.comments[0].body, /- \[x\] \*\*A\.\*\*/, 'the answers stay ticked');
-    assert.match(i.comments.at(-1).body, /Not resolved yet, @armando:\n\n- Q2 has "Other" ticked but no `Q2:` reply\./);
+    assert.ok(i.comments.at(-1).body.includes(`Not resolved yet, @armando:\n\n- Q2 has "${OTHER_ANSWER}" ticked but no \`Q2:\` reply.`));
     assert.deepEqual(i.labels, ['story', 'needs-human']);
     assert.equal(i.body, 'issue body');
     assert.equal(resolveCheck(f.config, 43, { actor: 'armando' }).status, 'not-ticked', 'after the untick, the edit event is a no-op');
@@ -251,7 +252,7 @@ test('resolve-check: complete answers swap the labels, record the decisions and 
       title: 'BUG-1: Cart',
       labels: ['story', 'needs-human'],
       body: '<!-- board-ticket:source:begin -->\n# BUG-1\n<!-- board-ticket:source:end -->\n',
-      comments: [{ id: 400, body: renderEscalationComment(baseConfig, { key: 'BUG-1', round: 1 }) }, { id: 501, body: tickResolved(tick(body, 'Q1-A', 'Q2-Other')) }, { id: 502, author: 'github-actions', body: 'Q2: bot' }, { id: 503, author: 'armando', body: 'Q2: Fix it in Basket.API, but in a separate PR.' }],
+      comments: [{ id: 400, body: renderEscalationComment(baseConfig, { key: 'BUG-1', round: 1 }) }, { id: 501, body: tickResolved(tick(body, 'Q1-A', `Q2-${OTHER_ANSWER}`)) }, { id: 502, author: 'github-actions', body: 'Q2: bot' }, { id: 503, author: 'armando', body: 'Q2: Fix it in Basket.API, but in a separate PR.' }],
     },
   });
   try {
@@ -265,7 +266,7 @@ test('resolve-check: complete answers swap the labels, record the decisions and 
     const i = f.gh().issues['43'];
     assert.deepEqual(i.labels.sort(), ['escalation-resolved', 'story'], 'needs-human swapped for escalation-resolved (label created)');
     assert.match(i.body, /### Round 1 \(resolved by @armando, 2026-11-11T10:21:00Z\)/);
-    assert.match(i.body, /Q2\. Is the basket API change in scope\?\*\* Other: Fix it in Basket\.API, but in a separate PR\./);
+    assert.ok(i.body.includes(`Q2. Is the basket API change in scope?** ${OTHER_ANSWER}: Fix it in Basket.API, but in a separate PR.`));
     assert.match(i.comments.at(-1).body, /^✅ Resolved by @armando\. Decisions recorded: Q1 → A, Q2 → "Fix it in Basket\.API, but in a separate PR\."/);
     const comments = i.comments.length;
     assert.equal(resolveCheck(f.config, 43, { actor: 'armando' }).status, 'already-resolved');
